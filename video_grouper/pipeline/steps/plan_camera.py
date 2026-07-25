@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from video_grouper.inference.camera_planner import (
     PlannerConfig,
+    parse_trajectory_artifact,
     plan_camera,
     save_camera_path,
 )
@@ -68,6 +69,9 @@ def _plan(
 ) -> int:
     with open(trajectory_path, encoding="utf-8") as f:
         trajectory = json.load(f)
+    # trajectory/2, trajectory/1 or the legacy bare point list — v1/legacy get
+    # the neutral all-'T' state channel and no dispersion.
+    art = parse_trajectory_artifact(trajectory)
     polygon = None
     if polygon_path:
         try:
@@ -77,12 +81,14 @@ def _plan(
             polygon = np.asarray(poly, float) if poly is not None else None
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.warning("plan_camera: polygon %s unusable (%s)", polygon_path, e)
-    traj = [tuple(p) if p is not None else None for p in trajectory]
+    traj = art["points"]
     plan = plan_camera(
         traj,
         src_w=src_w,
         src_h=src_h,
         depth01=_depth01(traj, polygon),
+        states=art["state"],
+        disp=art["disp"],
         config=PlannerConfig(
             zoom_scale=cfg.plan_zoom_scale,
             lead_frames=cfg.plan_lead_frames,

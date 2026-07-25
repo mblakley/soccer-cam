@@ -22,9 +22,15 @@ Subcommands:
   midpoint of the planner's pan_smoothing_min/max) of a planned campath given
   via ``--campath``. D − A per band = the lookahead build's price. No scipy.
 
-Artifacts: dense trajectories as ``trajectory/1`` JSON
-``{schema, g_start, fps, points: [[x, y] | null, ...]}``; campaths as the
-existing ``camera_path/1`` (``save_camera_path``).
+Artifacts: run-a / run-b save dense trajectories as ``trajectory/2`` JSON
+``{schema, g_start, fps, points, state, conf[, disp]}`` — the W2 seam: per-frame
+tracker state 'T'/'C'/'M', emission-derived confidence, optional candidate
+dispersion. Readers accept legacy ``trajectory/1`` too (neutral all-'T').
+Campaths stay the existing ``camera_path/1`` (``save_camera_path``).
+
+W2 stoppage-HOLD: ``run-a`` / ``run-b`` take ``--enable-hold`` (turns on the
+LIVE/HOLD/REACQUIRE planner FSM) plus repeatable ``--hold-knob NAME=VALUE``
+overrides for any ``PlannerConfig`` field (e.g. ``hold_entry_frames=30``).
 """
 
 from __future__ import annotations
@@ -77,11 +83,21 @@ def _src_dims(gj: dict, game_dir: Path) -> tuple[int, int]:
 
 
 def save_trajectory(
-    path: Path, traj: list[tuple[float, float] | None], *, g_start: int, fps: float
+    path: Path,
+    traj: list[tuple[float, float] | None],
+    *,
+    g_start: int,
+    fps: float,
+    state: list[str] | None = None,
+    conf: list[float] | None = None,
+    disp: list[float | None] | None = None,
 ) -> None:
-    """Dense per-source-frame ball trajectory as a ``trajectory/1`` artifact."""
-    payload = {
-        "schema": "trajectory/1",
+    """Dense per-source-frame ball trajectory artifact: ``trajectory/2`` when the
+    per-frame ``state`` channel is given (the W2 seam), legacy ``trajectory/1``
+    without. Channel misalignment hard-fails; ``conf`` defaults to the neutral
+    1.0-for-'T' / 0.0 otherwise."""
+    payload: dict = {
+        "schema": "trajectory/2" if state is not None else "trajectory/1",
         "g_start": int(g_start),
         "fps": float(fps),
         "points": [
@@ -89,21 +105,47 @@ def save_trajectory(
             for p in traj
         ],
     }
+    if state is not None:
+        if len(state) != len(traj):
+            _fail(f"{path}: {len(state)} states for {len(traj)} trajectory points")
+        if conf is not None and len(conf) != len(traj):
+            _fail(f"{path}: {len(conf)} conf values for {len(traj)} trajectory points")
+        payload["state"] = [str(s) for s in state]
+        payload["conf"] = (
+            [round(float(c), 4) for c in conf]
+            if conf is not None
+            else [1.0 if s == "T" else 0.0 for s in state]
+        )
+        if disp is not None:
+            if len(disp) != len(traj):
+                _fail(
+                    f"{path}: {len(disp)} disp values for {len(traj)} trajectory points"
+                )
+            payload["disp"] = [None if v is None else round(float(v), 1) for v in disp]
     path.write_text(json.dumps(payload))
 
 
 def load_trajectory(path: Path) -> dict:
-    """Load a ``trajectory/1`` artifact — hard-fails on a missing file, a wrong
-    schema, or fewer than 2 points."""
+    """Load a ``trajectory/1`` OR ``trajectory/2`` artifact — hard-fails on a
+    missing file, a wrong/absent schema, missing fps, or fewer than 2 points.
+    v1 artifacts get the neutral channels (all-'T' where points exist, no
+    disp) via ``parse_trajectory_artifact``."""
     if not path.exists():
         _fail(f"missing trajectory {path}")
-    art = json.loads(path.read_text(encoding="utf-8"))
-    if art.get("schema") != "trajectory/1":
-        _fail(f"{path}: not a trajectory/1 artifact")
-    pts = [None if p is None else (float(p[0]), float(p[1])) for p in art["points"]]
-    if len(pts) < 2:
-        _fail(f"{path}: trajectory too short ({len(pts)} points)")
-    return {"g_start": int(art["g_start"]), "fps": float(art["fps"]), "points": pts}
+    from video_grouper.inference.camera_planner import parse_trajectory_artifact
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        _fail(f"{path}: not a trajectory/1 or trajectory/2 artifact")
+    try:
+        art = parse_trajectory_artifact(raw)
+    except ValueError as e:
+        _fail(f"{path}: {e}")
+    if len(art["points"]) < 2:
+        _fail(f"{path}: trajectory too short ({len(art['points'])} points)")
+    if art["fps"] is None:
+        _fail(f"{path}: trajectory artifact has no fps")
+    return art
 
 
 def load_campath_artifact(path: Path) -> dict:
@@ -184,6 +226,48 @@ def freeze_campath(
 # ---------------------------------------------------------------------------
 
 
+def _planner_config_from_args(args: argparse.Namespace):
+    """``--enable-hold`` / ``--hold-knob NAME=VALUE`` -> a ``PlannerConfig``
+    (None when neither is given = the pipeline defaults). Knob names must be
+    ``PlannerConfig`` fields; values are cast to the field's type (bool fields
+    take true/false/1/0). Unknown names or uncastable values hard-fail."""
+    knobs: list[str] = getattr(args, "hold_knob", None) or []
+    if not args.enable_hold and not knobs:
+        return None
+    from dataclasses import replace
+
+    from video_grouper.inference.camera_planner import PlannerConfig
+
+    defaults = PlannerConfig()
+    overrides: dict = {}
+    for kv in knobs:
+        name, eq, val = kv.partition("=")
+        name = name.strip()
+        if not eq:
+            _fail(f"--hold-knob {kv!r}: expected NAME=VALUE")
+        if not hasattr(defaults, name):
+            _fail(f"--hold-knob {name}: not a PlannerConfig field")
+        cur = getattr(defaults, name)
+        try:
+            if isinstance(cur, bool):
+                low = val.strip().lower()
+                if low in ("1", "true", "yes"):
+                    cast: bool | int | float = True
+                elif low in ("0", "false", "no"):
+                    cast = False
+                else:
+                    raise ValueError(val)
+            elif isinstance(cur, int):
+                cast = int(val)
+            else:
+                cast = float(val)
+        except ValueError:
+            _fail(f"--hold-knob {name}={val!r}: cannot cast to {type(cur).__name__}")
+        overrides[name] = cast
+    enable = bool(args.enable_hold) or bool(overrides.pop("enable_hold", False))
+    return replace(defaults, **overrides, enable_hold=enable)
+
+
 def cmd_run_a(args: argparse.Namespace) -> None:
     """Baseline A: cached candidate dump through the CURRENT champion chain."""
     fg, gd, outd = Path(args.fullgame_dir), Path(args.game_dir), Path(args.out_dir)
@@ -192,17 +276,28 @@ def cmd_run_a(args: argparse.Namespace) -> None:
     if not Path(args.net).exists():
         _fail(f"missing selector net {args.net}")
     load_game(gd)  # fail fast, before the heavy imports
+    pcfg = _planner_config_from_args(args)
     from training.cli.plan_camera_path import replay_champion_chain
     from video_grouper.inference.camera_planner import save_camera_path
 
-    res = replay_champion_chain(fg, gd, args.net, stride=args.stride)
+    res = replay_champion_chain(
+        fg, gd, args.net, stride=args.stride, planner_config=pcfg
+    )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
     gid = fg.name
     outd.mkdir(parents=True, exist_ok=True)
     tpath = outd / f"{gid}.trajectory.json"
     cpath = outd / f"{gid}.campath.json"
-    save_trajectory(tpath, res["traj"], g_start=res["g_start"], fps=res["fps"])
+    save_trajectory(
+        tpath,
+        res["traj"],
+        g_start=res["g_start"],
+        fps=res["fps"],
+        state=res["states"],
+        conf=res["conf"],
+        disp=res["disp"],
+    )
     save_camera_path(
         cpath,
         res["plan"],
@@ -226,6 +321,7 @@ def cmd_run_b(args: argparse.Namespace) -> None:
         _fail(f"missing ball labels {bl}")
     gj = load_game(gd)
     src_w, src_h = _src_dims(gj, gd)
+    pcfg = _planner_config_from_args(args)
     from training.cli.plan_camera_path import depth_from_polygon
     from training.cli.validate_tracker import build_frames
     from training.data_prep import distill_dataset as dd
@@ -252,19 +348,33 @@ def cmd_run_b(args: argparse.Namespace) -> None:
         (gframes[i + 1] - gframes[i]) if i + 1 < len(gframes) else 4
         for i in range(len(gframes))
     ]
-    track = track_ball(frames, geom, frame_gaps=gaps)
+    track, g_states, g_conf = track_ball(
+        frames, geom, frame_gaps=gaps, return_states=True
+    )
     if not track:
         _fail("track_ball returned an empty track")
     g_start, g_end = int(gframes[0]), int(gframes[-1]) + 1
-    traj = upsample_track(track, gframes, g_start, g_end)
+    traj, states, conf = upsample_track(
+        track, gframes, g_start, g_end, states=g_states, conf=g_conf
+    )
     depth01 = depth_from_polygon(traj, polygon)
-    plan = plan_camera(traj, src_w=src_w, src_h=src_h, depth01=depth01)
+    # No disp channel: GT labels are not a detections artifact (the dispersion
+    # voter is defined off it — design doc section 3.3), and a single GT
+    # candidate per frame would degenerately read as a zero-spread scramble.
+    plan = plan_camera(
+        traj,
+        src_w=src_w,
+        src_h=src_h,
+        depth01=depth01,
+        states=states,
+        config=pcfg,
+    )
     fps = float(gj.get("fps", 20.0))
     gid = gd.name
     outd.mkdir(parents=True, exist_ok=True)
     tpath = outd / f"{gid}.gtoracle.trajectory.json"
     cpath = outd / f"{gid}.gtoracle.campath.json"
-    save_trajectory(tpath, traj, g_start=g_start, fps=fps)
+    save_trajectory(tpath, traj, g_start=g_start, fps=fps, state=states, conf=conf)
     save_camera_path(cpath, plan, g_start=g_start, src_w=src_w, src_h=src_h, fps=fps)
     print(
         f"run-b {gid}: {len(balls)} GT balls ({bl.name}) -> {tpath.name} + "
@@ -416,6 +526,21 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--game-dir", required=True)
     b.add_argument("--out-dir", required=True)
     b.set_defaults(fn=cmd_run_b)
+
+    for hold_sub in (a, b):
+        hold_sub.add_argument(
+            "--enable-hold",
+            action="store_true",
+            help="turn on the W2 stoppage-HOLD planner FSM (PlannerConfig.enable_hold)",
+        )
+        hold_sub.add_argument(
+            "--hold-knob",
+            action="append",
+            default=[],
+            metavar="NAME=VALUE",
+            help="override a PlannerConfig field (repeatable), e.g. "
+            "hold_entry_frames=30",
+        )
 
     c = sub.add_parser("run-c", help="freeze-pan oracle over the amended hold clusters")
     c.add_argument("--campath", required=True, help="camera_path/1 JSON artifact")

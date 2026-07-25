@@ -25,6 +25,36 @@ def test_plan_writes_camera_path_artifact(tmp_path):
     assert 0 < cx < 7680 and 0 < cy < 2160 and 20 < hfov < 90
 
 
+def test_plan_accepts_all_trajectory_schemas_identically(tmp_path):
+    """Legacy bare list, trajectory/1 and trajectory/2 with the same points must
+    plan the same camera path (default config: the FSM is off, states/disp are
+    carried but ignored)."""
+    pts = [[1000.0 + 10.0 * t, 900.0] for t in range(150)] + [None] * 10
+    n = len(pts)
+    variants = {
+        "bare": pts,
+        "v1": {"schema": "trajectory/1", "g_start": 0, "fps": 20.0, "points": pts},
+        "v2": {
+            "schema": "trajectory/2",
+            "g_start": 0,
+            "fps": 20.0,
+            "points": pts,
+            "state": ["T" if p is not None else "M" for p in pts],
+            "conf": [1.0 if p is not None else 0.0 for p in pts],
+            "disp": [50.0] * n,  # below hold_dispersion_px: must be ignored
+        },
+    }
+    arts = {}
+    for name, payload in variants.items():
+        tp = tmp_path / f"{name}.trajectory.json"
+        tp.write_text(json.dumps(payload))
+        out = tmp_path / f"{name}.camera_path.json"
+        got = _plan(str(tp), None, str(out), 7680, 2160, 20.0, PlanCameraStepConfig())
+        assert got == n
+        arts[name] = json.loads(out.read_text())
+    assert arts["bare"]["frames"] == arts["v1"]["frames"] == arts["v2"]["frames"]
+
+
 def test_depth01_far_to_near():
     near_x = np.linspace(100.0, 1900.0, 5)
     far_x = np.linspace(1600.0, 400.0, 5)

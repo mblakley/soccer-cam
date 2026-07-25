@@ -9,9 +9,12 @@ constant-velocity Kalman RTS smoother -> dense per-frame upsampling.
 
 Reads the ``ball_detect`` step's candidates artifact (``candidates/2`` rows are
 ``(x, y, score, size_px)``; legacy ``candidates/1`` 3-tuples still accepted) +
-the field polygon, writes ``trajectory.json`` (one ``[x, y]`` row per source
-frame, ``null`` when the ball has no estimate — the same contract
-``plan_camera`` consumes).
+the field polygon, writes ``trajectory.json`` as a ``trajectory/2`` artifact:
+per-source-frame ``points`` (``[x, y]`` or ``null``, unchanged from the
+legacy bare list) plus the W2 seam channels — ``state`` (``'T'`` tracked /
+``'C'`` coasted fill / ``'M'`` missing), ``conf`` (emission-derived track
+confidence) and ``disp`` (per-frame candidate-cloud dispersion, px). The
+``plan_camera`` step consumes this and still accepts the legacy formats.
 """
 
 from __future__ import annotations
@@ -36,10 +39,11 @@ from video_grouper.inference.ball_tracker import (
     Candidate,
     RerankConfig,
     bridge_aerial_gaps,
+    candidate_dispersion,
     kalman_smooth,
     rerank,
 )
-from video_grouper.inference.camera_planner import upsample_track
+from video_grouper.inference.camera_planner import upsample_disp, upsample_track
 from video_grouper.inference.world_geometry import build_field_geometry
 from video_grouper.pipeline import register_step
 from video_grouper.pipeline.base import PipelineStep, StepContext
@@ -92,10 +96,16 @@ def _run_selection(
 ) -> int:
     with open(detections_path, encoding="utf-8") as f:
         art = json.load(f)
-    if art.get("schema") != "candidates/1":
+    if art.get("schema") not in ("candidates/1", "candidates/2"):
         raise RuntimeError(
-            f"select: {detections_path} is not a candidates/1 artifact "
+            f"select: {detections_path} is not a candidates/1|2 artifact "
             f"(got {art.get('schema')!r}) — re-run ball_detect."
+        )
+    fps = art.get("fps")
+    if fps is None:  # fail fast: trajectory/2 requires it, don't select first
+        raise RuntimeError(
+            f"select: {detections_path} carries no fps (trajectory/2 requires "
+            "it) — re-run ball_detect."
         )
     with open(polygon_path, encoding="utf-8") as f:
         polygon = np.asarray(json.load(f)["polygon"], float)
@@ -144,22 +154,47 @@ def _run_selection(
         bridge_w=cfg.select_bridge_w,
         oob_w=cfg.select_oob_w,
     )
-    sel = rerank(
+    sel, sel_conf = rerank(
         frames,
         geom,
         frame_gaps=gaps,
         priors=priors,
         miss_costs=miss_costs,
         config=rr_cfg,
+        return_states=True,
     )
-    sel = bridge_aerial_gaps(sel, geom, frame_gaps=gaps, config=rr_cfg)
-    track = kalman_smooth(sel, geom)
+    filled = bridge_aerial_gaps(sel, geom, frame_gaps=gaps, config=rr_cfg)
+    track = kalman_smooth(filled, geom)
+    # trajectory/2 grid channels: 'T' = a real selected candidate on the Viterbi
+    # path; Kalman coast fills (and aerial-bridge interpolations, when enabled)
+    # are 'C' — interpolations are not detections.
+    g_states = {i: ("T" if i in sel else "C") for i in track}
+    g_conf = {i: (sel_conf[i] if i in sel else 0.0) for i in track}
 
     # Dense per-source-frame trajectory from frame 0 (the plan_camera contract).
     g_end = int(ef[-1]) + 1
-    traj = upsample_track(track, ef, 0, g_end, max_gap=cfg.select_max_gap_frames)
+    traj, state, conf = upsample_track(
+        track,
+        ef,
+        0,
+        g_end,
+        max_gap=cfg.select_max_gap_frames,
+        states=g_states,
+        conf=g_conf,
+    )
+    disp = upsample_disp(candidate_dispersion(frames), ef, 0, g_end, points=traj)
+    payload = {
+        "schema": "trajectory/2",
+        "g_start": 0,
+        "fps": float(fps),
+        # points stay exactly the legacy per-frame values (same chain, same floats)
+        "points": [None if p is None else [p[0], p[1]] for p in traj],
+        "state": state,
+        "conf": [round(float(c), 4) for c in conf],
+        "disp": [None if v is None else round(float(v), 1) for v in disp],
+    }
     with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(traj, f)
+        json.dump(payload, f)
     return sum(1 for p in traj if p is not None)
 
 

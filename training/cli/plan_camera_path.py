@@ -105,6 +105,7 @@ def replay_champion_chain(
     oob_w: float = 2.0,
     static_w: float = 2.0,
     stride: int = 1,
+    planner_config=None,
 ) -> dict:
     """The CURRENT champion camera chain, exactly as this CLI runs it: cached
     ``fullgame_candidates/1`` dump -> selector emissions -> rerank (shipped
@@ -115,17 +116,27 @@ def replay_champion_chain(
     (``training.cli.operator_ladder`` run-a) replays the same code instead of
     forking it; the CLI behavior is identical. ``stride`` (ladder-only, default
     1 = CLI behavior) subsamples the candidate grid before the chain.
+    ``planner_config`` (ladder-only, default None = pipeline ``PlannerConfig``)
+    reaches :func:`plan_camera`. The trajectory/2 channels (states/conf/disp)
+    are always computed, returned, and handed to the planner — with the default
+    config (``enable_hold=False``) the planner ignores them, so CLI behavior is
+    unchanged.
 
-    Returns ``{"ef", "sel", "track", "traj", "depth01", "plan", "g_start",
-    "src_w", "src_h", "fps", "gj", "polygon"}``.
+    Returns ``{"ef", "sel", "track", "traj", "states", "conf", "disp",
+    "depth01", "plan", "g_start", "src_w", "src_h", "fps", "gj", "polygon"}``.
     """
     from training.cli.build_selector_labels import load_fullgame_candidates
     from training.models.selector_net import load_selector, pack_frames, predict_probs
-    from training.world_model.camera_planner import plan_camera, upsample_track
+    from training.world_model.camera_planner import (
+        plan_camera,
+        upsample_disp,
+        upsample_track,
+    )
     from training.world_model.geometry import build_field_geometry
     from training.world_model.reranker import (
         RerankConfig,
         bridge_aerial_gaps,
+        candidate_dispersion,
         kalman_smooth,
         rerank,
     )
@@ -173,21 +184,45 @@ def replay_champion_chain(
         bridge_w=bridge_w,
         oob_w=oob_w,
     )
-    sel = rerank(
-        frames, geom, frame_gaps=gaps, priors=priors, miss_costs=mc, config=cfg
+    picked, pick_conf = rerank(
+        frames,
+        geom,
+        frame_gaps=gaps,
+        priors=priors,
+        miss_costs=mc,
+        config=cfg,
+        return_states=True,
     )
-    sel = bridge_aerial_gaps(sel, geom, frame_gaps=gaps, config=cfg)
+    sel = bridge_aerial_gaps(picked, geom, frame_gaps=gaps, config=cfg)
     track = kalman_smooth(sel, geom)
+    # trajectory/2 grid channels: 'T' = a real rerank-selected candidate on the
+    # Viterbi path; Kalman coast fills / bridge interpolations are 'C'.
+    g_states = {i: ("T" if i in picked else "C") for i in track}
+    g_conf = {i: (pick_conf[i] if i in picked else 0.0) for i in track}
 
     g_start, g_end = int(ef[0]), int(ef[-1]) + 1
-    traj = upsample_track(track, ef, g_start, g_end)
+    traj, states, conf = upsample_track(
+        track, ef, g_start, g_end, states=g_states, conf=g_conf
+    )
+    disp = upsample_disp(candidate_dispersion(frames), ef, g_start, g_end, points=traj)
     depth01 = depth_from_polygon(traj, polygon)
-    plan = plan_camera(traj, src_w=src_w, src_h=src_h, depth01=depth01)
+    plan = plan_camera(
+        traj,
+        src_w=src_w,
+        src_h=src_h,
+        depth01=depth01,
+        states=states,
+        disp=disp,
+        config=planner_config,
+    )
     return {
         "ef": ef,
         "sel": sel,
         "track": track,
         "traj": traj,
+        "states": states,
+        "conf": conf,
+        "disp": disp,
         "depth01": depth01,
         "plan": plan,
         "g_start": g_start,

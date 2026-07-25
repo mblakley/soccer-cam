@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal, overload
 
 import numpy as np
 
@@ -283,6 +284,23 @@ def static_persistence(
     return out
 
 
+def candidate_dispersion(frames: list[list[Candidate]]) -> list[float | None]:
+    """Per-frame candidate-cloud dispersion: RMS distance (source px) of the
+    frame's candidates from their centroid — the trajectory/2 ``disp`` channel.
+    LOW dispersion (the cloud agrees) is the W2 design's scramble/pile-up HOLD
+    signature; a single-candidate frame is a zero-spread cloud (0.0). ``None``
+    for frames with no candidates at all (no signal, no vote)."""
+    out: list[float | None] = []
+    for cands in frames:
+        if not cands:
+            out.append(None)
+            continue
+        xy = np.array([[c.x, c.y] for c in cands], float)
+        d = xy - xy.mean(axis=0)
+        out.append(float(np.sqrt(np.mean((d * d).sum(axis=1)))))
+    return out
+
+
 def _motion_support(
     frames_world: list[np.ndarray],
     motion_world: list[np.ndarray],
@@ -376,13 +394,39 @@ def coast_occlusions(
     return out
 
 
+@overload
+def kalman_smooth(
+    preds: dict[int, tuple[float, float]],
+    geom: FieldGeometry,
+    *,
+    q_accel: float = ...,
+    r_meas_m: float = ...,
+    return_states: Literal[False] = ...,
+) -> dict[int, tuple[float, float]]: ...
+
+
+@overload
+def kalman_smooth(
+    preds: dict[int, tuple[float, float]],
+    geom: FieldGeometry,
+    *,
+    q_accel: float = ...,
+    r_meas_m: float = ...,
+    return_states: Literal[True],
+) -> tuple[dict[int, tuple[float, float]], dict[int, str]]: ...
+
+
 def kalman_smooth(
     preds: dict[int, tuple[float, float]],
     geom: FieldGeometry,
     *,
     q_accel: float = 1.5,
     r_meas_m: float = 2.5,
-) -> dict[int, tuple[float, float]]:
+    return_states: bool = False,
+) -> (
+    dict[int, tuple[float, float]]
+    | tuple[dict[int, tuple[float, float]], dict[int, str]]
+):
     """Constant-velocity Kalman RTS smoother over the selected ball track (world meters).
 
     The principled replacement for the linear :func:`coast_occlusions`. The re-ranker's
@@ -401,9 +445,16 @@ def kalman_smooth(
             velocity. Larger = trust the measurements more (less smoothing).
         r_meas_m: measurement-noise std (m) — how far a selected candidate sits from the true
             ball. Larger = smooth harder.
+        return_states: also return the per-frame fill tags (trajectory/2 seam):
+            ``{frame_idx: 'T' | 'C'}`` — ``'T'`` for frames measured in ``preds``,
+            ``'C'`` for the smoother's in-span coast fills. Output positions are
+            identical either way.
     """
     if len(preds) < 2 or not getattr(geom, "valid", False):
-        return dict(preds)
+        out = dict(preds)
+        if return_states:
+            return out, dict.fromkeys(out, "T")
+        return out
     keys = sorted(preds)
     t0, t1 = keys[0], keys[-1]
     zs = {t: geom.image_to_world(np.array([[x, y]]))[0] for t, (x, y) in preds.items()}
@@ -439,7 +490,42 @@ def kalman_smooth(
         c = pf[i] @ f.T @ np.linalg.inv(pp[i + 1])
         xs[i] = xf[i] + c @ (xs[i + 1] - xp[i + 1])
     img = geom.world_to_image(xs[:, :2])
-    return {t0 + i: (float(img[i, 0]), float(img[i, 1])) for i in range(n)}
+    smoothed = {t0 + i: (float(img[i, 0]), float(img[i, 1])) for i in range(n)}
+    if return_states:
+        return smoothed, {t: ("T" if t in preds else "C") for t in smoothed}
+    return smoothed
+
+
+@overload
+def rerank(
+    frames: list[list[Candidate]],
+    geom: FieldGeometry,
+    *,
+    motion: list[list[Candidate]] | None = ...,
+    frame_gaps: list[int] | None = ...,
+    priors: list[np.ndarray] | None = ...,
+    miss_costs: list[float] | None = ...,
+    anchors: dict[int, tuple[float, float]] | None = ...,
+    anchor_radius_m: float = ...,
+    config: RerankConfig | None = ...,
+    return_states: Literal[False] = ...,
+) -> dict[int, tuple[float, float]]: ...
+
+
+@overload
+def rerank(
+    frames: list[list[Candidate]],
+    geom: FieldGeometry,
+    *,
+    motion: list[list[Candidate]] | None = ...,
+    frame_gaps: list[int] | None = ...,
+    priors: list[np.ndarray] | None = ...,
+    miss_costs: list[float] | None = ...,
+    anchors: dict[int, tuple[float, float]] | None = ...,
+    anchor_radius_m: float = ...,
+    config: RerankConfig | None = ...,
+    return_states: Literal[True],
+) -> tuple[dict[int, tuple[float, float]], dict[int, float]]: ...
 
 
 def rerank(
@@ -453,7 +539,11 @@ def rerank(
     anchors: dict[int, tuple[float, float]] | None = None,
     anchor_radius_m: float = 8.0,
     config: RerankConfig | None = None,
-) -> dict[int, tuple[float, float]]:
+    return_states: bool = False,
+) -> (
+    dict[int, tuple[float, float]]
+    | tuple[dict[int, tuple[float, float]], dict[int, float]]
+):
     """Re-rank per-frame ball candidates by physics/context (see module docstring).
 
     Args:
@@ -483,10 +573,15 @@ def rerank(
             ignored (the detector missed the moment — never break the path over it).
         anchor_radius_m: world-meters gate around each anchor.
         config: :class:`RerankConfig`.
+        return_states: also return the per-frame emission-derived confidence of
+            the selected candidates (trajectory/2 seam): ``{frame_idx: conf}``
+            keyed exactly like the predictions — the miss-frame set is every
+            index absent from the predictions. Selection is identical either way.
 
     Returns:
         ``{frame_idx: (x, y)}`` selected ball position in source pixels (frames the track
         coasts as a miss are omitted). ``frame_idx`` is the index into ``frames``.
+        With ``return_states=True``: ``(preds, conf)`` as described above.
     """
     if not getattr(geom, "valid", False):
         raise ValueError("rerank requires a valid (non-neutral) homography")
@@ -881,7 +976,21 @@ def rerank(
     for t, p in enumerate(path):
         if p < len(frames[t]) and len(fsrc[t]):
             preds[t] = (float(fsrc[t][p][0]), float(fsrc[t][p][1]))
-    return preds
+    if not return_states:
+        return preds
+
+    # Per-frame emission-derived confidence for the selected ('T') frames:
+    # conf = exp(-emission cost), clipped to [0, 1]. With the shipped alpha=0
+    # selector emission (prior = -log P(candidate)) this is the selector's
+    # calibrated probability up to the static/motion context terms.
+    def _conf(t: int, j: int) -> float:
+        e = emis(t, j)
+        if not math.isfinite(e):
+            return 0.0
+        return 1.0 if e <= 0.0 else float(math.exp(-e))
+
+    conf = {t: _conf(t, path[t]) for t in preds}
+    return preds, conf
 
 
 def _infield_test(geom: FieldGeometry):
@@ -1000,6 +1109,36 @@ def bridge_aerial_gaps(
     return out
 
 
+@overload
+def track_ball(
+    frames: list[list[Candidate]],
+    geom: FieldGeometry,
+    *,
+    motion: list[list[Candidate]] | None = ...,
+    player_boxes: list[list[tuple[float, float]]] | None = ...,
+    frame_gaps: list[int] | None = ...,
+    action_weight: float = ...,
+    miss_costs: list[float] | None = ...,
+    config: RerankConfig | None = ...,
+    return_states: Literal[False] = ...,
+) -> dict[int, tuple[float, float]]: ...
+
+
+@overload
+def track_ball(
+    frames: list[list[Candidate]],
+    geom: FieldGeometry,
+    *,
+    motion: list[list[Candidate]] | None = ...,
+    player_boxes: list[list[tuple[float, float]]] | None = ...,
+    frame_gaps: list[int] | None = ...,
+    action_weight: float = ...,
+    miss_costs: list[float] | None = ...,
+    config: RerankConfig | None = ...,
+    return_states: Literal[True],
+) -> tuple[dict[int, tuple[float, float]], dict[int, str], dict[int, float]]: ...
+
+
 def track_ball(
     frames: list[list[Candidate]],
     geom: FieldGeometry,
@@ -1010,7 +1149,11 @@ def track_ball(
     action_weight: float = 0.5,
     miss_costs: list[float] | None = None,
     config: RerankConfig | None = None,
-) -> dict[int, tuple[float, float]]:
+    return_states: bool = False,
+) -> (
+    dict[int, tuple[float, float]]
+    | tuple[dict[int, tuple[float, float]], dict[int, str], dict[int, float]]
+):
     """The full production ball-tracking pipeline (the verified-best config).
 
     Runs, in order: the player-density :func:`action_density_prior` (if ``player_boxes``
@@ -1035,11 +1178,30 @@ def track_ball(
         miss_costs: optional per-frame miss cost (see :func:`rerank` — the learned
             selector's ``-log P(no visible ball)``).
         config: :class:`RerankConfig`.
+        return_states: also return the trajectory/2 per-grid-frame channels:
+            ``(track, states, conf)`` where ``states[t]`` is ``'T'`` (a real
+            candidate on the Viterbi path) or ``'C'`` (a coasted in-span fill:
+            Kalman occlusion coast, and aerial-bridge interpolations when that
+            pass is enabled — interpolations are not detections) and ``conf[t]``
+            is the emission-derived confidence for ``'T'`` frames, 0.0 for
+            ``'C'``. The returned track is identical either way.
     """
     priors = None
     if player_boxes is not None and action_weight:
         priors = action_density_prior(frames, player_boxes, geom, weight=action_weight)
-    sel = rerank(
+    if not return_states:
+        sel = rerank(
+            frames,
+            geom,
+            motion=motion,
+            frame_gaps=frame_gaps,
+            priors=priors,
+            miss_costs=miss_costs,
+            config=config,
+        )
+        sel = bridge_aerial_gaps(sel, geom, frame_gaps=frame_gaps, config=config)
+        return kalman_smooth(sel, geom)
+    sel, sel_conf = rerank(
         frames,
         geom,
         motion=motion,
@@ -1047,6 +1209,13 @@ def track_ball(
         priors=priors,
         miss_costs=miss_costs,
         config=config,
+        return_states=True,
     )
-    sel = bridge_aerial_gaps(sel, geom, frame_gaps=frame_gaps, config=config)
-    return kalman_smooth(sel, geom)
+    filled = bridge_aerial_gaps(sel, geom, frame_gaps=frame_gaps, config=config)
+    track, _fills = kalman_smooth(filled, geom, return_states=True)
+    # 'T' strictly = rerank's selected candidates: aerial-bridge fills enter the
+    # smoother as measurements (the smoother tags them 'T') but they are
+    # interpolations, not detections — the planner must never treat them as live.
+    states = {t: ("T" if t in sel else "C") for t in track}
+    conf = {t: (sel_conf[t] if t in sel else 0.0) for t in track}
+    return track, states, conf

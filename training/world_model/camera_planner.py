@@ -7,7 +7,9 @@ product runs — no eval/product divergence).
 
 from video_grouper.inference.camera_planner import (  # noqa: F401
     PlannerConfig,
+    parse_trajectory_artifact,
     plan_camera,
     save_camera_path,
+    upsample_disp,
     upsample_track,
 )

@@ -51,6 +51,77 @@ def test_freeze_campath_spans_and_guard():
 
 
 # ---------------------------------------------------------------------------
+# trajectory/2 artifacts (W2 seam) + hold-knob parsing
+# ---------------------------------------------------------------------------
+
+
+def test_save_load_trajectory_v2_roundtrip(tmp_path):
+    traj = [(100.0, 50.0), None, (120.0, 55.0)]
+    state = ["T", "M", "C"]
+    conf = [0.91234, 0.0, 0.0]
+    disp = [40.26, None, 12.0]
+    p = tmp_path / "g.trajectory.json"
+    ol.save_trajectory(p, traj, g_start=8, fps=20.0, state=state, conf=conf, disp=disp)
+    raw = json.loads(p.read_text())
+    assert raw["schema"] == "trajectory/2"
+    art = ol.load_trajectory(p)
+    assert art["g_start"] == 8 and art["fps"] == 20.0
+    assert art["points"] == [(100.0, 50.0), None, (120.0, 55.0)]
+    assert art["state"] == state
+    assert art["conf"] == [0.9123, 0.0, 0.0]  # rounded at save
+    assert art["disp"] == [40.3, None, 12.0]
+
+
+def test_save_trajectory_v1_without_state_and_neutral_load(tmp_path):
+    traj = [(100.0, 50.0), None, (120.0, 55.0)]
+    p = tmp_path / "g.trajectory.json"
+    ol.save_trajectory(p, traj, g_start=0, fps=20.0)
+    assert json.loads(p.read_text())["schema"] == "trajectory/1"
+    art = ol.load_trajectory(p)  # v1 read -> neutral all-'T' channels
+    assert art["state"] == ["T", "M", "T"]
+    assert art["conf"] == [1.0, 0.0, 1.0]
+    assert art["disp"] is None
+
+
+def test_save_trajectory_misaligned_channels_hard_fail(tmp_path):
+    p = tmp_path / "g.trajectory.json"
+    with pytest.raises(SystemExit):
+        ol.save_trajectory(
+            p, [(1.0, 2.0), (3.0, 4.0)], g_start=0, fps=20.0, state=["T"]
+        )
+
+
+def test_load_trajectory_rejects_bare_list(tmp_path):
+    p = tmp_path / "bare.trajectory.json"
+    p.write_text(json.dumps([[1.0, 2.0], [3.0, 4.0]]))
+    with pytest.raises(SystemExit):
+        ol.load_trajectory(p)
+
+
+def test_planner_config_from_args_knobs():
+    import argparse
+
+    from video_grouper.inference.camera_planner import PlannerConfig
+
+    ns = argparse.Namespace(enable_hold=False, hold_knob=[])
+    assert ol._planner_config_from_args(ns) is None  # defaults untouched
+    ns = argparse.Namespace(
+        enable_hold=True,
+        hold_knob=["hold_entry_frames=30", "hold_dispersion_px=220.5"],
+    )
+    cfg = ol._planner_config_from_args(ns)
+    assert cfg.enable_hold is True
+    assert cfg.hold_entry_frames == 30  # int field stays int
+    assert cfg.hold_dispersion_px == 220.5
+    assert cfg.hold_exit_frames == PlannerConfig().hold_exit_frames  # untouched
+    for bad in (["nope=1"], ["hold_entry_frames=abc"], ["hold_entry_frames"]):
+        with pytest.raises(SystemExit):
+            ol._planner_config_from_args(
+                argparse.Namespace(enable_hold=True, hold_knob=bad)
+            )
+
+
+# ---------------------------------------------------------------------------
 # CLI end-to-end (synthetic artifacts in tmp_path)
 # ---------------------------------------------------------------------------
 

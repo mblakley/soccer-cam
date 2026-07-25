@@ -96,3 +96,44 @@ def test_upsample_track_blanks_wide_gaps():
     assert out[16] == (180.0, 50.0)
     assert all(out[g] is None for g in range(17, 3016))  # the break is blank
     assert out[3016] == (2000.0, 60.0)
+
+
+def test_upsample_track_state_and_conf_channels():
+    """trajectory/2 seam: interpolated frames inherit the source span's state —
+    'T' between two 'T' grid frames, 'C' when the span touches a coasted grid
+    frame, 'M' outside the span; conf is 0.0 on 'C'/'M' frames."""
+    track = {0: (100.0, 50.0), 1: (180.0, 50.0), 2: (260.0, 50.0)}
+    ef = [8, 16, 24]
+    states = {0: "T", 1: "C", 2: "T"}
+    conf = {0: 0.9, 1: 0.0, 2: 0.5}
+    pts, st, cf = upsample_track(track, ef, 0, 30, states=states, conf=conf)
+    assert pts[12][0] == 140.0  # positions unchanged by the channels
+    assert all(s == "M" for s in st[:8]) and all(c == 0.0 for c in cf[:8])
+    assert st[8] == "T" and cf[8] == 0.9
+    assert all(s == "C" for s in st[9:16])  # span touches the coasted grid frame
+    assert all(c == 0.0 for c in cf[9:17])
+    assert st[16] == "C"
+    assert all(s == "C" for s in st[17:24])
+    assert st[24] == "T" and cf[24] == 0.5
+    assert all(s == "M" for s in st[25:])
+
+
+def test_upsample_track_pure_t_span_interpolates_conf():
+    track = {0: (100.0, 50.0), 1: (180.0, 50.0)}
+    ef = [8, 16]
+    pts, st, cf = upsample_track(
+        track, ef, 0, 20, states={0: "T", 1: "T"}, conf={0: 1.0, 1: 0.5}
+    )
+    assert all(s == "T" for s in st[8:17])
+    assert cf[12] == 0.75  # linear midpoint of the grid confidences
+    assert st[17] == "M" and pts[17] is None
+
+
+def test_upsample_track_wide_gap_states_are_m():
+    track = {0: (100.0, 50.0), 1: (180.0, 50.0), 2: (2000.0, 60.0)}
+    ef = [8, 16, 3016]
+    pts, st, cf = upsample_track(track, ef, 0, 3020, states={0: "T", 1: "T", 2: "T"})
+    assert st[16] == "T"  # gap endpoints stay tracked
+    assert all(s == "M" for s in st[17:3016])
+    assert all(cf[g] == 0.0 for g in range(17, 3016))
+    assert st[3016] == "T" and cf[3016] == 1.0  # neutral conf when none given

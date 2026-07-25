@@ -118,3 +118,75 @@ def test_offfield_gate_suppresses_offfield_distractor():
         1 for t, (x, _y) in preds.items() if abs(x - (400.0 + 30.0 * t)) < 30.0
     )
     assert on_ball >= 0.8 * len(preds)
+
+
+# ---------------------------------------------------------------------------
+# trajectory/2 seam: the return_states opt-ins must not perturb selection
+# ---------------------------------------------------------------------------
+
+
+def _frames_with_occlusion(n=30, gap=(12, 16)):
+    """Moving ball + static distractor, with the ball's candidates removed over
+    ``gap`` (an occlusion: the Viterbi coasts it as a miss)."""
+    frames = _moving_vs_static_frames(n)
+    for t in range(*gap):
+        frames[t] = []
+    return frames
+
+
+def test_rerank_return_states_leaves_selection_identical():
+    geom = _geom()
+    frames = _frames_with_occlusion()
+    base = rerank(frames, geom, config=RerankConfig())
+    preds, conf = rerank(frames, geom, config=RerankConfig(), return_states=True)
+    assert preds == base  # exact same selection, frame for frame
+    assert set(conf) == set(preds)
+    assert all(0.0 <= c <= 1.0 for c in conf.values())
+    assert all(t not in preds for t in range(12, 16))  # occlusion stays a miss
+
+
+def test_kalman_smooth_return_states_tags_fills():
+    geom = _geom()
+    preds = {
+        t: (400.0 + 30.0 * t + (5.0 if t % 2 else -5.0), 700.0)
+        for t in range(20)
+        if t not in (8, 9, 10)
+    }
+    base = kalman_smooth(preds, geom)
+    sm, states = kalman_smooth(preds, geom, return_states=True)
+    assert sm == base  # positions identical with the opt-in
+    assert all(states[t] == "C" for t in (8, 9, 10))  # in-span coast fills
+    assert all(states[t] == "T" for t in sm if t not in (8, 9, 10))
+
+
+def test_track_ball_return_states_identity_and_channels():
+    from video_grouper.inference.ball_tracker import track_ball
+
+    geom = _geom()
+    frames = _frames_with_occlusion()
+    base = track_ball(frames, geom)
+    track, states, conf = track_ball(frames, geom, return_states=True)
+    assert track == base  # the opt-in changes NOTHING about the track
+    assert set(states) == set(track) and set(conf) == set(track)
+    for t in range(12, 16):  # occlusion interior: coasted, zero confidence
+        assert states[t] == "C" and conf[t] == 0.0
+    t_frames = [t for t, s in states.items() if s == "T"]
+    assert len(t_frames) >= 20
+    assert all(conf[t] > 0.0 for t in t_frames)
+
+
+def test_candidate_dispersion_rms():
+    from video_grouper.inference.ball_tracker import candidate_dispersion
+
+    frames = [
+        [],  # no candidates -> no signal
+        [Candidate(x=100.0, y=100.0, score=1.0)],  # single: zero-spread cloud
+        [
+            Candidate(x=0.0, y=0.0, score=1.0),
+            Candidate(x=300.0, y=400.0, score=1.0),
+        ],
+    ]
+    disp = candidate_dispersion(frames)
+    assert disp[0] is None
+    assert disp[1] == 0.0
+    assert disp[2] == 250.0  # both 250 px from the (150, 200) centroid

@@ -49,15 +49,18 @@ def _write_selector_npz(path, n_features):
     )
 
 
-def _write_candidates(path, stride=4, n=25):
+def _write_candidates(path, stride=4, n=25, schema="candidates/1"):
     frames = {}
     for i in range(n):
         g = i * stride
         ball = [400.0 + 15.0 * i, 700.0, 0.5]
         static = [1200.0, 650.0, 0.9]
+        if schema == "candidates/2":  # v2 rows carry size_px
+            ball = ball + [9.0]
+            static = static + [12.0]
         frames[str(g)] = [ball, static]
     art = {
-        "schema": "candidates/1",
+        "schema": schema,
         "stride": stride,
         "src_w": 1920,
         "src_h": 1080,
@@ -66,6 +69,24 @@ def _write_candidates(path, stride=4, n=25):
         "frames": frames,
     }
     path.write_text(json.dumps(art))
+
+
+def test_select_accepts_candidates_v2(tmp_path):
+    """ball_detect writes candidates/2; the select gate must accept it (was a
+    live mismatch: the gate demanded candidates/1 while the parser handled both)."""
+    det = tmp_path / "detections.json"
+    _write_candidates(det, schema="candidates/2")
+    poly = tmp_path / "field.json"
+    poly.write_text(json.dumps({"polygon": POLY}))
+    net = tmp_path / "sel.npz"
+    _write_selector_npz(net, len(FEATURE_NAMES))
+    out = tmp_path / "trajectory.json"
+
+    populated = _run_selection(
+        str(det), str(poly), str(out), BallSelectStepConfig(select_model_path=str(net))
+    )
+    assert populated > 0
+    assert json.loads(out.read_text())["schema"] == "trajectory/2"
 
 
 def test_select_writes_dense_trajectory(tmp_path):
@@ -79,13 +100,29 @@ def test_select_writes_dense_trajectory(tmp_path):
 
     cfg = BallSelectStepConfig(select_model_path=str(net))
     populated = _run_selection(str(det), str(poly), str(out), cfg)
-    traj = json.loads(out.read_text())
+    art = json.loads(out.read_text())
+    assert art["schema"] == "trajectory/2"
+    assert art["g_start"] == 0 and art["fps"] == 20.0
+    traj = art["points"]
     assert populated > 0
     assert len(traj) == 24 * 4 + 1  # dense from frame 0 through the last sample
     xs = [p[0] for p in traj if p is not None]
     # the physics stack must follow the moving ball, not the bright static
     on_ball = sum(1 for x in xs if abs(x - 1200.0) > 50.0)
     assert on_ball >= 0.8 * len(xs)
+    # W2 seam channels: aligned 1:1 with points, sane values
+    state, conf, disp = art["state"], art["conf"], art["disp"]
+    assert len(state) == len(conf) == len(disp) == len(traj)
+    assert set(state) <= {"T", "C", "M"}
+    assert any(s == "T" for s in state)
+    for s, c, p in zip(state, conf, traj, strict=True):
+        assert 0.0 <= c <= 1.0
+        assert (p is None) == (s == "M")  # M exactly where there is no point
+        if s != "T":
+            assert c == 0.0
+    # dispersion: the two candidates sit ~802 px apart at frame 0 -> RMS is half
+    d0 = float(np.hypot(1200.0 - 400.0, 650.0 - 700.0)) / 2.0
+    assert disp[0] == pytest.approx(d0, abs=0.5)
 
 
 def test_select_rejects_wrong_schema(tmp_path):
