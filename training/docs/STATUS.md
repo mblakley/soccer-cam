@@ -1,6 +1,36 @@
 # Current Status
 
-*Last updated: 2026-07-22*
+*Last updated: 2026-07-24 (overnight) — Virtual Operator arc kickoff*
+
+## 2026-07-24 (overnight) — VIRTUAL OPERATOR arc OPENED; geodet MERGED to main; W1 scoreboard is the first artifact
+
+- **ARC KICKOFF (Mark's brief 07-24 + approved plan):** the goal — "broadcast-quality ball
+  tracking that matches AutoCam near/mid and beats it far" — is bindingly about WHERE THE
+  VIEWPORT LOOKS (DECISIONS (k)): a virtual camera operator. The detector arc stays CLOSED.
+  Workstreams: W1 goal scoreboard + oracle-replay headroom ladder (A/B/C/D) → W2 stoppage-HOLD
+  (task #20) → W3 loss discipline (miss-cost sweep + never-pan-on-coast policy) → W4 far-play
+  framing (consumes task #19 ray-geometry) → W5 operator-imitation parameter fit. Parallel GPU
+  lane: task #21 Dahua-refresh (may TRAIN, may NOT promote before the W1 table lands on the
+  current champion — no-straddle rule). Plan: `~/.claude/plans/kickoff-the-virtual-glowing-pancake.md`.
+- **git:** `feat/geometry-conditioned-detector` MERGED to main (`ca5e178`) under the hard gate:
+  referee hashes `4a0d63e` (compose_verdict rule-set) + `ac1f42c` (statistical referee v3) both
+  reachable from main and still cited in DECISIONS; CURRENT STATE and CLAUDE.md rule 8 intact;
+  ruff + mypy + 1756 unit tests green. Conflict stance recorded in the merge commit. Closed
+  branches (geodet, `exp/detector-diff-encoding`, `experiment/wind-noise-reduction`) are never
+  resumed. New worktree `soccer-cam-operator-w1` on `feat/operator-w1-scoreboard`.
+- **Standing rules for the arc (Mark, 07-24):** (1) the W1 table is the FIRST artifact — no
+  workstream builds before it exists. (2) Lookahead is PRICED before built (W1 Run D; the
+  EXP-DIST-40 autopsy: v1 died on an untrustworthy interpolation target + an unstudied window
+  + a pre-referee instrument; today's tracker is already globally non-causal, so the windowed
+  re-decision build is PLANNER-side). (3) "Match/beat AutoCam" is defined empirically: AutoCam's
+  focus coordinates are scored against the same human GT views in every scoreboard cell; match =
+  within the cell's split-half null band, beat = decisive under the dual rule on shared events.
+  (4) The miss-cost sweep gets its real task number when W3 is specced (the brief's "#16" was
+  not a docs number).
+- **FLEET.md created** (roles/orchestration from the kickoff brief §6) with the CPU amendment:
+  the server CPU is slow/low-spec — CPU-heavy batch analysis (replay sweeps, oracle ladders,
+  fits) runs on the 4070's fast CPU after staging inputs local; the server owns chains and
+  light reads; the host laptop stays the product oracle.
 
 ## 2026-07-22 — polygon store CLEAN + geometry-conditioned detector plan approved; Phase 0b audit numbers in
 
