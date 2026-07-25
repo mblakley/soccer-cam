@@ -11,6 +11,9 @@ NTP-corrected ~16:20 true; the server stayed on the slow clock until after banki
 (sync moment noted below). Laptop artifacts after 16:20 carry true time; server
 artifacts carry the slow clock. Ordering provenance is by git history (every
 pre-statement (h)–(s) committed before its number existed), not wall clocks.
+SYNC MOMENT: post-banking, server read 21:13:29 pre-sync → 21:13:47 post (offset
+had already converged to ≈0 on its own during the evening; day-time server stamps
+remain ~2.2 h slow).
 
 **Design:** mg_ctrl / mg_geo (gray3geo) / mg_norm (per-camera scale-norm) trained on
 the same 21-game multi-geometry store (label-identical twins); referee =
