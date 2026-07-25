@@ -4,6 +4,45 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-05: AUTOCAM REFERENCE CORRECTED on the primary family — the legacy viewport jsonl is the documented-BAD file; "we crush AutoCam" (07-19) is RETRACTED for spc/fair (2026-07-25)
+
+**Trigger:** Mark rejected the spc read "AC capture@600 = 0.063 mid" as impossible. He was
+right. Investigation (per-frame processing, not assumptions):
+- spc's `autocam_viewport.jsonl` pans actively (x 479–7145, 0.6% center) but decorrelates
+  from GT — and `autocam_aim.README.txt` (2026-07-11, prior session) SAYS SO OUTRIGHT:
+  "the legacy autocam_viewport.jsonl in this dir is BAD (corr 0.28 vs GT); this fresh aim
+  corr 0.773." The correct reference is **`autocam_aim.jsonl`** — fresh Once.Autocam 3.0.7
+  CLI run, smoothed ball target in SOURCE px (7680×2160), f = combined.mp4 frame idx
+  (≈ global frames; alignment verified by the sane re-score below).
+**Corrected spc_viewport_worst cells (capture@600 / med|Δcx|, ALL subset):**
+| band | champion (hn4s4) | AC (fresh aim) | AC (legacy, BAD) |
+|---|---|---|---|
+| all | 0.598 / 232 | **0.640 / 453** | 0.086 / 3179 |
+| far | 0.441 / 1625 | 0.443 / 752 | 0.117 / 3036 |
+| mid | 0.719 / **82** | 0.804 / 354 | 0.063 / 3192 |
+| near | 0.762 / **25** | 1.000 / 47 | 0.000 / 4013 |
+Referee vs fresh AC: **nothing decisive either way on spc** (ALL ev4v4; far zero; the
+same-session "mid DECISIVE for champion" read against the legacy file is VOID — never banked,
+retracted here). Pattern: champion capture trails slightly but its MEDIANS are far tighter
+when on-target (82 vs 354 mid; 25 vs 47 near) — the tail/discipline story again, now on the
+primary family, with far dead-even.
+**Corrections that propagate (standing):**
+1. **"We crush AutoCam" (07-19, frozen viewport v1) is RETRACTED for spc/fair** — the queue
+   builder drew AC positions from the legacy file at labeling time; every spc/fair AC
+   comparison to date used the BAD reference. PIT (Dahua) STANDS — its viewport jsonl was
+   cold-audit-validated (50/60).
+2. **AC-arm provenance is now mandatory**: the scoreboard's AC arm must name its source file;
+   Reolink-family legacy `autocam_viewport.jsonl` is a banned reference class. A hard-fail
+   guard (refuse legacy viewport when a fresh aim file exists) goes into the scoreboard with
+   the next code commit (rule 8).
+3. **Run AC references against the TRIMMED (product-regime) video going forward** (Mark,
+   07-25), mapping to global frames via match_info start_time_offset — the 07-11 aim run used
+   combined.mp4 which aligns, but trimmed is the product regime and the standing convention.
+4. viewport_benchmark.jsonl's autocam tier on spc/fair (built from the legacy file) is
+   suspect — audit before any read that consumes it.
+**Artifacts:** `G:/ballresearch/operator/spc_v2.json` (corrected), `spc_v1.json` (bad-AC,
+kept for the delta), `ladder/spc_ac_aim.campath.json`.
+
 ## EXP-OP-04: ORACLE LADDER on PIT — Run A validated to the digit; lookahead prices at ~ZERO; the dump-provenance trap; hn2s8 anomaly adjudicated as selection bias (2026-07-25)
 
 **Run A consistency: PASS, exact.** Replaying the VERDICT dump (`geodet/fullgame_pittsford`,
