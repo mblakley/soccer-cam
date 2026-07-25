@@ -4,40 +4,48 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ## CURRENT STATE (maintained in place — the ONE exception to append-only; history below is immutable)
 
-*Last maintained: 2026-07-23*
+*Last maintained: 2026-07-24, post-verdict (EXP-DIST-72). Tomorrow starts HERE, not from (h)–(s).*
 
-- **Champions:** detector hn4 (basis: far-CEILING 0.965; argmax claims need replicates), selector v7.
-- **VIEWPORT MATCH IS THE OBJECTIVE (07-24 (k)).** Detector confidence/argmax are upstream
-  proxies — the tracker/planner post-process scores, so a model with worse detector numbers
-  can produce better viewports, and that model WINS. Detector rows may VETO (a decisive
-  regression poisons the tracker's input) but may never PROMOTE on their own — adoption
-  requires the viewport rows. On a decisive detector-vs-viewport conflict, viewport wins and
-  the conflict gets an EXPERIMENTS entry. Every lever states at proposal time how it
-  plausibly moves VIEWPORT capture — "improves argmax" is not a consumer. Labeling economy:
-  viewport-capture coverage outranks detector-instrument enrichment. Detector rows remain
-  DIAGNOSTIC (ceiling-vs-argmax-vs-tracker stage attribution), not adoption objectives.
-- **Gates (G1, redefined 07-23):** ceiling + product VIEWPORT capture vs AutoCam (frozen GT v1).
-  Argmax = directional color only. Never gate on a metric whose CI floor exceeds the effect size.
-- **Noise protocol:** event-level sign test (gap=64) + event-bootstrap 95% CI per metric per game
-  + per-metric-per-eval-game seed bands. SPC is a 7-far/5-near-EVENT instrument.
-- **Eval games:** SPC + Iron + Fairport 06.06 (co-equal; native anchors, leak-caveated) +
-  Pittsford-home 06.25 (Dahua; human GT pending). Holdout policy: geometry distance with a NAMED
-  reference set — never venue names.
-- **Encodings (diff3/diff5/df3):** CLOSED on direction (EXP-DIST-68). `--stabilize`: opt-in.
-- **Geometry channel (gray3geo):** plumbed end-to-end; single-rig = suspected position prior
-  (suggestive, EXP-DIST-67+CI addendum); Phase 2 three-arm (ctrl/geo/norm) decisive run in flight.
-- **Deployment reality:** fleet LOO-NN median 0.42 (deployment ≈ interpolation under fleet-covering
-  training); COVERAGE is the lever; uncovered axis = OPERATOR diversity.
-- **Near ball:** tracker-dynamics problem; next lever = state-dependent miss-entry cost
-  (position×velocity + candidate-margin arms), viewport-scored, selector-version-coupled.
-  Near-scramble label batch (~100 clicks, mined from cached dumps) pulled FORWARD — gates
-  the sweep's target metric (decision (g)).
-- **Phase 2 verdict is PRE-BOUND to the action table in (g)** — six outcome patterns, each
-  with its decided next step; primary-family regression disqualifies an arm outright.
-- **Post-verdict decision point:** Phase 2 negative/unseparated ⇒ DETECTOR ARC CLOSES —
-  roadmap = selector recalibration + Viterbi dynamics, eval enrichment, operator-diversity
-  acquisition, FP16 iGPU when speed resumes. Data refresh was the month's only measured
-  champion improvement; idle trainers are not a reason to run detector experiments.
+- **PHASE 2 VERDICT (EXP-DIST-72): champions UNCHANGED (hn4 + v7); DETECTOR ARC CLOSED.**
+  mg_geo/mg_norm vetoed at the detector tier (FAIR decisive regressions, (j)) and not
+  adopted at the viewport tier (arm parity, no win). The (r).2 SURPRISING branch fired:
+  the tracker absorbs size-conditioning damage that destroys argmax — (k).2 divergence
+  measured, veto formal, pipeline robust. Fairprobe = branch (q)(b): no channel revisit
+  before the ray-geometry fix certifies.
+- **THE ONE BUG CLASS (mechanism appendix):** trace-interpolated size expectation through a
+  curved projection — structurally wavy interior (SPC ±35%, Pittsford 1.5–2.8 bow, FAIR
+  2.54 @ yaw), one class behind five anomalies. Factorization SUPPORTED: shared bow curve x
+  per-game scalar (+ yaw phase). Fix: interim curve+scalar (days) → RAY-GEOMETRY expectation
+  (durable); certification = SPC + FAIR-scale-error fixture + Pittsford. Ratio is a
+  DISCREPANCY ALARM, never a polygon gate ((n)); guards HARD-FAIL in chains ((j).3).
+- **DAY-ONE ORDER (07-25, fresh):** 1) stoppage-HOLD planner state (task #20; 56% of div
+  frames; zero-click eval banked). 2) ray-geometry fix + interim curve/scalar (task #19
+  triple context). 3) per branch (q)(b) + PARKED items (Dahua-refresh retrain of the product
+  detector — the arms beat the champion 0.63 vs 0.45 on Pittsford, a DATA effect; mg_norm's
+  suggestive 28v22 edge — pending seed-2 noise band, read noise-band-first per #12).
+- **Champions:** detector hn4 (far-CEILING 0.965), selector v7. **Cross-camera reality:
+  AutoCam beats our champion on the Dahua holdout failure-mode set (0.759 vs 0.542) —
+  Dahua transfer is open; Dahua training data closes most of it (arm ctrl 0.644).**
+- **VIEWPORT MATCH IS THE OBJECTIVE (07-24 (k)).** Detector rows VETO, never PROMOTE;
+  decisive detector-vs-viewport conflicts → viewport wins + EXPERIMENTS entry; every lever
+  names its viewport consumer; labeling economy favors viewport coverage. Detector rows are
+  DIAGNOSTIC (stage attribution).
+- **Gates (G1):** ceiling + product VIEWPORT capture vs AutoCam (frozen GT v1). Argmax =
+  directional color only. Every size-conditioned number cites its instrument's RULER RATIO.
+- **Noise protocol:** event-level sign test (gap=64) + exact sign-flip permutation (dual
+  rule, referee @ 4a0d63e) + event-bootstrap CIs. Block-power row is VOID (was @IRON-18k);
+  re-measure @SPC-18k via power_sim before any powered-null claim.
+- **Eval instruments:** SPC-18k (primary) / SPC-134 (stress) / FAIR-6k^ (static-distractor
+  robustness + #19 certification) / IRON-18k* (golden-hour stress, non-decisive) /
+  Pittsford-human 650-view GT (banked, reusable zero-click for planner levers).
+- **Ops:** 4070 = training + eval-dump node (stage eval-game clips ~35 GB first); server
+  1060 = evals/dumps; F-OP = guard queue when free. Everything Phase 2 archived to
+  F:\archive\geodet_phase2 (150k files, 31 GB incl. stores + F-OP ph1 runs + laptop logs).
+  Scheduled-task launchers everywhere (WinRM teardown kills Start-Process children).
+- **Deployment reality:** fleet LOO-NN median 0.42; COVERAGE is the lever; uncovered axis =
+  OPERATOR diversity — venue-local gains are readable against the self-covering fleet ((q)).
+- **Near ball:** tracker-dynamics problem; state-dependent miss-entry cost sweep is the
+  lever, now joined by stoppage-HOLD as the same state machine's product face.
 - **SPC-134 is a STRESS instrument, not a thermometer:** 102/134 rows are HARD-adversarial —
   its absolute levels were never product levels. This retroactively explains the
   dire-looking argmax history and the viewport/detector metric divergence. Every historical

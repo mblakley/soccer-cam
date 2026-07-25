@@ -4,6 +4,91 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-DIST-72: PHASE 2 COMPOSED VERDICT — three-arm multi-geometry decisive experiment (2026-07-24)
+
+**CLOCK PROVENANCE ((r).1):** the fleet ran ~2.2 h slow through 07-24; the laptop was
+NTP-corrected ~16:20 true; the server stayed on the slow clock until after banking
+(sync moment noted below). Laptop artifacts after 16:20 carry true time; server
+artifacts carry the slow clock. Ordering provenance is by git history (every
+pre-statement (h)–(s) committed before its number existed), not wall clocks.
+
+**Design:** mg_ctrl / mg_geo (gray3geo) / mg_norm (per-camera scale-norm) trained on
+the same 21-game multi-geometry store (label-identical twins); referee =
+compose_verdict (final rule set @ 4a0d63e, hierarchy per (i)/(j)/(k)); instruments
+SPC-18k / SPC-134 / FAIR-6k^ / IRON-18k* (stress), each reported WITH its measured
+ruler ratio per (m).2; viewport tier = Pittsford-human 640 GT views (500 div-sampled
++ 140 blind ext-div) + AutoCam reference.
+
+**DETECTOR TIER (12/12 pkls; ratios: SPC 0.78, FAIR 2.54, IRON 1.07):**
+- geo vs ctrl: SPC rows zero (SPC-134 argmax +0.261, pm=0.060, HARD strata 0.618 vs
+  0.314 — real but venue-local); FAIR-6k argmax DECISIVE −0.217 (pm=0.004);
+  **(j) DISQUALIFIER fires.**
+- norm vs ctrl: all SPC rows zero; FAIR-6k argmax DECISIVE −0.217; **DISQUALIFIER.**
+- geo vs norm: pattern 4, nothing separates.
+
+**VIEWPORT TIER (640 human GT views, capture@600px / median |Δcx|):**
+| source | ALL | original-500 | ext-div-140 |
+|---|---|---|---|
+| champion (hn4+v7) | 0.542 / 450px | 0.452 / 710px | 0.864 / 122px |
+| mg_ctrl | 0.644 / 294px | 0.630 / 299px | 0.693 / 222px |
+| mg_geo | 0.636 / 294px | 0.622 / 293px | 0.686 / 356px |
+| mg_norm | 0.662 / 290px | 0.638 / 294px | 0.750 / 232px |
+| **AutoCam** | **0.759 / 207px** | 0.708 / 211px | 0.943 / 126px |
+
+Set composition caveats: div-sampled (failure-mode-weighted, (h): 56% stoppage);
+ext-div = arm-vs-champion divergence frames (selects arm failures by construction).
+
+**READS:**
+1. **Arms do not separate at the viewport tier** — geo 19v22 / norm 28v22 event flips
+   vs ctrl: zero. Combined with the detector tier: **pattern 4 among arms; no
+   promotion** ((k).1: parity is not a win, and adoption requires a viewport win).
+2. **The (r).2 SURPRISING branch fired:** geo/norm ride at ctrl parity despite
+   rulers measured broken 1.7–2.8x on this game — the tracker's temporal machinery
+   absorbs the size-conditioning damage that destroyed raw argmax. This is the
+   (k).2 divergence measurement: the detector-tier veto stands formally, but what
+   the pipeline consumes is far more robust than the argmax rows implied.
+3. **Champion vs AutoCam on the Dahua holdout: AutoCam wins decisively on this
+   failure-mode set** (ev5v18, sign p≈0.011; 0.759 vs 0.542). Cross-camera product
+   transfer remains unsolved — consistent with the interpolation headline, NOT
+   contradicting the frozen Reolink benchmark ("we crush AutoCam" was primary-family).
+4. **All three mg arms beat the champion on Pittsford** (0.63–0.66 vs 0.45 on the
+   original set) — a DATA effect (ctrl shows it too; arm-independent): Dahua in
+   training closes most of the Dahua viewport gap. Coverage is the lever, again.
+5. **Fairprobe = branch (q)(b):** the 2.54 band correction recovered geo 0.017→0.126
+   (7x) but ctrl holds 0.246; veto stands; residual = intra-band waviness and/or
+   appearance transfer — split by the ray-geometry fix. The (q) operator-diversity
+   reading applies: venue-local gain is not fatal for THIS operator's self-covering
+   fleet, but nothing here earns adoption tonight.
+6. **Unified-mechanism test: NOT supported** — geo's SPC gains are ruler-error-
+   independent (corr −0.001 / 0.117; SPC-134 flips 10v0 split 5/5 across error
+   halves). The channel uses real venue-local signal; it is not merely a learned
+   ruler correction.
+
+**MECHANISM APPENDIX — one bug class, five anomalies ((s).3):** FAIR collapse,
+Pittsford bow (1.50/2.78/1.52), SPC ±35% bow, the DEPTH-CAL cross-game collapse,
+EXP-66 residuals — all one class: trace-interpolated expectation through a curved
+projection, structurally wavy interior, amplified per-game by yaw. Factorization
+SUPPORTED ((s).1): one shared bow curve x per-game scalar (+ yaw phase), corr 0.776.
+Fix path: interim curve+scalar (days) → ray-geometry expectation (durable);
+certification set SPC + FAIR-scale-error + Pittsford (Dahua row included).
+A measured bug class, not a fifth story.
+
+**VERDICT:** champions unchanged (hn4 + v7). mg_geo and mg_norm vetoed at the
+detector tier ((j)), not adopted at the viewport tier (no win); mg_ctrl not adopted
+(no viewport win over champion on primary family — untested there tonight; its
+Pittsford edge is a data finding, not a promotion case). Detector arc CLOSES per the
+07-23 (g) close condition. Day-one order (executed 07-25, fresh): stoppage-HOLD #1,
+ray-geometry fix + interim curve/scalar #2, then per branch (q)(b): no channel
+revisit before the ruler fix certifies.
+
+**PARKED (surfaced tonight, no pre-statement, no action):** (i) mg-arms-vs-champion
+Pittsford gap suggests a Dahua-refresh retrain of the product detector — parked for
+the day-one roadmap discussion; (ii) mg_norm's suggestive viewport edge over ctrl
+(28v22) — parked pending seed-2 noise band; (iii) 4070 as eval-dump node (stage
+eval-game clips ~35 GB) — ops line in CURRENT STATE.
+
+---
+
 ## EXP-DIST-71: eval_detector's FIRST-WINDOW span trap — the hn4 "Fairport anchor" scored 4/208 GT (stale early labels, 20 m off); and SPC evals have been using 134 of 1,785 labeled rows all along (2026-07-23)
 
 **What happened:** the first Fairport anchor run returned ceiling 0.0 on 4 GT. Root cause:
