@@ -4,6 +4,48 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-04: ORACLE LADDER on PIT — Run A validated to the digit; lookahead prices at ~ZERO; the dump-provenance trap; hn2s8 anomaly adjudicated as selection bias (2026-07-25)
+
+**Run A consistency: PASS, exact.** Replaying the VERDICT dump (`geodet/fullgame_pittsford`,
+hn4@stride-4) through `operator_ladder run-a` (defaults, selector_v7) reproduces the banked
+champion campath on every band to the digit (ALL 0.542/450; far 0.481/698; mid 0.640/345).
+The ladder infrastructure is validated end-to-end against the EXP-72 pipeline.
+
+**Run D (lookahead pricing, per the EXP-OP-01 funding gate): D−A ≈ 0 — the W4 lookahead
+lever is NOT funded on any band by these oracles.** Perfect-lead Δ∈{0.5,1,2,3}s on A-inputs:
+ALL 0.552/0.542/0.531/0.547 vs base 0.542 (noise); **far DEGRADES with lead** (0.484/0.474/
+0.443/0.443 vs 0.481) — leading amplifies the chase; zero-phase +0.022 ALL / flat far.
+The far failure is operator discipline (chasing), not response latency. (EXP-DIST-40's
+takeaway survives its own instrument upgrade.)
+
+**Run C (crude stoppage-freeze oracle): far +0.053 (0.534 vs 0.481, med 698→448), ALL −0.100,
+mid −0.351.** The oracle freezes each hold cluster at SPAN-ENTRY position — and on
+champion-failure segments the entry is by construction off-target. C−A is therefore a LOWER
+bound on stoppage-HOLD; W2's FSM must hold at last-GOOD position, not entry. The far
+median improving 698→448 from freezing 594 frames is the (h) mechanism visible in the ladder.
+
+**THE DUMP-PROVENANCE TRAP (standing rule for every ladder/scoreboard read):** a second
+Pittsford dump (`fullgame_dahua/dahua_pittsford0625`) is **hn2@stride-8** — an OLD detector at
+half density. The same chain on that dump scores **0.812 ALL / 0.846 far** vs the champion's
+0.542/0.481 on PIT-GT. Adjudicated on the NEUTRAL instrument (pittsford_cold_audit, 60 random
+active frames): champion far 0.904 vs hn2s8 0.962 (n=52, unpowered) — **the 0.27 gap on
+PIT-GT is SELECTION BIAS: original-500 is champion-failure-weighted (pre-registered property),
+so ANY decorrelated arm reads inflated there.** Consequences, all standing:
+1. Every arm in every read names its dump (ckpt + stride) — "champion" means hn4@s4 through
+   the current chain, nothing else. The scoreboard JSON should carry dump provenance.
+2. PIT-GT judges only arms whose failures were sampled into it (champion, AC, mg arms);
+   cross-arm reads for OTHER arms need neutral instruments (cold-audit, benchmark tier).
+3. Champion far capture on RANDOM active frames is **0.904** — the everyday product is far
+   better than the failure-weighted 0.481; (h)'s "failure-mode instrument" caveat quantified.
+4. **spc/fair heldout dumps are ALSO hn2@stride-8** — this morning's spc/fair run-a arms are
+   NOT champion arms; v1-family cells wait for hn4@s4 dumps of those games (1060 job).
+5. OPEN mechanism probe (cheap, later): hn2s8's small neutral-set edge (far 0.962 vs 0.904,
+   n=52) hints "sparser/weaker candidate stream → calmer operator"; unpowered — if it
+   replicates on a bigger neutral read it becomes a W3 lever (stream damping), not detector work.
+
+**Artifacts:** `G:/ballresearch/operator/{pit_ladder.json, pit_ladder2.json,
+pit_coldaudit.json}`, ladder dir with all trajectories/campaths.
+
 ## EXP-OP-03: FIRST FORMAL PER-BAND READS (referee v3 port) + amended hold unit results (2026-07-25)
 
 **Referee port validated twice:** dual_rule_read is a line-exact port of compose_verdict @
