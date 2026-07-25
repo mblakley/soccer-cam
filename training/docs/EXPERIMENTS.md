@@ -4,6 +4,52 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-02: W1 scoreboard INSTRUMENT LANDS — fixture reproduces EXP-72 to the digit; first per-band cells; null calibration rejects 3 of 4 framing metrics as operationalized (2026-07-25, overnight)
+
+**Fixture (hard gate): PASS.** The committed scorer (`training/cli/operator_scoreboard.py` @
+ed17d6e, run on the server checkout `G:/ballresearch/operator/repo`) reproduces EXP-DIST-72
+exactly: champion (campath_pittsford.pkl, 07-23) capture@600 **0.542 / median 450 px**; AutoCam
+**0.759 / 207 px**; **n=640** — which also resolves the count drift: the banked set is 500
+original + 140 ext-div = 640 labeled views ("650" in CURRENT STATE was the rounding).
+
+**First per-band cells (PIT-GT, Dahua adversarial; capture@600 / med|Δcx|; descriptive —
+per-band dual-rule reads await referee integration):**
+- **far (n=397): champion 0.481 / 698 vs AC 0.965 / 130** — original-500 far: **0.303 / 1456
+  vs 0.968 / 133. AutoCam's entire edge on this set is far framing.**
+- **mid (n=242): champion 0.640 / 345 vs AC 0.426 / 1191 — the champion WINS mid** on the
+  failure-mode set (AC's mid capture is its weak band here).
+- near: n=1 (div-sampling produced essentially no near views — near GT must come from
+  elsewhere before any near claim).
+- ext-div subset (arm-failure-weighted): champion 0.864 vs AC 0.943 — both strong, AC ahead.
+- Pair flips ALL: champion-only 5 ev / 115 fr vs AC-only 18 ev / 254 fr.
+- Single qualifying stoppage segment: champion swing 24.2× GT vs AC 0.33× — the (h) failure
+  in one number, but n=1 (see below).
+
+**Null calibration (300 reps, seed 72, champion arm, 142 gap-64 events) — the instrument-
+admission gate REJECTED 3 of 4 framing metrics as currently operationalized:**
+- pan_velocity_median: null band ±456 px/s; p90: [−548, +491] — the band swamps the observed
+  champion-vs-AC gap (137 vs 7.5 px/s), so NO calibrated velocity claim on PIT-GT.
+- reversal_rate: band [0, 0] — degenerate (GT-95th-pct threshold makes flips zero-rare here).
+- hold_fidelity: NO valid rep (metric undefined on every half-split; only n=1 qualifying
+  segment). Power floor recorded in `nullcal_pit.json`.
+- **Diagnosis:** gap-64 clustering fragments the stride-sampled labels into 142 micro-events
+  (~4.5 frames each); the (h) hold analysis used the 7 ORIGINAL divergence-segment spans.
+  The framing metrics need the true segment unit (from the label-set manifest's segment
+  provenance), not gap-64 fragments — and/or the pending event-spreading label queues.
+  **Amendment required (pre-register BEFORE any cross-arm framing claim): re-operationalize
+  framing-metric units on manifest segments.** capture/|Δcx| are unaffected (banked, frame-level).
+- Ordering note: the fixture run printed framing values before the nulls existed (same frozen
+  code); nulls banked same session; no cross-arm framing claim is made from those values.
+
+**Campath provenance finding:** `G:/ballresearch/selector/campath/` spc/fair campaths are
+dated 07-09/07-10 — PRE-v7, stale as W1 arms. Viewport-v1 (spc/fair) cells therefore wait for
+the Run A replay through the CURRENT champion — do not score the stale campaths.
+
+**Artifacts:** `G:/ballresearch/operator/{fixture_pit.json, nullcal_pit.json}`; server
+checkout `G:/ballresearch/operator/repo` @ ed17d6e (single-branch, pinned py3.13).
+**Next:** referee integration for per-band dual-rule reads; manifest-segment framing units
+(amendment); oracle ladder A/B/C/D (Run A doubles as the v1-family champion campath source).
+
 ## EXP-OP-01: W1 operator scoreboard + oracle ladder — PRE-REGISTRATION (2026-07-25, written BEFORE any numbers)
 
 **Arc:** Virtual Operator (kickoff brief 07-24; plan approved; DECISIONS (k) governs). W1 has
