@@ -70,6 +70,19 @@ nulls over those events; power grows via the pending event-spreading queues, not
   and Run C/D only. Label rows carry `fy` AND `hfov_deg` — GT includes zoom intent; a framing-
   width metric is future-available.
 
+**[DISCREPANCY RESOLVED same night — (h)'s computation recovered from
+`G:/ballresearch/geodet/_hold_check.py`]:** (h) clustered at **gap-40** (not 64), filtered to
+**n≥4**, and classified "near-static" as **GT swing < 200 px AND max(our, AC) swing > 500 px**
+— i.e. a hold-FAILURE classifier over sub-segment clusters; "4 segments / 282 frames" are
+gap-40 clusters, and the doc text's "≤400 px" was prose imprecision for the script's <200.
+Both measurements are correct on their own units: big gap-64 events mix a static stoppage
+portion with play, so whole-event swings look large. **Pre-registered AMENDMENT (hold unit,
+effective before any cross-arm hold read):** hold segments = gap-40 clusters with n≥4 and
+GT fx swing < 200 px — WITHOUT (h)'s camera-swing>500 conditioning (conditioning on the
+measured arm's own swing selects its failures and would bias the metric); hold fidelity =
+arm swing ratio on those clusters, split-half null re-run on this unit before the first
+cross-arm claim. W2's direct headroom estimate stays (h)'s 282 frames.
+
 ## EXP-OP-01: W1 operator scoreboard + oracle ladder — PRE-REGISTRATION (2026-07-25, written BEFORE any numbers)
 
 **Arc:** Virtual Operator (kickoff brief 07-24; plan approved; DECISIONS (k) governs). W1 has
