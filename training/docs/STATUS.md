@@ -1,6 +1,28 @@
 # Current Status
 
-*Last updated: 2026-07-24 (overnight) — Virtual Operator arc kickoff*
+*Last updated: 2026-07-25 (pre-dawn) — W1 instrument LANDED; fixture reproduces EXP-72; first per-band cells*
+
+## 2026-07-25 (pre-dawn) — W1 scoreboard instrument DONE + first reads (EXP-OP-01/02)
+
+- **W1 instrument landed on `feat/operator-w1-scoreboard`** (455771d): pre-registration
+  (EXP-OP-01) committed BEFORE numbers; `operator_metrics.py` + `operator_scoreboard.py` +
+  19 tests; **fixture reproduces EXP-DIST-72 to the digit** (0.542/450, 0.759/207, n=640 —
+  count drift resolved: 500+140). Server checkout `G:/ballresearch/operator/repo`.
+- **First per-band cells (PIT-GT, descriptive):** AutoCam's ENTIRE edge is far framing
+  (far capture@600: champion 0.481 vs AC 0.965; original-500 far: 0.303 vs 0.968). The
+  **champion WINS mid** (0.640 vs 0.426). Near unmeasured (n=1 — div-sampling has no near).
+- **Null calibration did its job:** velocity/reversal/hold on PIT are underpowered as-is —
+  only 7 events bear framing information (7 original segments + 135 ext-div singletons).
+  **OPEN: (h)-vs-measured stoppage discrepancy** (whole-event swings ≤400px: 1 of 7, not 4
+  of 7) — recover (h)'s exact swing computation before any W2 hold read (EXP-OP-02 corrected
+  entry has the measured swings).
+- **Provenance catches:** spc/fair banked campaths are 07-09/10 (pre-v7, STALE as arms) —
+  viewport-v1 cells wait for Run A replay through the current champion. PIT has NO ball GT
+  (0/650) — Run B is spc/fair-only.
+- **Next session:** (1) recover (h)'s stoppage computation → pre-register reconciled hold
+  units; (2) referee integration for per-band dual-rule reads (far-gap + mid-win formal);
+  (3) oracle ladder A/B/C/D build + runs (A regenerates v1-family champion campaths);
+  (4) #21 Dahua-refresh may TRAIN (promotion still blocked on the full W1 table + nulls).
 
 ## 2026-07-24 (overnight) — VIRTUAL OPERATOR arc OPENED; geodet MERGED to main; W1 scoreboard is the first artifact
 

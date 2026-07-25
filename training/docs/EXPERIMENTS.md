@@ -50,6 +50,26 @@ checkout `G:/ballresearch/operator/repo` @ ed17d6e (single-branch, pinned py3.13
 **Next:** referee integration for per-band dual-rule reads; manifest-segment framing units
 (amendment); oracle ladder A/B/C/D (Run A doubles as the v1-family champion campath source).
 
+**[CORRECTED same night — the fragmentation diagnosis above was WRONG; measured directly]:**
+the PIT labels cluster at gap-64 into exactly **7 large contiguous events (n = 126, 106, 77,
+57, 49, 46, 44 ≈ the original-500) + 135 ext-div singletons** — gap-64 does NOT fragment
+anything; 142 = 7 + 135. The framing metrics' problem is POWER, not the unit: only 7 events
+bear velocity/hold information (singletons can't), so half-splits swing wildly → the ±456 px/s
+band. The amendment therefore becomes: framing metrics read on events with ≥5 frames only,
+nulls over those events; power grows via the pending event-spreading queues, not a unit change.
+- **OPEN DISCREPANCY (gates W2's headline metric):** whole-event GT fx swings measured
+  directly: 78, 471, 701, 1643, 1396, 723, 497 px — only **1 of 7** is ≤400 px, but
+  DECISIONS (h) states **4 of 7** divergence segments are near-static (≤400 px, 282/500
+  frames). (h) evidently operationalized "focal swing" on different units (sub-segments or
+  windows) — its segment frame-counts (282 in 4) match no subset of the 7 gap-64 events.
+  Before ANY cross-arm hold-fidelity claim: recover (h)'s exact computation and pre-register
+  the reconciled stoppage-segment definition. hold_fidelity(n=1) as committed is CORRECT for
+  whole-event max−min swing.
+- Also measured: manifest carries `gt` ball fields but **0 of 650 PIT frames have ball GT** —
+  Run B is spc/fair-only (benchmark v1 ball labels); PIT contributes the GT-viewport ceiling
+  and Run C/D only. Label rows carry `fy` AND `hfov_deg` — GT includes zoom intent; a framing-
+  width metric is future-available.
+
 ## EXP-OP-01: W1 operator scoreboard + oracle ladder — PRE-REGISTRATION (2026-07-25, written BEFORE any numbers)
 
 **Arc:** Virtual Operator (kickoff brief 07-24; plan approved; DECISIONS (k) governs). W1 has
