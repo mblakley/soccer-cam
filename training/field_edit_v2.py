@@ -226,6 +226,24 @@ def _sf2g(seg, f, offs, names):
     return int(f)
 
 
+def _trim_offset(vd):
+    """start_time_offset (sec) from match_info.ini: trimmed-upload time -> recording (global) time.
+    YouTube plays the trimmed upload, so global_frame = (yt_seconds + offset) * fps."""
+    import configparser
+
+    mi = os.path.join(vd, "match_info.ini") if vd else None
+    if mi and os.path.exists(mi):
+        cp = configparser.ConfigParser()
+        try:
+            cp.read(mi)
+            s = cp.get("MATCH", "start_time_offset", fallback="0")
+            parts = [int(x) for x in s.split(":")]
+            return float(parts[0] * 60 + parts[1]) if len(parts) == 2 else float(s)
+        except Exception:
+            return 0.0
+    return 0.0
+
+
 def _decode_frame(path, f, fps):
     c = av.open(path)
     try:
@@ -257,6 +275,8 @@ def phases_games():
                 "trainable": bool(g.get("trainable")),
                 "has_phases": len(ps) > 0,
                 "verified": len(ps) > 0 and srcs <= {"human", "whistle"},
+                "human": "human" in srcs,  # already human-verified game_state
+                "has_youtube": bool(gj.get("youtube_id")),  # has an embeddable video
                 "source": ",".join(sorted(s for s in srcs if s)) or None,
             }
         )
@@ -265,7 +285,7 @@ def phases_games():
 
 @router.get("/api/phasesv2/{gid}")
 def phases_get(gid: str):
-    gjp = _resolve(gid)[1]
+    vd, gjp = _resolve(gid)
     if not gjp or not os.path.exists(gjp):
         raise HTTPException(404, "no game.json")
     gj = json.load(open(gjp, encoding="utf-8"))
@@ -300,6 +320,13 @@ def phases_get(gid: str):
         "fps": fps,
         "boundaries": b,
         "source": (ps[0]["source"] if ps else None),
+        "youtube_id": gj.get("youtube_id"),
+        "youtube_title": gj.get("youtube_title"),
+        "youtube_alts": gj.get("youtube_alts")
+        or [],  # other embeddable versions (FF/regular)
+        "offset_sec": _trim_offset(
+            vd
+        ),  # global_frame = (yt_seconds + offset_sec) * fps
     }
 
 

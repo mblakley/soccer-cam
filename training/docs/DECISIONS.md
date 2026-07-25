@@ -2,6 +2,1516 @@
 
 Append-only. Never delete entries — if a decision is reversed, add a new entry explaining why.
 
+## CURRENT STATE (maintained in place — the ONE exception to append-only; history below is immutable)
+
+*Last maintained: 2026-07-24, post-verdict (EXP-DIST-72). Tomorrow starts HERE, not from (h)–(s).*
+
+- **PHASE 2 VERDICT (EXP-DIST-72): champions UNCHANGED (hn4 + v7); DETECTOR ARC CLOSED.**
+  mg_geo/mg_norm vetoed at the detector tier (FAIR decisive regressions, (j)) and not
+  adopted at the viewport tier (arm parity, no win). The (r).2 SURPRISING branch fired:
+  the tracker absorbs size-conditioning damage that destroys argmax — (k).2 divergence
+  measured, veto formal, pipeline robust. Fairprobe = branch (q)(b): no channel revisit
+  before the ray-geometry fix certifies.
+- **THE ONE BUG CLASS (mechanism appendix):** trace-interpolated size expectation through a
+  curved projection — structurally wavy interior (SPC ±35%, Pittsford 1.5–2.8 bow, FAIR
+  2.54 @ yaw), one class behind five anomalies. Factorization SUPPORTED: shared bow curve x
+  per-game scalar (+ yaw phase). Fix: interim curve+scalar (days) → RAY-GEOMETRY expectation
+  (durable); certification = SPC + FAIR-scale-error fixture + Pittsford. Ratio is a
+  DISCREPANCY ALARM, never a polygon gate ((n)); guards HARD-FAIL in chains ((j).3).
+- **DAY-ONE ORDER (07-25, fresh):** 1) stoppage-HOLD planner state (task #20; 56% of div
+  frames; zero-click eval banked). 2) ray-geometry fix + interim curve/scalar (task #19
+  triple context). 3) **Dahua-refresh retrain of the product detector (task #21, promoted
+  07-25): measured ~+0.19 expected on the adversarial Pittsford set (ctrl 0.630 vs champion
+  0.452 capture@600, arm-independent data effect); viewport consumer = Dahua-holdout capture;
+  gate = primary-family viewport NON-REGRESSION (frozen GT v1) + Pittsford confirmation.**
+  mg_norm's suggestive 28v22 edge is read ONLY after seed-2's noise band, as bound (#12).
+- **POWER (07-25, replaces the void row):** SPC-18k detector rows = WEAK nulls (9 events;
+  block power ~0 at all Δ). PIT-viewport = the POWERED instrument (142 events; ≥97% at
+  Δ≥0.10 block, 100% diffuse). Pattern-4 claims cite the viewport tier; detector-tier
+  event enrichment is the fix if a detector null must ever stand alone.
+- **Champions:** detector hn4 (far-CEILING 0.965), selector v7. **Cross-camera reality:
+  AutoCam beats our champion on the Dahua holdout failure-mode set (0.759 vs 0.542) —
+  Dahua transfer is open; Dahua training data closes most of it (arm ctrl 0.644).**
+- **VIEWPORT MATCH IS THE OBJECTIVE (07-24 (k)).** Detector rows VETO, never PROMOTE;
+  decisive detector-vs-viewport conflicts → viewport wins + EXPERIMENTS entry; every lever
+  names its viewport consumer; labeling economy favors viewport coverage. Detector rows are
+  DIAGNOSTIC (stage attribution). **(j)-recalibration (07-25): the tracker measurably
+  absorbs 1.7–2.8x ruler damage — a detector veto FORCES the viewport check; it is not
+  itself evidence of product damage.**
+- **Gates (G1):** ceiling + product VIEWPORT capture vs AutoCam (frozen GT v1). Argmax =
+  directional color only. Every size-conditioned number cites its instrument's RULER RATIO.
+- **Noise protocol:** event-level sign test (gap=64) + exact sign-flip permutation (dual
+  rule, referee @ 4a0d63e) + event-bootstrap CIs. Block-power row is VOID (was @IRON-18k);
+  re-measure @SPC-18k via power_sim before any powered-null claim.
+- **Eval instruments:** SPC-18k (primary) / SPC-134 (stress) / FAIR-6k^ (static-distractor
+  robustness + #19 certification) / IRON-18k* (golden-hour stress, non-decisive) /
+  Pittsford-human 650-view GT (banked, reusable zero-click for planner levers).
+- **Ops:** 4070 = training + eval-dump node (stage eval-game clips ~35 GB first); server
+  1060 = evals/dumps; F-OP = guard queue when free. Everything Phase 2 archived to
+  F:\archive\geodet_phase2 (150k files, 31 GB incl. stores + F-OP ph1 runs + laptop logs).
+  Scheduled-task launchers everywhere (WinRM teardown kills Start-Process children).
+- **Deployment reality:** fleet LOO-NN median 0.42; COVERAGE is the lever; uncovered axis =
+  OPERATOR diversity — venue-local gains are readable against the self-covering fleet ((q)).
+- **Near ball:** tracker-dynamics problem; state-dependent miss-entry cost sweep is the
+  lever, now joined by stoppage-HOLD as the same state machine's product face.
+- **SPC-134 is a STRESS instrument, not a thermometer:** 102/134 rows are HARD-adversarial —
+  its absolute levels were never product levels. This retroactively explains the
+  dire-looking argmax history and the viewport/detector metric divergence. Every historical
+  absolute number inherits this caveat; product levels come from viewport capture and
+  normal-strata rows.
+- **Protocol lives in TOOLING:** the read protocol is now the project's largest artifact and
+  only pays while cheap to follow — `compose_verdict.py` emits the full instrument table +
+  hierarchy walk automatically, so compliance is the default path. **A verdict that takes
+  longer to read than to run is a protocol bug.**
+- **Labeling:** Mark's clicks are the SCARCEST resource — budgeted asks only (consumer + est.
+  clicks + per-click justification), exchange-rate logged. **Measured rate: ~1,800 clicks
+  decided EVERY verdict since EXP-DIST-46 while GPU runs mostly returned noise — labels
+  outrank GPU as the marginal spend until LABELING_LOG says otherwise.** Seeding rules:
+  confirm-not-draw for TRAINING labels; **union-seed + provenance-blind + unseeded cold
+  audit for EVAL GT** (champion-only seeding would bake the champion's failure modes into
+  the GT that judges it). Priority: Pittsford Dahua set → event-spreading tail queues →
+  near-scramble viewport labels. Aerial: DEFERRED (no consumer experiment).
+- **Person channel (next attempt):** FROZEN-BACKBONE head on hn4 (sidecar labels; head ±
+  last decoder stage unfrozen) — ball channel byte-identical by construction, no re-gate,
+  one model, no iGPU cost. Joint co-training (λ-sweep) is the FALLBACK only if frozen-head
+  person quality is insufficient (EXP-DIST-70: ph1v2's far-ordering damage is the only
+  CI-separated harm on record).
+
+---
+
+## 2026-07-24 (s): FACTORIZATION SUPPORTED — one shared bow curve x per-game scalar (+ yaw phase); frame-weighted contamination; the one-bug-class appendix (Mark, three directives)
+
+**1. Factorization test (run before composing, cached data):** normalizing each
+game's ratio field by its median and overlaying: shape correlation 0.776 over
+shared x-bins; bins 1/3/5 align at 0.83/0.82, 1.92/1.83, 0.90/0.85. The residual
+is the PEAK POSITION (SPC's bow peaks one bin right of Pittsford's) — exactly what
+per-game yaw does to a shared projection bow; FAIR's single band sits ON the bow
+peak, explaining part of its 2.54. **Interim fix: one shared bow curve + one
+per-game scalar (+ optional yaw phase), deployable in days; per-game scalars =
+the fleet-audit deliverable; ray-geometry remains the durable fix that DERIVES
+the curve instead of fitting it.**
+
+**2. Frame-weighted contamination (addendum to (r).2):** Pittsford's worst third
+is frame-CENTER (rel 1.83 at the bow peak, absolute ~2.8) — where play
+concentrates. Weak size-conditioned viewport rows are even MORE expected than the
+median 1.74 implies.
+
+**3. The verdict's mechanism appendix frames ONE BUG CLASS, five anomalies** —
+FAIR collapse, Pittsford bow, SPC ±35%, the DEPTH-CAL cross-game collapse, and
+EXP-66's residuals — one fix path (interim curve+scalar → ray-geometry), with a
+3-game certification set including a Dahua row (SPC, FAIR-scale-error, Pittsford).
+A measured bug class, not a fifth story.
+
+---
+
+## 2026-07-24 (r): Verdict-eve hygiene — clock provenance annotation + the asymmetric viewport-tier read (Mark, two directives)
+
+**1. Clock provenance:** the fleet ran ~2.2 h slow all day; the laptop was
+NTP-corrected at ~16:20 true; the server stays UNSYNCED until tonight's pkls are
+banked (a mid-pipeline clock jump is how a checkpoint-skip or staleness check
+misfires). The composed verdict header carries one line stating the offset and
+which box produced which artifact. Ordering-provenance (pre-statements before
+numbers) is proven by git history, not wall clocks — nothing is contaminated.
+
+**2. Asymmetric viewport-tier read, pre-stated:** the geo/norm Pittsford dumps
+were produced with the BROKEN RULER (the same contamination that took FAIR argmax
+0.25 → 0.02). Therefore: **weak geo/norm viewport rows = CONFIRMATORY, saying
+nothing new; parity-with-ctrl despite the broken ruler = SURPRISING** — the
+tracker's temporal machinery absorbing size-conditioning damage, a (k).2-flavored
+measurement about what the pipeline consumes, worth its own entry. This sentence
+exists so the top-tier read neither over- nor under-weights rows carrying a known
+upstream defect.
+
+---
+
+## 2026-07-24 (q): FAIRPROBE branches pre-stated BEFORE the probe lands + the operator-diversity reading (Mark)
+
+**Branches for cands_fairprobe_mg_geo (geo, FAIR band, geo-scale 2.54):**
+- **(a) geo ≈ ctrl on corrected-ruler FAIR** → the SPC gain is genuinely
+  venue-local (position-prior residue survives ruler correction). Channel arc
+  CLOSES; ray-geometry fix still funded for eval integrity, #19, and the
+  DEPTH-CAL replacement — but not sold as recovering the +0.30.
+- **(b) geo decisively WORSE still** → residual transfer failure beyond both the
+  ruler and mechanism stories; veto stands, and a FIFTH mechanism version is owed.
+- **(c) geo ≥ ctrl with gains in HARD-type frames** → SIZE CONDITIONING IS REAL
+  AND RULER-GATED. The Phase 2 story inverts: the channel was never the problem,
+  the analytic expectation under it was. Adoption REOPENS, strictly gated on the
+  ray-geometry fix + the ratio audit as per-game acceptance — and the (j) veto
+  lifts for this arm via the pre-stated EXP-71 instrument-failure path.
+
+**Scope caveat (carried from (p)):** branch (c) on a one-band probe is DIRECTION,
+not certification — certification is the ray-geometry fix evaluated fleet-wide,
+with FAIR-scale-error as the adversarial fixture.
+
+**Operator-diversity reading (goes in the verdict regardless of branch):**
+"venue-local gain" is not fatal for THIS operator. The fleet self-covers (LOO-NN
+median 0.42), so a channel that helps on covered geometry plus a ruler that
+transfers by construction may be shippable for our deployments even if it never
+generalizes to a new operator — that boundary is the operator-diversity axis
+already on the roadmap, and tonight's numbers are read against it, not against an
+abstract generalization bar.
+
+---
+
+## 2026-07-24 (p): REFRAME — the headline is SPC's ±35% symmetric bow: the interior expectation model is structurally wavy on EVERY game; yaw is the AMPLIFIER, not the root cause (Mark, four directives)
+
+**1. (o) reframed.** SPC — a straight-on rig — carries ratio LEFT 0.66 / CENTER
+1.34 / RIGHT 0.73: a ±35% bow on the best-behaved instrument we have. The interior
+expectation model (sparse trace, exactly interpolated through a curved projection)
+is structurally wavy EVERYWHERE; FAIR's yaw only amplified it to 2.5x in one band.
+A yaw-only fix leaves ±35% on every game.
+
+**2. The durable #19/geometry fix (designed post-verdict change):** expected size
+from RAY GEOMETRY (camera pose + lens model → elevation → distance per pixel),
+with the polygon as a SCALE ANCHOR only — never trace-interior interpolation. The
+spatial self-check field absorbs residuals; it must not be asked to absorb the
+model.
+
+**3. Unified-mechanism test (tonight, cached dumps, zero GPU):** correlate
+geo-vs-ctrl per-position deltas on SPC against the measured ratio field. If the
+channel's gains sit where the ruler is most wrong, the learned channel was a
+LEARNED CORRECTION to a broken analytic expectation — one mechanism unifying
+EXP-67's "position prior," the SPC +0.30, and the FAIR collapse — and fixing the
+ruler may recover part of the gain with no channel at all. Result goes in the
+composed verdict.
+
+**4. Scope labels:** the band-corrected FAIR re-dump is a MECHANISM PROBE (one
+band, one game), never a deployable config. The composed verdict presents the
+mechanism story as its four-version sequence — memorization → size-endorsement →
+ruler error → structurally-wavy expectation model amplified by yaw — with this
+entry marked CURRENT.
+
+---
+
+## 2026-07-24 (o): Attribution closed — CAMERA YAW through the cylindrical pano; the world model is an EXACT trace interpolator, so all projection error is INTERIOR; #19 self-check must be spatial, not scalar
+
+**Mark's rig knowledge decides (b):** the FAIR camera is not straight-on — slightly
+turned RIGHT. Evidence assembled: (1) my small-field claim is WITHDRAWN — FAIR's
+GT spans one narrow x-band (3583–5137, a single passage), so it cannot
+discriminate; the 60 m arithmetic assumed a symmetric perspective that a yawed
+cylindrical projection does not provide. (2) SPC — the "sane" instrument — shows
+the expectation field is spatially rough even there: ratio LEFT 0.66 / CENTER
+1.34 / RIGHT 0.73. (3) The world model reproduces the traced polygon with ZERO
+residual at every knot (exact interpolation, not a fit) — so misfit CANNOT show
+up at the trace; it all lives between the near/far lines, exactly where balls
+are. A yawed camera bends the interior depth progression; the trace has no way
+to encode it.
+
+**Consequences:**
+- **Expected size is only locally trustworthy near where it was measured.**
+  Tonight's gates remain valid AS MEASURED: each instrument's ratio was taken in
+  its own GT band, which is where its eval lives (FAIR band = 2.54; SPC band =
+  0.78). No fleet-wide constant exists to correct with.
+- **#19's self-check must be SPATIAL, not one scalar:** a low-order scale field
+  (e.g., linear-in-x per depth band) fit from confident track detections. One
+  scalar would fix FAIR's band and break another region.
+- **No geometry code change tonight** — attributed ≠ fixed; the durable fix
+  (yaw-aware or dewarped-space geometry) is a designed change, post-verdict.
+- The (m).4 corrected re-dump becomes: geo plane scaled by the MEASURED BAND
+  ratio (2.54 in FAIR's GT band) — now an attributed correction (projection
+  error measured in the exact region the instrument reads), branches unchanged.
+
+---
+
+## 2026-07-24 (n): Ratio is a DISCREPANCY ALARM, not a polygon gate — attribution protocol + results (Mark, five corrections to (m))
+
+**Corrections to (m):** (1) polygon re-fit and FAIR re-dump STOPPED — the trace is
+human-confirmed correct, so a ratio≈1 polygon acceptance gate would REJECT correct
+traces and drive the editor loop to absorb a model bug into the ground-truth store.
+The ratio is an alarm until attributed. (2) Fixture renamed **FAIR-scale-error**
+(was FAIR-badpoly) — still the #19 certification input (the prior must survive a
+2.5x ruler error regardless of origin), but the name must not assert the polygon
+was wrong. (3) The corrected re-dump happens only after something actually CHANGES
+(code fix or field-size parameter); the (j) veto re-read waits for it; the (m).4
+branches still apply, gated on attribution.
+
+**Attribution results (three cheap tests, in order):**
+- **(a) units/warp bug: CLEAN.** All three eval games: warp.scale=1.000, local
+  scale at the GT median = 1.000 (7680x2160 native panos, no resample). The
+  expectation path has no band/source confusion — and therefore the TRAINING geo
+  planes carry no shared code bug.
+- **(c) measurement bloom: CLEAN.** Eyeball crops with a 10-px ruler: FAIR's GT
+  ball at y=460 is ~12 source px exactly as blob_diameter reports (players
+  near-scale); SPC's at similar expected size is ~5 px. The observation is honest.
+- **(b) field/geometry assumption: THE LIVE HYPOTHESIS.** FAIR's imagery at
+  "far" polygon positions is near/mid-scale — consistent with the real field being
+  much shorter than the homography's assumed dimensions (or an equivalent
+  geometry-parameter error). Mark to confirm from memory whether 06.06 was a
+  full-size pitch; goal-width-in-px cross-check available. If confirmed: per-game
+  field size becomes a game.json parameter, settable in the editor, and the fleet
+  ratio audit becomes the attribution instrument (clusters by venue = field-size;
+  residual outliers = trace errors).
+
+---
+
+## 2026-07-24 (m): The ruler was broken — FAIR is a 2.54x GEOMETRY-SCALE error on a CORRECT polygon trace; FAIR-badpoly frozen as the #19 certification fixture; #19 respecced as a TRIPLE; branches pre-stated (Mark, five directives + trace verification)
+
+**The finding under (l):** observed/expected true-ball size on the eval games:
+FAIR **2.54** (IQR 1.94–2.72), SPC 0.78, Iron 1.07. Both size-conditioned arms were
+handed a ruler 2.5x off at eval — the true ball reads "too big" and is suppressed;
+wrong-sized junk reads "right." That is why the persistence filter could not rescue
+them (it removed the furniture; everything correctly-sized was still suppressed) and
+why unconditioned mg_ctrl alone survived. **Mark re-verified the 06.06 polygon TRACE
+is correct** — so the error is STRUCTURAL (the geometry model's scale assumption for
+this field), not a drawing error: visual confirmation is proven insufficient, and no
+re-trace can fix it.
+
+**1. FAIR-badpoly frozen** (G:\ballresearch\geodet\fixtures\fair_badpoly: the three
+arm dumps + README): a real 2.5x ruler error is irreplaceable as a test input — the
+standing certification fixture for every size-conditioned lever.
+
+**2. Fleet-wide size-ratio audit (CPU, tonight):** observed/expected per game from
+size-carrying candidate dumps (AutoCam jsonl carries NO size — coverage limited to
+cached dumps tonight; decode-based completion queued). Consumers: (a) quantifies the
+training stores' ruler noise — the geo/norm checkpoints trained on UNAUDITED
+polygons, caveat recorded; (b) gates Pittsford + every size-conditioned viewport row
+before it is read; (c) becomes the metric acceptance gate in build_field_geometry.
+**Every size-conditioned number is reported alongside its instrument's ratio**
+(SPC=0.78: the +0.30 was measured under a 22% ruler error).
+
+**3. #19 respecced as a TRIPLE:** geometry-derived size prior + static-persistence
+filter + **online scale self-check** (one scalar fit from observed-vs-predicted
+sizes on confident track detections). Analytic priors inherit polygon/geometry error
+1:1 — the self-check converts a catastrophic failure into a startup transient.
+Certified on FAIR-badpoly.
+
+**4. FAIR corrected re-dump branches, pre-stated before running** (offline
+self-check form: geo re-dumped with --geo-scale 2.54; norm re-dumped at
+target-width 5120/2.54 ≈ 2016):
+- (a) corrected ≈ ctrl → pure ruler artifact; the (j) veto LIFTS for that arm;
+  EXP-71-family tag on the row.
+- (b) corrected still worse than ctrl → residual transfer failure; veto STANDS.
+- (c) corrected BETTER than ctrl → size conditioning is real and polygon-gated;
+  the fleet ratio audit becomes the adoption gate. Branch (c) is live given SPC's
+  +0.30 under a 22% error.
+
+**5. The composed verdict presents the mechanism story as its SEQUENCE**
+(memorization hypothesis → size-endorsement → ruler error), and all
+size-conditioned viewport rows are ratio-gated before being read.
+
+---
+
+## 2026-07-24 (l): FAIR autopsy corrections — size-ENDORSEMENT is the shared mechanism; #19 respecced as a PAIR; hn4's FAIR anchor re-attributed; (j)/(k) composition pre-stated; FAIR annotated not demoted (Mark, five directives)
+
+**1. Record corrected — the norm collapse kills the analytic-vs-learned framing.**
+(j).2 attributed geo's FAIR collapse to LEARNED-prior memorization and framed #19's
+analytic prior as the fix. mg_norm — fully analytic scale normalization — collapsed
+identically (0.040), so the mechanism is SIZE-ENDORSEMENT, shared by both: any
+conditioning that strengthens "correct-sized blob" promotes ball-sized static
+furniture (the (1637,470) object: rank-0 in every arm's top-24, 400/400 frames;
+35/40 of geo's flips land on it, x-spread 7 px). **#19 ships only as a PAIR:
+geometry-derived size prior + static-persistence filter, certified on the FAIR
+window — the row that killed geo and norm.** Third instance of the
+size-is-not-a-discriminator lesson (ball/head, ball/furniture); temporal context is
+the discriminator each time.
+
+**2. Static-persistence filter funded NOW** — CPU, model-free, dump-level:
+near-zero positional variance across frames = furniture, down-weight it in
+candidate lists. Validated same-day by re-running the FAIR paired read on all three
+arms' cached candidates with the filter applied. It helps ctrl too (the object is
+rank-0 in ctrl's top-24) and generalizes to every venue's furniture where
+per-venue hard negatives never will.
+
+**3. hn4's FAIR anchor re-attributed:** hn4 trained on 06.06 — its 0.726 memorized
+THAT EXACT OBJECT as background. Object-level self-leak, unavailable to any
+deployed model on an unseen venue. **0.253 (mg_ctrl) is the honest cross-venue
+baseline on a furniture venue.** The mg arms must not be read as a regression
+against a fake reference.
+
+**4. (j)/(k) composition, pre-stated before the viewport rows land:** (j)'s veto
+blocks promotion WITHIN the detector tier; viewport/human rows sit above and decide
+finally in either direction. If tonight's viewport rows exonerate a vetoed arm,
+that is the pre-stated (k).2 outcome — divergence entry, viewport wins — not a
+surprise.
+
+**5. FAIR argmax: ANNOTATE, don't demote.** It is now understood as the
+static-distractor robustness row (as Iron is glare). It caught a real product
+failure and is the certification row for the #19 pair. Demoting instruments that
+deliver unwelcome results is the anti-pattern; this one delivered exactly what it
+should have. (Composer: FAIR keeps full decisive standing, gains the annotation.)
+
+---
+
+## 2026-07-24 (k): VIEWPORT MATCH IS THE OBJECTIVE — standing principle, pre-stated before the composed verdict (Mark)
+
+Detector confidence/argmax are upstream proxies — the tracker and planner post-process
+scores, so a model with worse detector numbers can produce better viewports, and that
+model WINS. Operational consequences, pre-stated:
+
+1. **Detector rows may VETO, never PROMOTE.** A decisive regression (tonight's FAIR
+   collapse) poisons the tracker's input and disqualifies; but adoption of any arm/lever
+   requires the viewport rows, not just clean detector rows. compose_verdict's language
+   amended to match: a decisive detector win with no regression reads "detector rows
+   favor X — NOT sufficient for adoption."
+2. **On a decisive detector-vs-viewport CONFLICT (worse argmax, better viewport capture),
+   the viewport rows win** and the conflict gets an EXPERIMENTS entry — that is a
+   measurement about what the pipeline actually consumes, not noise.
+3. **Every future lever states at proposal time how it plausibly moves VIEWPORT capture**
+   (the (j) funding rule, tightened): "improves argmax" is not a consumer. This is why
+   stoppage-HOLD is day-one #1 — it attacks the labeled viewport failure directly and
+   detector metrics can't even see it.
+4. **Labeling economy: viewport-capture eval coverage** (more games, tracker-port noise
+   bands, viewport label sets) **outranks detector-instrument enrichment** — invest
+   clicks where the objective is measured.
+
+Caveat so the principle doesn't overcorrect: detector rows aren't worthless — they're
+DIAGNOSTIC (when a viewport fails, ceiling-vs-argmax-vs-tracker attribution tells you
+which stage broke, exactly like the near-autopsy did). Instruments for debugging, not
+objectives for adoption. Tonight's composed verdict already conforms — the geo veto
+stands either way and the top rows were always viewport — but writing this now means
+the next close call inherits the priority instead of relitigating it.
+
+---
+
+## 2026-07-24 (j): Directional-conflict disqualifier + transfer findings + guard rule + stoppage-HOLD elevated (Mark, four directives BEFORE the composed verdict)
+
+**1. (g) amendment — decisive regression VETOES decisive gain.** A DECISIVE
+regression on any primary-family instrument row disqualifies the arm regardless of
+decisive gains elsewhere — transfer failure outranks in-distribution gain. Without
+this, the mechanical first-decisive-row walk would crown geo on SPC's +0.30 before
+ever reaching FAIR's collapse. compose_verdict now scans ALL non-stress rows:
+regressions veto, wins crown only when no regression exists.
+
+**2. Transfer findings (recorded for the verdict + the roadmap):**
+- **Geometry DISTANCE does not predict geo-CHANNEL transfer.** The FAIR-6k argmax
+  collapse (0.253 → 0.040) happened at d=0.43 — inside the interpolation zone
+  (fleet LOO-NN median 0.42). The learned channel memorizes finer structure than
+  the 10-pt descriptor captures; distance-stratified rows are UNINFORMATIVE for
+  channel-transfer questions.
+- **Paired implication for #19 (geometry-derived depth prior):** SPC's +0.30
+  proves the geometry signal is real and worth capturing; FAIR's −0.21 proves the
+  capture must be ANALYTIC (computed from the polygon at inference, transfers by
+  construction) not LEARNED (a free channel the net can memorize per-rig).
+  mg_norm's table — analytic scale normalization — is the confirmation read of
+  this principle.
+
+**3. Standing rule — in automated chains, WARNINGS DON'T EXIST.** Every guard
+hard-fails or it isn't a guard. This is the third bite of the first-window trap
+and the second past an existing soft guard (the 10%-coverage WARNING printed into
+a log no chain reads). eval_detector now refuses to truncate an explicit span;
+SPC-134's coverage warning on default runs is pre-declared continuity behavior,
+not a violation. Also added to CLAUDE.md Task Execution Rules.
+
+**4. Stoppage-HOLD is day-one item #1 under EVERY pattern** (amends (g)'s day-one
+plans): 56% of divergence frames are stoppage sweep, it is planner-side and
+CPU-only, and it was quantified by one evening of labels. Likely the largest
+single viewport-capture gain available — and viewport capture is the product.
+
+---
+
+## 2026-07-24 (i): IRON-18k demoted to GOLDEN-HOUR STRESS row; SPC-FULL (1,351 GT / 119 ev) becomes the primary detector instrument — amended MID-VERDICT by Mark, grounded in pre-existing evidence
+
+**The change:** Mark (07-24, before the composed read): "Pick a different holdout than
+Irondequoit — that game is always going to be bad, because of the golden hour issue…
+that golden hour footage is giving us a lot of false negatives." HIERARCHY becomes
+spcfull > spc18k > spc > fair; iron18k stays in the table as a stress row (full stats,
+never decisive) — same treatment as SPC-134's stress status. SPC-FULL = the whole
+frozen SPC label pool (1,351 GT / 119 events, 3.2x SPC-18k's events), explicit full
+span, zero new clicks.
+
+**Why this is NOT outcome shopping, stated plainly:** the demotion lands hours after
+IRON-18k read geo-negative, which is exactly the situation pre-registration exists to
+prevent — so the grounds must be independent of the result, and they are: GAMES.md
+(2026-07-12) and EXP-DIST-43/45 had already established Iron 06.15 as "the only pure
+lighting case" — ~18:28 mid-June kickoff, low sun backlighting the far half, the ball
+frequently NOT EVEN A CANDIDATE, detector ceiling ~0.35. An instrument whose far
+misses are dominated by glare-impossible balls measures lighting robustness, not the
+ranking quality Phase 2 tests; making it primary on event count alone (07-23) ignored
+our own documented finding. Transparency safeguards: (1) both walks reported — under
+the old hierarchy Iron's row read ZERO (not decisive either way), so the walk
+continued to the same downstream rows; the amendment is strictly additive, it does
+not flip any decisive row that existed. (2) The power table's block-power row was
+measured @IRON-18k and is now VOID; re-measure @SPC-FULL before any pattern-4
+"powered null" claim. (3) Iron remains the designated instrument for the future
+lighting-robustness track (tone-normalization / golden-hour data work).
+
+**Same-day addendum — SPC-FULL WITHDRAWN, primary = SPC-18k:** the three spcfull
+dumps scored EXACTLY the SPC-134 window: eval_detector's `--max-frames` (default
+6000) silently re-truncated the explicit 0..1e9 span back to the first window —
+the EXP-DIST-71 trap has a second jaw, one layer down. The coverage guard printed
+its 10%-coverage WARNING and no chain read it: a guard that warns instead of
+failing is not a guard (eval_detector now HARD-ERRORS when an explicit span would
+be truncated; raise --max-frames to cover the span). A true SPC-FULL costs ~5x an
+18k eval (~3.5 h/arm on the 1060) and is NOT funded for this verdict: the geo
+pair already has a DECISIVE row (FAIR-6k argmax, geo 0.040 vs ctrl 0.253,
+p=0.01/pm=0.004 — cross-venue ranking collapse with ceiling intact, exactly
+EXP-DIST-67's pre-registered single-rig-prior failure mode, now shown
+multi-rig-trained on an unseen rig), so primary-instrument power for a null is
+moot for that pair. If the norm pair lands all-zero, re-measure power @SPC-18k
+via power_sim on the Phase 2 dumps (analysis-only, no GPU) before composing any
+pattern-4 language. The three invalid spcfull pkls are deleted; the 134-row
+numbers they produced live on legitimately as SPC-134.
+
+---
+
+## 2026-07-23 (h): Pittsford-human row COMPOSITION (56% stoppage frames) + stoppage-HOLD planner lever — pre-stated BEFORE the Phase 2 verdict
+
+Mark labeled all 560 Pittsford views the evening they were built and reported the dominant
+failure: **frames where neither viewport was right were mostly STOPPAGES** (throw-ins, goal
+kicks, substitutions). The labels confirm and sharpen this — of the 7 divergence segments,
+4 (282/500 frames, 56%) have near-static GT (focal swing ≤400 px) while the champion swept
+1,100–2,200 px; in segs 0 and 5 GT moved <80 px while our camera swept 1,200–1,900 px (seg 5:
+AutoCam wandered too, 1,410 px). In ALL 7 segments the champion's swing exceeds GT swing.
+
+**Consequence 1 — instrument caveat (pre-stated now, before any eval pkl lands):** the
+Pittsford-human row is a FAILURE-MODE instrument dominated by planner demeanor during
+stoppages, which is SHARED ACROSS the three detector arms. Expect it to under-discriminate
+mg_ctrl/mg_geo/mg_norm; an arm tie on this row is composition, not evidence that the
+geometry channel does nothing. The row still ranks what it was built to rank — product
+viewport vs AutoCam on the held-out Dahua game — and its hierarchy-#1 position stands for
+that purpose.
+
+**Consequence 2 — product lever (Mark's proposal, adopted as the first post-verdict PRODUCT
+candidate on either verdict pattern):** *hold the camera where the ball was when play
+stopped.* Planner/tracker enters a HOLD state on ball-track loss/stop (last confident ball
+position, no candidate-chasing; resume on confident reacquisition) — folds into the
+state-dependent Viterbi miss-cost work (the miss-state IS the stoppage state). Zero new
+labels needed: the 560 Pittsford views + frozen viewport sets already score it — segs 0/1/5
+(~226 frames) are the direct headroom estimate. This lever is ARM-INDEPENDENT and does not
+touch the Phase 2 detector question.
+
+---
+
+## 2026-07-23 (g): PRE-COMMITTED Phase 2 ACTION TABLE (written before any number exists) + Viterbi benchmark decision + detector-arc close condition
+
+**The table binds: outcomes argue for themselves after the fact, so the next step is decided
+NOW.** Read basis: ceiling + viewport (G1), event-CIs, geo-vs-NORM as the mechanism
+comparison, 05.30 = within-family probe, Pittsford human rows = cross-camera arbiter.
+Cross-cutting rule: any arm that regresses SPC/Fairport (primary-family) ceiling/viewport
+vs ctrl is DISQUALIFIED regardless of Dahua gains.
+
+| # | outcome pattern | decided next step |
+|---|---|---|
+| 1 | norm ≈ geo, both beat ctrl cross-family | **Ship fixed per-camera `target_width`** (simplest mechanism); **CLOSE the channel** — extra input buys nothing over rescale |
+| 2 | geo > norm cross-family AND on the 05.30 within-family probe | Channel encodes continuous geometry → **adoption path**: full-recipe retrain (human crops + mined negs) + viewport gate; rectification stays deferred |
+| 3 | geo > norm on cross-family rows ONLY (within-family flat) | **Family-ID binary confirmed — NOT adoption.** Treat as norm-equivalent → ship target_width; family-ID follow-up only if a cheaper mechanism question matters |
+| 4 | nothing separates (all arms ≈ equal transfer) | **Geometry arc CLOSES like encodings** (direction + zero benefit); GPU → tracker/selector track |
+| 5 | ALL arms collapse on Dahua (incl. ceiling) | **Data/label problem, not architecture** — distill-quality audit first; only Pittsford HUMAN rows may support any claim; no adoption decisions from distill-scored rows |
+| 6 | ctrl ≥ geo/norm (mechanisms hurt) | **Hard close** of geometry conditioning; interference recorded; tracker/selector track |
+
+**Viterbi/benchmark collision — DECIDED: pull the near-scramble batch forward (~100 clicks).**
+Rationale: the miss-cost experiment targets near-scramble events specifically; GT v1's
+viewport sets were sampled on general swing/divergence and under-sample exactly that failure
+mode — tuning k against v1 alone invites tuning-to-noise on the target phenomenon. The
+near-scramble frames are minable from CACHED dumps (frames where v7 enters miss-state with a
+rank-1 near candidate present — the autopsy criterion), so the queue is CPU-cheap and seeded.
+By the measured exchange rate (~1,800 clicks decided everything since 46), ~100 clicks gating
+an otherwise-ready CPU experiment is the best available spend. Scoring: v1 (comparability) +
+the new near-scramble labels (target metric); both reported.
+
+**TIE-BREAK HIERARCHY (appended before any number landed — mixed/partial outcomes are the
+MODAL real result, and the table must be total or ambiguity reopens post-hoc argument
+exactly where it is most tempting) [AMENDED same-day, still pre-verdict: the original
+ordering predated the EXP-DIST-71 instrument audit — Iron-18k (264-event pool, uniform
+protocol, non-SPC game) is promoted to the primary detector-metric instrument]:**
+1. Pittsford HUMAN rows (viewport capture)
+2. primary-family VIEWPORT capture (SPC + Fairport, frozen v1)
+3. **IRON-18k ceilings/argmax** (the primary detector-metric instrument)
+4. SPC-family detector rows (SPC-18k, then SPC-134/FAIR-6k)
+5. distill-scored rows (context only)
+**Anything inside its event-CI counts as ZERO evidence — not a lean.** A mixed outcome
+resolves by walking the hierarchy top-down; the FIRST decisive (outside-CI) row assigns the
+pattern; if NO row is decisive, the outcome IS pattern 4 (nothing separates) by definition.
+
+**Strata rule (SPC-full upgraded from paired-only to difficulty-resolved):** paired reads on
+SPC-wide instruments report per-stratum columns by set provenance — NORMAL (normal/seg
+spans), HARD (clip*/hard/diverge/uncertain), AGREEMENT (*agree* spans). Interpretation is
+pre-bound: **geo separating only on AGREEMENT strata = near-zero product value; separation
+CONCENTRATED in HARD strata = the shippable signal.** Same cached-dump machinery
+(provenance joined from ball_labels set names).
+
+**GPU priority (explicit):** Phase 2 trains + four-span evals OUTRANK the closed-verdict
+re-dumps — a verified-closed delay costs nothing; a verdict slip costs the pre-registered
+momentum. If the re-dumps slip, **diff5 runs first** (the only verdict that ever showed
+frame-level significance is the one most worth re-checking).
+
+**Standing instrument guard (in code, eval_detector):** any eval whose span keeps <50% of
+the game's label pool prints an instrument WARNING naming EXP-DIST-71 — the class of bug
+that let Iron run a month at 88/576 GT undetected.
+
+**Verdict COMPOSITION (pre-declared — the last free degree of freedom):** the headline is
+the tie-break hierarchy WALKED top-down with every row stated decisive-or-zero (paired
+EVENT sign test on shared frames, p<0.05); the FULL arm × instrument × strata table ships
+with every verdict, no cell omitted as noise. The action table binds the decision; this
+binds the telling. Composition is emitted by tooling (`compose_verdict.py` — VALIDATED
+2026-07-23 against the settled factorial: reproduces EXP-DIST-63/68 exactly; the validation
+caught v1's unpaired CI-exclusion rule wrongly calling diff5 DECISIVE, fixed to the paired
+event test before any live verdict).
+
+**Escape hatches closed:**
+- **(a)** Pittsford-human PENDING at read time → the verdict is READABLE but the action
+  table does NOT fire until row 1 exists or is explicitly waived — otherwise the
+  hierarchy's top row was decoration.
+- **(b)** New instruments are sanity-checked BEFORE any arm row is read: the champion
+  checkpoint scored on each 18k instrument against its truncated history (known-truncation
+  caveat stated) — no instrument debugging mid-verdict.
+
+**POWER at the deciding instruments (measured pre-verdict; real event layouts, injected
+effects at the pre-registered magnitudes; `power_sim.py`):**
+
+| instrument | effect shape | Δ=0.05 | Δ=0.10 | Δ=0.15 | 80% threshold |
+|---|---|---|---|---|---|
+| IRON-18k (62 ev) | frame-iid (diffuse) | 0.97 | 1.00 | 1.00 | **Δ≥0.05** |
+| IRON-18k | event-block (passages) | 0.59 | 0.65 | 0.84 | **Δ≥0.15** |
+| SPC-18k (37 ev) | frame-iid | 1.00 | 1.00 | 1.00 | **Δ≥0.05** |
+| SPC-18k | event-block | 0.29 | 0.58 | 0.75 | >0.15 (not reached) |
+
+**Bound verdict language: "pattern 4" prints as "no diffuse effect ≥0.05 and no
+passage-concentrated effect ≥0.15 at 80% power (IRON-18k)" — falsifiable, not "nothing
+separates."** Structural note: a single flipped passage is undetectable BY CONSTRUCTION
+under sign-flip permutation — block effects are detected by how many events flip; Iron's
+many short events out-power SPC's few long ones per frame.
+
+**Interpretive fork on pattern 4 (reading note — referee stays FROZEN):** pattern 4 WITH
+directional sub-threshold leans CONCENTRATED IN HARD STRATA is the expected signature of a
+real passage-shaped effect below the power floor (diff5 — the only characterized effect —
+was exactly this shape, and block power needs Δ≥0.15). **That variant routes day-one to
+EVAL ENRICHMENT first** (tail queues + the Iron full pool — more events is what raises
+block power) before any arc-close. FLAT pattern 4 (no directional strata concentration)
+routes to arc-close as written.
+- **Concentration BAR (pre-stated before any number):** HARD-strata flip events **≥3:1 in
+  the same direction on BOTH wide instruments**, AND the joint binomial null probability of
+  the observed asymmetry at the realized event counts **<0.05** (self-checking at any n —
+  "some lean somewhere" is otherwise guaranteed by noise). Below the bar = FLAT pattern 4.
+- **Enrichment EXIT CONDITION (bounded, not a loop):** enrichment runs until block-effect
+  power at Δ=0.10 reaches ≥80% — measured requirement: **~80 Iron-like events**
+  (`power_scale.py`: 62→0.69, 80→0.84, 100→0.91). **The Iron FULL pool (264 events, labels
+  already exist) overshoots this at ZERO clicks** — the enrichment route is a wider Iron
+  span on the re-read dumps (GPU only); the tail queues serve per-game bands and geometry
+  spread, not power. Then ONE re-read, and the pattern is FINAL.
+
+**DEPTH-CAL promoted from curiosity to work item:** depth calibration is per-game and fails
+SILENTLY cross-game (hn4 NEAR 0.0 on Fairport). Audit result: no settled verdict decided on
+a DEPTH-CAL column (they were supplementary rows; EXP-DIST-24 called depth-cal rescoring "a
+wash"; 59/63 decided on raw score-argmax) — the hazard is FORWARD-facing: any cross-game
+DEPTH-CAL comparison is invalid. **Parked as the first post-verdict roadmap candidate under
+EITHER pattern:** a geometry-derived depth prior from the descriptor/optics model
+(EXP-DIST-66, r≈0.9) that transfers by construction — data-side, validated mechanism, sits
+on this week's infrastructure.
+
+**Stab re-dump action (pre-stated before it lands; outside the Phase 2 table):** if
+ctrl_stab-vs-cur confirms pm<0.05 on the wide instruments, `--stabilize` flips to DEFAULT
+for future builds and the champion recipe re-runs stabilized — the cheapest available
+champion-improvement attempt, data-side like the only lever that ever worked. If it fails,
+opt-in stands and the 134-window lean is recorded as noise.
+
+**Instrument admission price (permanent; applies to the tracker port and every future
+instrument):** every NEW instrument type gets its own split-half null calibration before
+its first live read — miss-events have different length/correlation structure than
+flip-events, and the permutation's nominal α holds only under the exchangeability it
+assumes. Today's referee is calibrated for THIS instrument class only.
+
+**Referee FINAL (v3, FROZEN @ ac1f42c — hash prints in every output):** the Δ-bootstrap
+magnitude branch was MEASURED anti-conservative on a 500-split single-arm null
+(α@95≈0.10 at 7 events; α@99 still ≈0.07 — stricter percentiles insufficient) → replaced
+with an EXACT paired per-event sign-flip PERMUTATION test (α nominal by construction at any
+event count). Final validation matrix: all settled factorial pairs zero ✓; ph1v2's
+known-real effect reads pm=0.135 at SPC-134 — a quantified POWER FLOOR, not a rule error:
+**SPC-134 cannot decide anything but massive effects, which is exactly why IRON-18k/SPC-18k
+(62/37 events) are the primary detector instruments.** The un-zeroed trio reverts to
+suggestive (diff5 pm=0.093, stab pm=0.090, df3 pm=0.111 — directionally consistent, just
+above threshold at 134-window power); NO settled verdict changes. **Embargo queue
+re-ordered by consequence: ctrl_stab-vs-cur wide re-dump runs FIRST** (a zero-cost shipping
+flag hangs on it, and it would be the month's second data-side win), diff5 second (closure
+already protected by mechanism evidence). Rule set frozen until Phase 2 is read; any future
+referee change re-reads via the embargo mechanism, never live.
+
+**Referee calibration outcome (2026-07-23 PM, both paths):** sign-test-only was BLIND to the
+one known-real effect (ph1v2's long-passage magnitude damage read ev6v7 p=1.00) —
+structurally biasing Phase 2 toward pattern 4. The calibrated DUAL rule (paired event sign
+test for COUNT asymmetry OR paired Δ-rate bootstrap over shared events for MAGNITUDE) now
+catches ph1v2 (d=−0.127[−0.19,−0.03] DECISIVE ✓). **The stronger test also un-zeros three
+settled SPC-134 pairs** (diff5-worse d≈−0.13; df3-worse; ctrl_stab-BETTER-than-cur
+d≈+0.08 on far-arg). These directions all match the settled leans — but small-event
+percentile bootstraps can be anti-conservative, so: **REWRITE EMBARGO — no settled verdict
+(63/68) changes until the wide-instrument re-dumps confirm (diff5 first, per GPU priority);
+the Phase 2 verdict uses the dual rule from birth** (its instruments were chosen for
+exactly this power). If stab-better confirms wide, EXP-DIST-63's opt-in posture is
+re-decided on its own entry.
+
+**Tracker-track protocol port (pre-registered BEFORE the Viterbi sweep emits numbers):**
+the tracker arc INHERITS this week's protocol rather than relearning it —
+(i) viewport-capture noise band = bootstrap over MISS-EVENTS on frozen GT v1 + the
+near-scramble set (computed before any arm number is read); (ii) the three miss-cost arms
+(nearness×velocity / candidate-margin / combined) are read with the same dual decisive
+rule; (iii) `compose_verdict` gets a viewport-capture instrument type — extended, not
+hand-read; (iv) tuned on SPC, confirmed on Fairport 06.06, selector-version-coupled (v7).
+
+**Post-verdict DAY ONE (written now, per pattern class):**
+- **Patterns 1–2:** adoption work leads (full-recipe retrain of the winning arm, viewport
+  gate); re-dumps fill remaining instrument gaps; Mark's clicks go to Pittsford completion.
+- **Patterns 3–6:** the detector arc closes; Viterbi/selector track leads; re-dumps run as
+  cleanup (diff5 first); Mark's clicks go to the near-scramble batch.
+
+**Fairport-anchor pre-statement (committed BEFORE reading the anchor sweeps, which already
+sit unread on disk):**
+- Anchors at-or-above SPC level → the self-leak behaves as modeled → proceed unchanged.
+- Anchors MATERIALLY BELOW SPC on a trained-on game → Fairport is intrinsically HARDER
+  (difficulty confound, not generalization): record it, and Phase 2's Fairport rows map into
+  the action table RELATIVE to the anchor (difficulty-normalized), never absolute.
+
+**Metric → viewer:** viewport capture is the fraction of play the virtual camera actually
+FRAMES — ~0.77 far / ~0.42 near-scramble is the felt product today. A viewer never sees a
+third-decimal ceiling delta; they see the camera miss the play. This is the standing
+justification for the arc-close condition and the sanity check on every future funding call:
+if a proposed experiment cannot plausibly move viewport capture, it does not run on scarce
+resources.
+
+**Detector-arc close condition (also in CURRENT STATE):** if Phase 2 resolves
+negative/unseparated (patterns 3–6), the DETECTOR ARC CLOSES. Roadmap becomes: selector
+recalibration + Viterbi dynamics; eval enrichment (tail queues, per-game bands);
+operator-diversity acquisition; FP16 iGPU work when speed resumes. **The one measured
+champion improvement all month was data refresh, not architecture — idle trainers are not a
+reason to run detector experiments.**
+
+---
+
+## 2026-07-23 (f): EVAL-GT seeding rule + frozen-backbone person head
+
+**Eval-GT mechanics (Mark):** eval GT is NOT training data — champion-only seeding inherits
+the champion's failure modes into the GT that judges it (circular on exactly the
+cross-camera question). Rule: **confirm-not-draw for training labels; UNION seeding
+(champion + AutoCam + competing arms when dumped) with provenance HIDDEN + disagreements as
+first-class queue items + an UNSEEDED cold sample (~40–60 frames) measuring seed-miss rate
+as a correction term — for all EVAL GT.** Applied to the Pittsford set (champion+AutoCam
+divergence now; arm-union extension before labeling if timing allows; 60-frame cold audit).
+
+**Person channel:** next attempt = FROZEN-BACKBONE person head on hn4 (sidecar labels, only
+the head ± last decoder stage unfrozen). Ball channel byte-identical by construction → no
+re-gate, one shipped model, no iGPU cost increase. Joint co-training (λ-sweep) demoted to
+fallback — EXP-DIST-70 showed ph1v2's far-ordering damage is the only CI-separated harm in
+the audit, so co-training carries measured risk.
+
+**Exchange rate promoted to CURRENT STATE:** ~1,800 clicks decided every verdict since 46;
+GPU cycles mostly returned noise over the same span; labels outrank GPU as marginal spend.
+
+---
+
+## 2026-07-23 (e): LABELING BUDGET — Mark's clicks are the scarcest resource in the system (scarcer than GPU)
+
+**Protocol (Mark):**
+1. Every labeling ask states (a) the CONSUMER — the experiment/decision the labels unblock
+   (no consumer = no ask; aerial stays unlabeled until an aerial experiment exists);
+   (b) estimated clicks; (c) why THIS queue beats the alternatives per click right now.
+   Never "more labels" generically.
+2. **Confirm-not-draw is the default**: every queue is SEEDED from champion outputs (the
+   field-editor pattern — confirm or drag, never draw from scratch), and DISAGREEMENT
+   sampling (champion-vs-AutoCam or arm-vs-arm frames) beats uniform sampling — agreements
+   label themselves.
+3. **Exchange rate tracked** in `training/docs/LABELING_LOG.md`: labels/session + what each
+   batch decided; future asks ranked on that evidence.
+4. **Priority order now:** Pittsford Dahua human set FIRST (gates the only human-GT
+   cross-camera read of the Phase 2 verdict; seeded, queued before the verdict lands) →
+   event-spreading tail queues (30–50 frames × 6–8 tail games — many short passages beat
+   dense clips; ~triples eval event count per click and feeds per-game bands) →
+   near-scramble viewport labels when selector recalibration is next. Aerial: deferred.
+
+**Also (G1 redefinition, pre-verdict):** G1 primary = CEILING (per-frame basis, ~10× the
+event count of argmax flips) + VIEWPORT capture; argmax demoted to directional color.
+Rationale in EXP-DIST-70 (the retroactive audit): never gate on a metric whose CI floor
+exceeds the effect sizes under study.
+
+**Also (operator axis):** fleet LOO-NN covers THIS operator's rigging habits; the uncovered
+axis is OPERATOR diversity. 2–3 games of someone else's footage is the cheapest diversity
+acquisition and the real generalization test — a concrete acquisition target, not a
+descriptor-space zone. (Check whether the F:/Guest recordings qualify as other-operator.)
+
+---
+
+## 2026-07-23 (c): INTERPOLATION is the headline — every historical number was measured at d=0.37–0.60 from training; generalization has NEVER been measured. Fairport gets NATIVE anchors; pre-registered expectations
+
+**The reframe (Mark):** hn4's 0.965 far-ceiling, ctrl_cur's 0.974, the ±0.078 seed band, and
+every G1 threshold were all measured on SPC — whose nearest training games sit at descriptor
+distance 0.37–0.60. That is INTERPOLATION. The product deploys onto a fresh rig every game —
+GENERALIZATION — and no number in this log has ever measured it.
+
+**Pre-registered (before the Phase 2 verdict lands):**
+1. **Fairport 06.06 is EXPECTED to come in below SPC.** When it does, that is the first honest
+   generalization-adjacent number, NOT a regression. Do not "fix" it back.
+2. **The SPC↔Fairport spread is a tracked metric** from now on (report it with every eval).
+3. **Fairport gets NATIVE anchors** — hn4 + ctrl_cur dumped/swept on Fairport 06.06
+   (`G:\ballresearch\geodet\anchors_sweep.log`) BEFORE anything gates on it. SPC's G1
+   thresholds are never transplanted to another game.
+4. Empirical status (EXP-DIST-69): within the interpolation zone the plain detector is
+   geometry-insensitive, and the cache contains ZERO generalization-zone points — Phase 2's
+   Dahua/holdout evals are the first. Phase 2's novel-geometry rows therefore read as a
+   geo-channel-specific test.
+5. **ANCHOR CAVEATS (computed 07-23, before the anchors landed):** d(Fairport 06.06 →
+   nearest Phase 2 training game) = **0.43** (Western_NY_Flash_away) — Fairport is
+   INTERPOLATION-zone for Phase 2, not the hoped-for ~2. *[The "Pittsford-home d=3.32"
+   claim later in this point is SUPERSEDED → point 9: its d to the P2 TRAINING set is
+   0.75.]* And the historical champions
+   (hn4, ctrl_cur) were TRAINED ON 06.06 itself (champion cur list) — their "Fairport-native
+   anchors" are SELF-LEAKED: they measure trained-on-game performance, and their SPC→Fairport
+   delta is held-out-interpolation vs trained-on, NOT an interpolation→generalization gap.
+   The anchors remain useful as difficulty context; the comparison vs Phase 2's clean-held-out
+   arms is anchor-FAVORING and must be read as such. **The first genuine generalization-zone
+   human-GT points are Pittsford-home 06.25 (d=3.32) + the distant-fleet label queues.**
+6. **Pre-registered expected magnitudes** (so results can surprise): for genuine d>2 human-GT
+   games — far-ceiling drop **5–12 pts** (0.97 → 0.85–0.92), far-argmax relative drop
+   **30–50%**, near-ceiling roughly holds (bigger object). For Fairport 06.06 (interpolation
+   + leaked anchors): anchors expected AT-or-ABOVE SPC level; Phase 2 clean arms expected
+   modestly below the anchors there.
+7. **Dahua verdict rows report DISTILL-scored and HUMAN-scored separately** — AutoCam labels
+   carry teacher disagreement (0.68-vs-0.05 windy-game error profile), so a distill-scored
+   "generalization drop" is confounded with teacher error. The Pittsford human viewport-label
+   set is the ONLY human-GT cross-camera point in the design → prioritized.
+8. **Attenuation guard:** range restriction ATTENUATES r — "geometry-insensitive within
+   d<1.05" must never drift into "geometry doesn't matter"; the null is SILENT about d>2.
+9. **[CORRECTION to #5, same-day]** "Pittsford-home d=3.32" was its distance to the nearest
+   EVAL game; its distance to the Phase 2 TRAINING set is **0.75** (RNYFC) — adding the Dahua
+   training games pulled the training set geometrically around the Dahua eval. **The current
+   design therefore has NO generalization-zone (d>2) eval point at all** (SPC ~0.4, Fairport
+   0.43, Iron ~0.8, Pittsford 0.75): Phase 2's cross-camera rows measure interpolation-grade
+   cross-FAMILY transfer, not generalization. The rescued d>2.4 games (Buffalo-away 2.77,
+   RNYFC-home 2.47) are the only genuine generalization candidates in the fleet.
+10. **Training-set INTERNAL spread (measured, not assumed):** all-21 pairwise median d=2.69
+    (p25 1.90, max 6.44); within-Reolink 1.74, within-Dahua 2.43, cross-family median 3.47
+    (min 2.26). **The channel SEES wide spread in training — the mechanism is learnable.**
+    Pre-registered accordingly: a weak geo-channel result on the Dahua eval is a
+    cross-camera-transfer failure of the CHANNEL (mechanism-specific), NOT a generalization
+    null; and a strong one is still not a generalization claim. **Allocation of the two
+    rescued d>2.4 games (eval point vs Phase 3 training diversity) is decided AFTER the
+    Phase 2 verdict — not defaulted to eval-only.**
+11. **The pre-registered magnitudes in #6 are PRIORS, not derived** — no measurement exists
+    at d>2 (EXP-DIST-69's null is silent there); they encode object-scale/resolution
+    intuition only. Semantics: results OUTSIDE the prior band are surprises requiring
+    mechanism analysis; results inside it must NOT be reported as "within expectations"
+    as if the priors were evidence. **Comparison denominator pinned: every drop is computed
+    vs the SAME checkpoint's SPC number — never vs the leaked Fairport anchors.**
+12. **safe_geo seed-2 read order (when it lands):** FIRST as a second estimate of the
+    within-arm noise band — ±0.078 came from ONE context (ctrl vs hn4, SPC argmax-far) and
+    currently gates every verdict. Confirm → recent "within noise" calls firm up. Diverge →
+    re-read the factorial + stab-lean calls against the wider band. Going forward the noise
+    band is PER-METRIC-PER-EVAL-GAME (Fairport's 216 GT ≠ SPC's 134). Seesaw-hardening is
+    the secondary read.
+13. **LOO-NN distribution (fleet, n=67; reference set = fleet-minus-self): median 0.42,
+    p90 0.79, max 1.09.** By the fleet's own evidence, a fresh deployment lands
+    ~interpolation-distance from a training set that COVERS the fleet — coverage, not
+    distance-hardening, is the product lever. Natural-eval tail (LOO-NN>p90): RNYFC-home
+    1.09, Buffalo-away 1.09, Chili_Vortex 1.05, 06.01 Pittsford_Mustangs 0.83, Lakefront_home
+    0.82, both Irondequoit 0.80–0.82. NB the "2.77/2.47" figures were distances vs the
+    21-game P2 TRAINING set; the same games sit at 1.09 vs the fleet. **Every quoted distance
+    MUST name its reference set.**
+14. **Family-ID confound (pre-registered):** the training spread decomposes into two camera
+    families (cross-family median 3.47 dominates). A geo win ONLY on cross-family rows is
+    consistent with the channel learning a CAMERA-FAMILY BINARY — Phase 1's degeneration one
+    level up. A continuous prior must ALSO show on within-family geometry variation: the
+    reinstated 05.30 probe is the designated test. And `--normalize` is itself two-valued
+    (per-family target_width 5120/3900) — i.e. norm ENCODES family too — so geo-vs-norm
+    alone cannot separate binary from continuous; only the within-family rows can.
+15. **Scope reframe (product-critical):** the near-term product path replaces the camera
+    family (current Reolink → next hardware tier) — a cross-family transfer at moderate
+    geometry distance is EXACTLY the deployment event on the roadmap. **Phase 2 is the dry
+    run for that migration**; its result is read as migration evidence, not as a downgraded
+    generalization claim.
+16. **Event-bootstrap CIs are part of the read protocol:** every reported argmax/ceiling
+    carries a 95% CI from resampling flip EVENTS (gap=64, B=2000) on the cached dump —
+    eval-sampling noise, per-metric-per-game, zero GPU (`loo_nn_and_bootstrap.py`). Tables
+    carry BOTH the seed band and the bootstrap CI (different noise sources). First
+    application: SPC is a 7-far/5-near-EVENT instrument and the EXP-DIST-67 seesaw CIs
+    overlap (see the 67 addendum).
+
+**Descriptor scope note:** the descriptor covers GEOMETRY (mount/setback/field size via the
+polygon), NOT appearance — kits/turf/background familiarity is a separate, secondary leak
+axis. Corollary: the reinstated 05.30 Fairport (shared appearance with the 06.06 eval,
+d=2.14 different geometry) is Phase 2's cleanest probe isolating the geo channel from visual
+familiarity — report it separately in the verdict.
+
+---
+
+## 2026-07-23 (b): Holdouts + leak-judgment by GEOMETRY DISTANCE, not venue names — venue ban REPLACED; small-delta reads are EVENT-level
+
+**Context (Mark):** venue is a bad proxy for geometry BOTH ways — the Fairport-away dates were
+re-rigged tournament setups (same venue ≠ same geometry), and a different venue can match eval
+geometry closely. Every non-excluded game has a confirmed 10-pt polygon and the optics are
+near-deterministic from it (EXP-DIST-66), so judge the polygons, not the names.
+
+**Descriptor + threshold (recorded; `G:\ballresearch\geodet\geom_descriptors.json`):**
+per-game `[predicted near-ball px, predicted far-ball px, polygon area fraction, far-line
+y fraction]`, z-scored over the 67-game fleet, Euclidean distance. All-pairs distances:
+p10=0.96, p25=1.73, median=2.55. **CLOSE = d<p10 (leak-grade), close = d<p25 (flag).**
+
+**Applications (2026-07-23 audit, replaces the same-day venue ban):**
+- Fairport 05.28 vs eval 06.06: d=0.45 CLOSE → **stays banned, now with evidence**.
+- Fairport 05.30 vs 06.06: d=2.14 DISTANT (re-rigged tripod, the audit confirms it) →
+  **REINSTATED into Phase 2 training** (store = 21 games, holdout 5).
+- Historical honesty: SPC's nearest training games are Cuyahoga d=0.37, Lakefront_home 0.52,
+  Cleveland/Upper90 0.60 → **historical SPC evals measured mostly INTERPOLATION**; Iron's
+  nearest is 06.04 Irondequoit d=0.82 (same venue, genuinely close).
+- **Phase 2 verdict protocol: STRATIFY, don't ban** — report each eval split by geometry
+  distance to the nearest training game; the geo channel's thesis is generalization, so the
+  verdict reads from the novel-geometry rows.
+- Future holdout choices use geometry distance; venue names are narrative only.
+
+**Also (EXP-DIST-68 correction):** small-delta comparisons REQUIRE the EVENT-level paired
+read (same-direction flips clustered within 64 frames; sign test on events). The frame-level
+test inflates n — diff5's p=0.004 collapsed to p=0.55 at event level. Encodings remain closed
+on direction (nothing ever leaned positive), not on a significance claim.
+
+---
+
+## 2026-07-23: Input ENCODINGS are CLOSED (diff3/diff5/df3 family) — stop funding them
+
+**Context:** the encoding factorial ran across EXP-DIST-51→59→63 with single-seed argmax
+deltas inside the documented ±0.078 seed band — unconcludable by construction. Mark's read
+protocol: paired per-frame flips on cached dumps first, second seed only if ambiguous.
+
+**Decision (from EXP-DIST-68's paired read):** diff5 is SIGNIFICANTLY worse than control
+(p=0.004, 22-vs-6 flips, far-dominated); df3 unresolved leaning worse; the stabilized twin
+round is noise. **No encoding variant has ever leaned positive → the diff-encoding family is
+closed.** *[MECHANISM ADDENDUM 07-23 PM, from the strata read: diff5's flips concentrate in
+HARD strata (6-to-2 events, occlusion/ambiguity frames) — this RULES OUT the noise/jitter
+mechanism that motivated the stabilization-interaction hope. The diffs mislead under
+occlusion, which stabilization cannot fix. Arc closed at MECHANISM level, not just
+direction. Corollary: no encoding variant needs to survive the future RKNN port;
+EncodingPrelude remains infrastructure only.]* No further encoding experiments without a NEW mechanism argument that explains why
+the diffs would help where these failed. `--stabilize` is unaffected (a robustness feature,
+opt-in per EXP-DIST-63, not an encoding). Small-delta SPC conclusions REQUIRE the paired
+per-frame read (EXP-DIST-68 protocol) from now on; the 134-GT SPC clip alone cannot resolve
+1-3 ball effects — Fairport 06.06 (216 GT, frozen in benchmark v1) is promoted to a CO-EQUAL
+held-out eval game, and the three 2026 Fairport-away games are BANNED from training sets
+(same venue = eval leak; enforced in the Phase 2 store holdouts). *[Venue ban SUPERSEDED
+same-day → entry (b): geometry-distance policy; 05.28 stays banned (d=0.45), 05.30
+REINSTATED (d=2.14).]*
+
+---
+
+## 2026-07-22: Field-polygon store hygiene — model-seeded proposals + human confirm in the field editor; ONE repair method; geometry-validated
+
+**Context:** the EXP-DIST-66 optics sweep exposed rot in the polygon store: 4 geometrically
+INVERTED 2024 polygons (near/far swapped or stored in raw-vs-rotation-corrected space), 8
+non-10-point traces (54-pt dense `gamedata` boundaries, 12/14-pt `sonnet`), house/indoor
+recordings registered as games, and NOTHING validating point ordering (`build_field_geometry`
+is a catastrophe-gate only — a near/far flip yields a valid homography and silently inverts
+`field_depth`).
+
+**Decisions:**
+- **Canonical polygon = game.json `field_polygon`, 10 points, near=0-4 (bottom, L→R), far=5-9
+  (top, R→L), stored in the DISPLAY space** (frame after `video_rotation` correction).
+  `video_rotation` is the camera MOUNT rotation (raw upside-down Dahua = ±180), a separate
+  concern from polygon orientation; the 2024 archive's tags were inconsistent and are now fixed
+  where they surfaced.
+- **Repair method is ONE pipeline** (no per-game hacks): fix `video_rotation` so the frame
+  displays upright → re-seed with the field-outline model (`field_outline_v2`, rotation
+  auto-resolved by confidence, gate ≥6/10 confident keypoints + fore<1 ordering check) →
+  Mark confirms in the field editor (`/static/field-edit.html`, mounted 2026-07-22, deployed).
+  Model can't detect the field (blue-turf dome, off-frame touchline) → human draws from the
+  default box. Dense legacy traces → reduce to 10-pt (split by y, resample 5+5) as the proposal.
+- **Non-games are excluded, not deleted:** `camera__*` raw captures auto-hidden;
+  house/indoor recordings get `field_polygon_note: "excluded: …"` (reversible).
+- **State (2026-07-22): ALL non-excluded polygons pass the geometry check** (10-pt, near wider
+  AND lower, ordered, non-degenerate) — 39 human-confirmed via the editor. A programmatic
+  ordering validator goes into `build_field_geometry` with the geometry-conditioned detector
+  work so a future flip can never silently invert again.
+
+---
+
+## 2026-07-21: Benchmark GT is FROZEN and VERSIONED — evals pin to a snapshot sha, not live label files
+
+**Context:** ball_labels grow over time (the hourly `selector_label_dedupe` task folds set-labeled
+data in), and the viewport-label sets are Mark's product benchmark. Re-scoring the selector/detector
+against live files would move the denominators between runs, making "did the change help?"
+unanswerable — the same class of drift that the immutable-store decision fixed for training data.
+
+**Decision:** eval GT is snapshotted into `G:\ballresearch\benchmark\vN` (content-addressed, sha over
+sorted/normalized rows) and every selector/detector eval CITES the snapshot sha. **benchmark GT
+v1 = `3c4d4c5ef44e85cf`** (SPC held-out ball_labels 1785 rows sha 6959a83e; Iron 702 sha 9039aefa;
+Fairport 216 sha 4b51f897; viewport sets spc_viewport_worst 700 views sha d1a60bd9, fair_viewport_worst
+706 views sha f9992ada). New GT → new vN+1 snapshot, never mutate. The selector-recalibration
+before/after is measured on v1.
+
+---
+
+## 2026-07-17: Two-box compute policy — server is the reliable/data-local queue, FORTNITE-OP harvests its own idle windows
+
+**Context:** two GPU boxes with opposite profiles — the server (GTX 1060: slow, always on,
+data-local to F:/G:) and FORTNITE-OP (RTX 3060 Ti: ~2.5x faster, sporadically available — it is a
+family gaming PC and games preempt everything, incl. one crash under combined load).
+
+**Policy:**
+- **Training runs → FORTNITE-OP job queue** (`\server	raining\deploy\queue\{pending,running,done}`,
+  FIFO json job specs `{desc, cmd, resume_cmd}`). The `Ph1GameGuard` scheduled task (runs as the
+  `training` user, at-startup, auto-restart) polls every 20 s: any GPU-heavy game (worker
+  `idle_games` list + Epic/Steam/Riot-path processes >500 MB) → training procs KILLED immediately
+  (suspend would pin VRAM and starve the game) and the job returns to `pending` in its resume form;
+  5 game-free minutes → oldest pending job dispatched. Interruption cost ≈ epochs since last
+  checkpoint; the box turns school hours and overnights into training time unattended.
+- **Precision runs (controls, protocol-exact experiments) + all data-touching work (dumps, sweeps,
+  store builds, mining) → server**: deterministic timing, no preemption, F:/G: local.
+- Cross-box data identity is verifiable via the store index shas (see the versioned-store decision
+  above): a FORTNITE-OP job must state the same index sha as its server-side comparators.
+- Roblox measured at only 37% GPU / 1.2 GB but STAYS a yield trigger: the criterion is "a kid is
+  interactively using the machine", not raw wattage (contention stutters the game; the box already
+  crashed once under combined load).
+
+## 2026-07-17: Crop-store indexes are IMMUTABLE and VERSIONED — no in-place mutation, every run records its data (Mark: blocking, before all further experiments)
+
+**Trigger:** EXP-DIST-55 — the hn5 chain mutated `crops_reolink/index.json` in place (−480
+GT-guarded negatives, +782 corroboration negatives), so an entire three-lever experiment batch
+(EXP-DIST-51/52/53) silently trained on hn5's data while comparing itself against hn4's baseline.
+~3 GPU-days of results voided; recovery was only possible because the miner happened to leave an
+ad-hoc backup (`index.prehn5.json`).
+
+**Decision (mechanism in `training/data_prep/store_versions.py`):**
+- `index_vN.json` snapshots are IMMUTABLE and content-addressed (16-hex sha of the canonical
+  JSON); freezing identical content twice returns the same version. Never edited, never deleted.
+- `index.json` remains the CURRENT alias (all existing readers keep working), but every mutator
+  (`mine_hard_negatives`, `build_human_crops`) pins the store BEFORE and AFTER its write, and
+  `build_heatmap_crops` freezes v1 at creation — both sides of any change are recoverable forever.
+- Every consumer pins provenance automatically: `HeatmapCropDataset` freezes+records
+  `(index_version, index_sha)` on construction; `train_v4_heatmap` prints a `DATA:` line at startup
+  and writes `{store, index_version, index_sha}` into every checkpoint; `--index-version N` trains
+  on an exact historical snapshot regardless of later mutations.
+- Crop `.npy` files are never deleted (de-indexing is the only removal mechanism — which is what
+  made the hn4-era restore possible).
+- Live stores retro-versioned on the server: `crops_reolink` v1=pre-hn4-mining, v2=hn4-era
+  (=`index.prehn5.json`, the control's data), v3=current/hn5-era; `crops_reolink_hn4era` and
+  `crops_reolink_dyn` pinned v1. (Shas recorded in the retro-freeze output attached to EXP-DIST-55.)
+
+**Rule going forward:** an experiment that cannot state its store + index version + sha did not
+happen. Comparisons across runs must compare index shas first.
+
+## 2026-07-12: Indoor/dome venues (blue turf) ARE in scope for the ball detector
+
+Mark confirmed indoor games are in scope, so the grass-trained detector cannot simply exclude
+blue-turf/dome surfaces — it must learn them. Cuyahoga 03.21 (indoor dome, deep-blue turf, flat
+artificial light, extreme fisheye) is the out-of-distribution surface case behind the lowest AutoCam
+confidence of any game (median 0.298); see EXP-DIST-45. Implication: indoor/turf games need ball
+labels + inclusion in DETECTOR training (not just the green-grass corpus) — a domain-diversity gap
+tracked on the detector B-track, orthogonal to the selector.
+
+## 2026-07-10: ONE homegrown path — detect/select/plan/render as swappable product steps; internal render camera brain DELETED
+
+**The decision (Mark, verbatim intent).** "I want ONE PATH THROUGH OUR HOMEGROWN CODE ... modular and
+configurable through config file updates ... the single homegrown detect/select/plan/render path",
+where "any pipeline step should be able to be replaced independently" (detector, selector, planner,
+renderer). Implemented as four registered pipeline steps with artifact contracts between them:
+
+| step | in -> out | swap unit |
+|---|---|---|
+| `ball_detect` | video + field polygon -> `candidates/1` (raw top-K heatmap peaks/frame) | detector (ONNX heatmap net) |
+| `ball_select` | `candidates/1` + polygon -> `trajectory.json` (dense [x,y]/null per frame) | selection stack (selector .npz + physics Viterbi + RTS) |
+| `plan_camera` | trajectory + polygon -> `camera_path/1` ({center, hfov}/frame) | cinematography |
+| `render` | video + `camera_path/1` -> broadcast mp4 | projection/encode |
+
+**What moved/died.**
+- The champion selection stack moved INTO the product (`video_grouper/inference/`:
+  `world_geometry`, `iso_warp`, `ball_detector`, `ball_selector`, `ball_tracker`); the training
+  modules are now re-export shims, so the harness exercises the exact shipped implementation.
+- The renderer's internal camera brain (`_tick`: pan smoother, zone/speed zoom, dead-ball logic,
+  off-field rejection — the render branch's follow-the-track controller) is DELETED, along with the
+  old YOLO-tile detector and the plain Kalman `track` step. The `render` step consumes the camera
+  path as a REQUIRED artifact — a missing artifact is a hard error, never a silent fallback (this
+  forks `feat/broadcast-camera-render`'s render.py; accepted knowingly).
+- Product runtime stays torch-free: HeatmapNet exports to ONNX (sigmoid baked in), the selector to
+  numpy `.npz` — both export CLIs parity-check torch vs product inference before writing.
+
+**Why.** Two camera brains (planner + `_tick` fallback) and two tracker generations in the shipped
+code meant reviewable output could silently come from a path we don't ship. Post-parity-proof
+(2026-07-10, px-max=0), the dumb-renderer chain IS the product; everything else is drift risk.
+
+## 2026-07-02: Decode raw per-segment clips, not the combined video, for crop/strip extraction
+
+**Context.** The per-game `combined.mp4` is a stream-copy concat of the raw camera segments with
+realigned audio — it's VFR, slow to decode end-to-end, and one corrupt packet crashes the whole decode
+(the Flaitz game produced no far-label set). Verified the combined's frame `offset+f` is bit-identical
+to raw-segment frame `f` (0.00 diff, incl. cross-segment).
+**Decision.** Extract wanted frames from the **raw per-segment clips** via `data_prep/segment_decode`
+(`global = segment.global_offset + f`; GOP=20 / VFR-aware keyframe-seek + presentation-order PTS
+matching). Frame-exact, corruption-isolated per segment, and fast (decode ~one GOP per label). Applies
+to `build_far_label_queue` and `build_human_crops`; replaces the earlier stop-at-corruption stopgap.
+**Trade-off.** Building the per-segment PTS map demuxes the whole clip (I/O), so the win is avoiding
+the full *decode*, not the full read — still ~an order of magnitude less decode work than sequential.
+
+## 2026-06-30: Distill AutoCam by feeding its detections to OUR existing tracker — teacher is the tracked ball, not the viewport; train a detector, not a viewport model
+
+**The decision.** To beat AutoCam on far balls, we train OUR ball **detector** (HeatmapNet) and run
+it through OUR **existing** tracker (`world_model.reranker.track_ball`) → viewport. We do **not**
+train a viewport/end-to-end model, and we do **not** distill AutoCam's smoothed `autocam_viewport`
+(camera-centre). The distillation **teacher label** each frame is the ball position produced by
+running the existing tracker over AutoCam's re-run per-frame detections (`autocam_detections.jsonl`),
+anchored by human GT and snapped to the real in-field detection (`teacher_track`).
+
+**Why (measured, EXP-DIST-16).** On 1,880 human far-GT balls (frames AutoCam loses): ball present in
+AutoCam's detection candidate set **0.97**; existing tracker over those detections **R15 m 0.77**
+(median 2.1 m); AutoCam's own viewport **0.15** (median 41 m); AutoCam's raw argmax/viewport-gated
+pick **0.10**. So the detector *finds* the far ball AutoCam loses — the gap is **selection**, which
+the existing tracker already closes. The viewport-vs-GT error is random-direction (AutoCam looks
+elsewhere), not a coordinate artifact. Distilling the viewport would cap us at AutoCam and can't win.
+
+**Corollaries.** (a) Teacher restricted to **active play** (game_state halves; warm-up/halftime
+AutoCam tracks players) and **in-field** (marathon detections carry off-field FPs); human far-GT is
+exempt and always kept. (b) **Reolink-primary**: build the first detector on Reolink (clean AutoCam
+detection + GT-anchored); 2024 Dahua games have noisy detection and no GT — fold in down-weighted
+later. (c) The success bar is Mark's: "close enough that the viewport can follow the ball" = meters
+at R10–15, matching AutoCam in normal play + beating it on far vs human GT.
+
+**Reverses the prior session's plan** (world-model re-ranker over a sparse-far-label detector; the
+"far-weight" loss up-weighting, EXP-DIST-13/14, which hurt). See also
+[[reference_autocam_ball_detections]], [[project_tracker_selection_finding]].
+
+---
+
+## 2026-06-26: `orientation` is RAW-camera provenance, NOT a flip instruction — derive flip from the resolved video's rotation tag
+
+**The trap:** the registry/`game.json` `orientation` field (12 `upside_down`, 91 right-side-up) describes how the
+**raw camera was mounted** — it does NOT mean "the video you'll decode is upside-down." Two different corrections exist
+in the corpus, both yielding right-side-up frames when read correctly:
+- **Tag method (7-10 of the upside_down games):** upside-down pixels + a **`rotation=-180` displaymatrix tag**, as a
+  stream-COPY `<slug>-raw.mp4` (no re-encode). **cv2 auto-applies** the tag → right-side-up. **PyAV/libav IGNORE
+  display-rotation by default** → upside-down unless the reader applies it.
+- **Baked method (e.g. `flash__2025.05.17_vs_NY_Rush_away`, `heat__2025.06.02_vs_Fairport_home`):** the flip is baked
+  into the **pixels**, NO tag. Every reader gets right-side-up. **These were vision-confirmed right-side-up — flipping
+  them (adding a -180 tag) would INVERT them.** (Their `needs_flip=True` registry flag was stale-for-processing.)
+
+**RULE (so no session naively flips on the `orientation` field):**
+1. **Never flip based on `orientation` alone.** Derive the action from the **resolved video's actual rotation tag**.
+2. `game.json.video_rotation` = the resolved (`resolve_source`) video's display-rotation (`-180` for tag-corrected
+   games, `0` otherwise incl. baked + natively-upright). **cv2 consumers: do nothing** (auto-applied). **PyAV / any
+   non-cv2 reader: apply `video_rotation`** (rotate 180° if `-180`), or its frames will be upside-down vs the
+   right-side-up labels/polygon.
+3. `needs_flip` is DROPPED (was `upside_down ∧ no corrected_video`, stale-prone, and described the raw not the
+   processed video). `orientation` stays as provenance only.
+
+**Load-bearing follow-up:** the crop/dewarp builder (PyAV) MUST honor `video_rotation` — otherwise its crops for the
+~10 tag-corrected games come out upside-down vs their right-side-up labels (silent train-data corruption). Verify before
+the next training run. See [[feedback_verify_label_semantics_with_vision]].
+
+## 2026-06-26: Human far-labels were made on DIFFERENT source videos than the detections — align by frame-matched offset
+
+**The trap (so no future session re-derives it):** the 27 `D:\training_data\far_label\<set>\` sets were NOT all
+labeled on the same video the marathon/detections use. Their `manifest.json` `clip` field points at whatever the
+annotator opened, which is one of FOUR source kinds — each needs different handling to land on the canonical `(seg,f)`:
+
+| clip kind | example | how `frame_idx` maps to `(seg,f)` |
+|---|---|---|
+| **per-segment** | a single `RecM09_*.mp4` in the F: game dir | `seg` = clip stem, `f` = `frame_idx` (no offset) |
+| **full combined** | `D:\soccer-cam-storage\<date>\combined.mp4` (== F: `combined.mp4`, same frame count) | `frame_idx` → offset table directly (offset 0). e.g. Pittsford `__queue` |
+| **start-TRIMMED raw** | `D:\soccer-cam-storage\<date>\...raw.mp4` (FEWER frames than F: combined) | `frame_idx + OFFSET` → offset table. **constant per-game start-trim** |
+| **derived test-clip** | `D:\detect_work\v4_test_clips\*.mp4` (small contiguous extract) | frame-match the extract into the combined → source start; `frame_idx + start` |
+
+**Canonical frame basis = the registry-resolved `F:\...\<game>\combined.mp4`** (== concat of the RecM09 segments;
+`game.json` `segments[].global_offset` is built from it). The marathon (`resolve_source` → `kind=combined`) and all
+detections use it. **A label clip's frame numbering must be aligned to THIS before trusting `(seg,f)`.**
+
+**Alignment method (proven, automated in `build_ball_labels.py:raw_to_combined_offset`):** frame-match the label clip
+against the combined — downscaled (160×90) grayscale mean-abs-diff, swept over candidate offsets; a true match reads
+**diff ≈ 0.0 (pixel-identical)** and the offset is **constant across the whole game (no drift)** → a single integer
+recovers every label. **Vision-verify** at least one recovered label lands on the ball (HARD GATE — this caught the
+original mis-map: markers on grass via the wrong basis vs on the ball via the right one). See
+[[feedback_verify_label_semantics_with_vision]].
+
+**Per-game offsets computed (raw `frame_idx` → combined frame):**
+| game | label source | offset | source frames | combined frames |
+|---|---|---|---|---|
+| `heat__2026.05.31_vs_Spencerport_gold_2_away` | `...spencerport-gold-2...-raw.mp4` (trimmed) | **+1162** | 80,640 | 81,800 |
+| `heat__2026.06.15_vs_Irondequoit_away` (`heat_0615_*` sets) | trimmed raw | **+1181** | — | 109,340 |
+| `heat__2026.05.07_vs_Pittsford_Mustangs_away_18.28` (`__queue`) | full `combined.mp4` | **~0** | 113,460 | 113,460 |
+| `irondequoit` test-clip set | `v4_test_clips\irondequoit_far_*.mp4` (762-frame extract) | frame-matched start (pending) | 762 | 109,340 |
+
+These offsets are also written into each game's `ball_labels.jsonl` `_meta` header (per-set provenance: `source_clip`,
+`basis`, `offset`) so the data is self-describing. Recompute via the frame-match if a video is ever re-encoded.
+
+## 2026-06-26: Frame indexing = canonical (seg,f) + derived global_offset; corruption handled via corrupt[] ranges + one decode policy
+
+**Context:** Producers currently disagree on frame keys — the #27 marathon keys detections by a running **global**
+frame; `gamedata` `labels.jsonl`/`track.jsonl` key by **(seg, f)** per-segment; AutoCam's sidecar + `viewport.json`
+are global. Mark: store an overall frame offset so it's consistent, and handle the corrupt-frame case (the
+`heat__2026.06.08_vs_Hilton_Heat_Flaitz_away` reolink game that crash-looped the curve's crop builder).
+
+**Minimal investigation (06.08, the one confirmed-corrupt game):** 25 raw reolink segments + a 18.9 GB `combined.mp4`.
+Demux packet count == header frame count **exactly on all 25 segments AND the combined (143,800), with zero demux
+errors**. So: no truncation, no missing packets, and `combined = Σ segments` holds precisely. **The corruption does
+NOT drop frames from the stream** — it is decode-level (a concealable bad frame) or, more likely per the prior note,
+an OOM in the crop builder (pixel accumulation on the 16 GB box), i.e. NOT data loss. (Stopped the full triple-decode
+classification as non-essential — it does not change the schema.)
+
+**Decision:**
+1. **Canonical key = `(seg, f)`** — `seg` = segment filename stem, `f` = 0-based decode index within that segment.
+   Per-segment indexing isolates corruption (a bad frame in segment k cannot shift indices in k+1..N) and works with
+   or without a physical `combined.mp4`. Matches the existing `gamedata` schema.
+2. **Global frame is DERIVED, not stored per record:** `game.json` `segments[]` carries `frames` (actual decoded
+   count) + `global_offset` (cumulative prior decoded frames, in registry segment order). `global_frame =
+   global_offset[seg] + f`. Recomputable from one corrected count without rewriting any measurement record. (06.08
+   shows header==packets==offset, so offsets are trustworthy; build them from the canonical decode, never header alone.)
+3. **Corruption handling = `corrupt` ranges per segment** in `game.json` (`"corrupt":[[f_start,f_end],...]`, empty
+   when clean), populated by the canonical decode pass (ffmpeg `-v error` / PyAV error-scan). Consumers skip those
+   frame ranges for labels/training. No PTS/`t` field needed **because frame count is preserved through concealment**
+   — if a future game ever shows decoders disagreeing on COUNT (mid-stream frame *drops*, not just bad pixels), revisit
+   by adding a `t` (PTS seconds) anchor.
+4. **One canonical, error-tolerant, count-preserving decode policy** for ALL producers (marathon/cv2, crop-builder/PyAV,
+   viewport indexer) so `(seg, f)` denotes the same frame everywhere even through a corrupt spot. The 06.08 curve crash
+   was a crop-builder OOM, fixed by streaming/memory limits — separate from indexing.
+
+**Data-shape primitives (locked):** point `[x,y]` · detection `[x,y,conf]` · **viewport `[cx,cy,w,h]`** (center+size:
+pan=cx,cy, zoom=w,h — matches how the broadcast crop is parameterized) · polygon `[[x,y],…]`. All source px in the
+segment's native resolution (declared in `game.json`). Per-frame record envelope: `{"seg","f", …}` (+ `p`/`d`/`v`).
+
+## 2026-06-26: Per-game measurement store = JSONL sidecars next to the video on F: (retire manifest.db)
+
+**Context (Mark):** "I only want to maintain the jsonl file, not the manifest db — the sqlite DBs were
+fragile, and were only necessary when we were using the tiling approach." + "The F drive archive is the most
+important — the sidecars 100% need to end up there." + "write these sidecar files next to the video files, not
+in some other random directory where they will get lost." We had accumulated 4+ parallel stores for the same
+measurements (`F:\autocam_data\<gid>\detections.json`+`viewport.json` whole-file JSON; `F:\gamedata\<gid>\`
+keyed-dir `labels.jsonl`/`track.jsonl`; `D:\training_data\far_label\…\labels.json` human labels on the
+**transient** D: tier; `manifest.db` ball tables) — fragmented, some off the F: archive, easy to orphan.
+
+**Verified facts:** all 103 registry games have their `path` (video dir) **on F:** and present on disk
+(`F:\Flash_2013s\<game>\`, `F:\Heat_2012s\<game>\`). AutoCam already writes its sidecar next to the video as
+`<processed>.mp4.jsonl`. The existing `gamedata` store already uses a clean per-segment jsonl schema
+`{"seg","f","x","y","qa"}` (`labels.jsonl`) / `{"seg","f","x","y"}` (`track.jsonl`) read by `gamedata.py` (`gd`).
+
+**Decision:** ONE canonical store — **append-only JSONL sidecars written into each game's own video dir on F:**
+(`<registry path>`), beside the segment `.mp4`s. **No SQLite/manifest.db going forward** (legacy DBs become
+derived/droppable; they existed only for the retired tiling pipeline). Per-game files:
+
+| file | content | schema (one record per line) |
+|---|---|---|
+| `game.json` | meta (NOT jsonl) | game_id, team, camera, segments[], w/h/fps, field polygon, play_windows, schema_version |
+| `ball_labels.jsonl` | human GT + visibility (**precious**) | `{"seg","f","x","y","a","src","set","ts"}`  a∈ball\|not_visible\|out_of_play |
+| `ball_track.jsonl` | canonical selected ball path | `{"seg","f","x","y"}` |
+| `autocam_detections.jsonl` | AutoCam raw balldet candidates | `{"seg","f","x","y","conf"}` (1 row/candidate) |
+| `autocam_viewport.jsonl` | AutoCam camera center | `{"seg","f","x","y"}` |
+| `homegrown_detections.jsonl` | (future) our detector | `{"seg","f","x","y","conf","model"}` |
+| `homegrown_viewport.jsonl` | (future) our camera center | `{"seg","f","x","y","model"}` |
+
+Naming pattern: `<producer>_<measurement>.jsonl` (producer ∈ autocam\|homegrown, measurement ∈ detections\|viewport)
++ producer-neutral ground-truth (`ball_labels`=human, `ball_track`=canonical). Adding a producer/measurement later
+= a new file, zero migration. Keep the existing `{seg,f,x,y}` **per-segment** frame indexing (matches the
+multi-segment reality; no fragile global-frame mapping). Coords = that segment's native source px (declared in
+`game.json`). Each `.jsonl` opens with a `{"_meta":{schema_version,units,frame_base}}` header line so it is
+self-describing standalone.
+
+**Why:** consistent (same files/schema every game) · resilient/safe (append-only — a crash loses ≤1 line, no
+SQLite corruption, no whole-file rewrites like `detections.json`) · easy-read (one JSON/line, grep/tail) ·
+easy-parse (`for line in f: json.loads`, or `gd`) · future-proof. Co-located with the video so a measurement can
+never be orphaned from its source; 100% on the F: permanent archive.
+
+**Migration (incremental, additive-first):** (1) switch the running #27 marathon to append
+`autocam_detections.jsonl` into each video dir (also removes the whole-file-rewrite risk for the 3-4 day run);
+(2) convert the 61 `viewport.json` → `autocam_viewport.jsonl`; (3) consolidate the 27 `D:\far_label` sets →
+per-game `ball_labels.jsonl` (carry `src`/`set`/`ts` provenance — gets the precious human labels off transient D:);
+(4) migrate `F:\gamedata\` `labels`/`track` jsonl next to the video and **repoint `gamedata.py` + DATA_INVENTORY.md**;
+(5) stop writing measurements to manifest.db. Do additive writes first; defer deletions/repointing until verified.
+
+**Trade-off / open:** layout is **flat files in the video dir** (matches the AutoCam `.mp4.jsonl` precedent) rather
+than a `measurements\` subdir. Retiring manifest.db is a go-forward stance for the *measurement streams*; a full
+sweep of all manifest.db readers/writers (field_boundary, game_phases) is a separate follow-up, not this change.
+
+## 2026-06-26: Split preprocessing — AutoCam geometry for the teacher labels, our dewarp for the student, meters for eval
+
+**Context:** This session proved AutoCam's exact balldet input recipe (full-frame, isotropic-to-`max_width=1600`
++ ceil-pad-to-32, RGB/255/fp32, **no crop / no ROI / no tracking gate**) and, separately, that anisotropic
+distortion silently corrupts labels (the marathon's hardcoded `1600x448` squished 4096x1800 Dahua ~36% vertically
+→ ~16% of confident top-1 detections locked onto the WRONG object; EXP-DIST-15). Two preprocessing goals are in
+tension: (a) **match AutoCam exactly** for a clean apples-to-apples comparison and a faithful distill teacher, vs
+(b) **use our own perspective-normalized dewarp** to give the detector a more consistent/larger ball than
+AutoCam's raw global downscale (~4.7px Dahua ball at 1600-wide) — which is exactly where we already beat AutoCam
+on far balls (0.37 vs 0.11).
+
+**Decision (Mark, 2026-06-26):** Do not pick one preprocessing; **split the three stages so each uses the right
+one:**
+1. **Teacher-label generation** (the AutoCam distill source) runs at **AutoCam's EXACT geometry** — per-game
+   isotropic-resize-to-1600-wide + ceil-pad-height-to-32 + bottom-zero-pad + RGB/255/fp32 (480 @ 7680x2160,
+   704 @ 4096x1800). This makes the distilled labels a faithful reproduction of AutoCam's own ball decisions and
+   keeps the head-to-head honest. (Now implemented in `gen_detections_all.py`.)
+2. **Student training** runs on **our own perspective-normalized / dewarped crops** with **isotropic** per-camera
+   ball-scale normalization — NOT AutoCam's raw downscale. The student may see a better-conditioned ball than the
+   teacher did; that's the point (it's how we beat AutoCam on far/lost balls). Map teacher labels into the
+   student's space carefully; never reuse a non-isotropic resize anywhere in this path.
+3. **Evaluation** is scored **in meters on the field plane** (`geom.image_to_world`), which is invariant to either
+   side's pixel preprocessing — so preprocessing differences cannot bias the AutoCam-vs-ours comparison. Divergence
+   frames get human labels; AutoCam is never GT where we disagree with it.
+
+**Why:** Matching AutoCam's geometry and using our own better geometry pull in opposite directions only if you
+force one preprocessing across all three stages. Separating them gets both: a faithful, low-noise teacher AND a
+stronger student, with a comparison that can't be gamed by preprocessing. The squish bug is the concrete proof
+that label-gen fidelity (stage 1) and student conditioning (stage 2) are distinct concerns that must be handled
+separately — a single shared resize silently broke 16% of Dahua labels.
+
+**Trade-offs / guardrails:**
+- **Isotropic everywhere is a hard rule now** — any aspect-distorting resize is banned in all three stages
+  (validated by EXP-DIST-15). Per-camera normalization must scale, never squish.
+- Distillation gets us to **parity** in normal play (the part we were failing); we only **beat** AutoCam by
+  grafting human far-ball labels onto the frames it loses — distill-alone ≠ winning. The split does not change
+  that; it just stops preprocessing from being a confound.
+- Shipped-model export stays **fixed-shape fp32** (ORT graph-fusion / DML-iGPU efficiency; Pascal fp16 is crippled)
+  — orthogonal to the training-preprocessing split but part of the same "geometry/shape discipline" lesson.
+
+## 2026-06-25: Halt the data-scaling curve at 4 rows; pivot to the recall experiment; defer N=16
+
+**Context:** The distill data-scaling curve completed N=1/2/4/8 (4 rows) and those already answer its question —
+more games on the current recipe does not improve recall (HARD R15 bounces 0.39/0.22/0.36/0.33; NORMAL R15
+flat-to-regressed 0.155/0.081/0.153/0.009). The final N=16 row then entered a crash-loop: the orchestrator
+relaunched `iter_run` ~25× over 2h, each failing rc=1 with **no Python traceback**, dying deterministically while
+building crops for one game (`guzzetta__2026.06.08_vs_Hilton_Heat_Flaitz`). No-traceback + native = a PyAV decode
+segfault (`0xC0000005`, the known issue on this box) or a 16 GB-RAM OOM on that video — environmental, not a code
+bug. G: had 20 GB free, so not disk.
+
+**Decision (Mark, 2026-06-25):**
+- **Accept the 4-row curve as the scaling answer and halt the orchestrator** (done; `curve.jsonl` preserved).
+- **Pivot the GPU to the staged recall experiment (EXP-DIST-13) immediately.** A 5th point on an already-flat line,
+  gated behind debugging one game's native decode crash, is near-zero value; the recall recipe-change is the lever.
+- **Debug the 06.08 video in a parallel CPU sub-agent** (decode triage / re-encode), and **run N=16 AFTER the
+  recall experiment finishes**, with the fixed video — not before. The recall run does not include 06.08, so it is
+  unaffected by the crash.
+
+**Why:** This is the second time the curve-vs-recall GPU question arose; the first answer ("finish curve first")
+was premised on the curve being able to finish cheaply, which the native crash falsified. The curve's purpose
+(measure whether data scaling fixes recall) is fulfilled by the 4 rows; chasing the 5th costs hours for no new
+signal. Deferring rather than abandoning N=16 keeps the curve completable once the video is fixed.
+
+**Trade-off:** The curve headline is 4 points not 5 until N=16 reruns; acceptable since the trend is unambiguous
+and N=16 is queued, not dropped. crops_game (the curve's 14 built games) is **retained** specifically so the
+deferred N=16 reuses it rather than rebuilding 2h of crops.
+
+## 2026-06-24: Stop selection engineering — the far-ball gap is detector-recall-bound, not tracker-bound
+
+**Context:** A focused 5-experiment chain (EXP-DIST-08..12, all CPU-only, curve undisturbed) re-scored the
+distill detector + `track_ball` against AutoCam on clean human GT and decomposed the loss. Findings: the
+"~5× worse than AutoCam" headline was a **far-third measurement artifact** (the held-out GT was entirely the
+far sliver, and the AutoCam baseline was circular). On clean GT the honest AutoCam viewport is 0.748, and
+per-band selection success is 0.27 far / 0.57 mid / 0.71 near — **near/mid argmax is already ≈ AutoCam before
+any tracking**. The only hole is the far third. Far is *not* a tracker problem: our shipped meters-Viterbi/
+Kalman adds nothing on far (0.153→0.153) and its teleport gate hard-forbids the correct far candidate 82.5%
+of the time (far m/px is 0.09–0.19, so a correct far move looks like a 67 m teleport). The reference tool's
+far-follow has **no selection intelligence** — argmax → ~3 s recency-weighted pixel-space moving average, no
+rejection. Replicating that dumb smoother **doubles** our far recall (0.153→0.342) but caps there: an oracle
+*perfect* per-frame selector = 0.811 un-smoothed but collapses to 0.369 through the same smoother (smoothing
+is a ~16–19 m floor), and our detector's far argmax is only 13.5% ball-centered.
+
+**Decision:**
+- **No more selection/tracker engineering as the path to the far gap.** It is characterized and near its
+  ceiling. The dominant remaining wall is **detector far-RECALL** — getting the ball to be the argmax — which
+  the venue-diversity data-scaling curve and the new far-label sets directly target. That is the primary lever.
+- **Bank, but do not yet ship, the far-band simplification:** replace the far-band selector with the dumb
+  pixel-smoother (or minimally drop the teleport gate behind a far-band flag) for a cheap ~2.2× far win. It is
+  **gated on a near/mid no-regression A/B**, which needs a continuous near/mid candidate stream (GPU/decode →
+  post-curve). The shipped `reranker.py` default stays untouched until that check passes. Geometric evidence
+  (the fix scales the budget by local m/px, which collapses 4–15× from far to near with a `max(scale,1)`
+  guard) says it cannot loosen near/mid association — but we verify empirically before shipping.
+- **Open a post-curve detector experiment:** test whether matching the reference detector's operating input
+  width raises our far argmax (resolve the conflicting RE width notes in the F: archive first).
+
+**Why:** The decomposition is unambiguous — every downstream selector/smoother is capped by how often the ball
+is the per-frame argmax, and ours is 13.5% on far. Spending more on selection chases a ~0.06–0.19 residual
+while the detector caps the whole system. This also corrects the prior session's framing that "the tracker
+beats AutoCam" (that 0.58 was 5 cherry-picked clips; on continuous far play the same tracker is 0.153).
+
+**Trade-off:** We leave a real ~2.2× far-selection win on the bench until the near/mid regression check is
+possible. Acceptable: shipping an unverified change to the live broadcast selector risks regressing the 70%
+of play (near/mid) that already works, and the detector lever dwarfs it anyway.
+
+## 2026-06-24: 6/15 active-play windows go in the canonical `play_windows.json` at TRUE fps, keyed by archive id
+
+**Context:** Mark gave exact active-play windows for `heat__2026.06.15_vs_Irondequoit_away`. Two ambiguities
+had to be resolved when persisting them: (a) **which store/key**, and (b) **which fps** to convert
+seconds→frames with.
+
+**Decision:**
+- **Store = the existing `G:\ballresearch\play_windows.json`** — the canonical active-play store for 2026
+  games (which have no per-game `manifest.db`; 2024/25 games carry their phases in `manifest.db`
+  `game_phases`). It is read by the standard accessor `gamedata_sources.play_windows()` and directly by the
+  distill pipeline (`iter_run.py` crop gate, `orchestrator.py` curve eligibility). No new side-file was
+  created — that would have violated the "one canonical store, never invent side-files" rule.
+- **Key = `guzzetta__2026.06.15_vs_Irondequoit`** (the `ball_distill` archive-dir name), NOT the registry id
+  `heat__…`. Every existing entry is keyed by the archive-dir name, and `iter_run.py`/`orchestrator.py` do an
+  **exact-key** lookup on that name. Heat archives carry the legacy `guzzetta__` prefix. The registry-id
+  fallback in `gamedata_sources.play_windows()` (token-overlap ≥4) still resolves `heat__…away` to this entry
+  unambiguously (overlap 5; the 6/04 sibling is overlap 3 and has `windows:null`).
+- **fps = the video's TRUE 19.815** (measured `average_rate=19.8149`, 108160 frames / 5458.5 s), NOT the
+  integer `FPS=20` proxy `add_play_windows.py` uses for the other 2026 entries. At 91 minutes the proxy drifts
+  ~1% (~50 frames by game-end) — fine as a coarse warmup/halftime cut, but Mark supplied precise frames so we
+  store them precisely. These raw-frame indices equal the archive global-frame space (concat of the 19
+  segments), so they need no conversion for the `iter_run.py` `base+f` consumer.
+
+**Why:** Match the existing mechanism exactly (so the running filter picks it up with zero new code), keep a
+single source of truth, and prefer the precise frames Mark measured over a 20-fps approximation now that we
+have them. The `FPS=20` proxy entries are left untouched (reversing them is a separate cleanup, not in scope).
+
+**Trade-off:** Mild inconsistency — 6/15 uses true fps while sibling 2026 entries use the 20-fps proxy. Worth
+it: the proxy is an acknowledged approximation, and active-play gating is robust to the ~1% it would cost.
+
+## 2026-06-24: Invalid data-scaling curve is quarantined + regenerated, not trusted
+
+**Context:** The distill data-scaling curve (`G:\ballresearch\distill\curve.jsonl`, N=1..16) was produced
+by a stale `iter_run.py` that silently trained on only ~4 games at every N (12/16 games hit a now-deleted
+`"NO polygon … skip"` path). The metric was flat — but because of the bug, not because venue diversity
+fails to help. A previous session believed the polygon fix had de-risked the curve; the fix was real but
+landed *after* the curve ran.
+
+**Decision:** Treat the curve row as untrustworthy on its own. Concretely:
+- **Quarantine, never delete:** the bad curve is preserved as `curve.jsonl.buggy4games_<ts>` (history),
+  and the curve regenerated from N=1 with the fixed binary.
+- **Verify game-count from the run log, not the curve row:** every `iter_N{N}.log` prints
+  `train roots (K games)` — `K` must equal the resolved game count, else the point is invalid. The curve
+  row's `games` list is the *requested* set, not what trained.
+- **One orchestrator owns the curve** (single GPU job; it writes a `curve_gpu.flag` so the variant filler
+  yields). Re-running with the fixed code is cheap relative to trusting a silently-broken result.
+
+**Why:** This is the second time a silent data-selection bug (first the fuzzy resolver, now a stale
+binary) gutted the curve. The lesson (per "verify before reporting", "verify tracks before videos"):
+a green-looking metric file is not evidence the intended data trained — confirm the denominator.
+
+## 2026-06-24: NORMAL-play eval requires a clean on-field + in-band ground truth
+
+**Context:** The curve's NORMAL split scored the detector against AutoCam-detector dets (conf≥0.40)
+corroborated only by viewport-x within 500 px — with **no Y constraint and no field-polygon test**.
+45% of that "normal" GT lands off-field or outside the eroded eval band-mask (far-sideline corner),
+where the detector structurally cannot fire. That caps the NORMAL ceiling well below 1.0 regardless of
+model quality, making the "normal-play collapse" partly an eval artifact.
+
+**Decision:** The honest NORMAL metric filters GT to **on-field (inside the raw field polygon, ≤40 px
+margin) AND inside the eroded eval band-mask** — i.e. only frames the detector can win. HARD (human far
+labels) stays as-is (already 92% in-mask). A standalone `clean_eval.py` (CPU-only, reuses the
+`spc_eval_cache` buffers; lives in `G:\ballresearch` scratch, not the repo) reports raw_normal vs
+clean_normal side by side so the artifact magnitude stays visible. AutoCam-as-GT in NORMAL remains a
+known circularity to audit (human-sample a few normal frames) before any "matches AutoCam" claim.
+
+**Why:** Comparing AutoCam (0.96 normal R15) to a detector scored on targets it's masked out of is not a
+fair head-to-head. Measure each side only where the task is winnable, and keep the off-field/masked count
+in the report.
+
+## 2026-06-24: NORMAL GT is HUMAN labels, not a filtered AutoCam proxy (supersedes the filter-only fix)
+
+**Context:** The prior entry (same day) proposed making NORMAL honest by *filtering* the AutoCam-derived
+GT to on-field + in-band. Investigating further (EXP-DIST-03): filtering still inherits AutoCam's
+**circularity** — the proxy only contains balls AutoCam already detected at conf≥0.40, so it can't include
+the balls AutoCam misses, which is precisely where the distilled detector is supposed to win. A filtered
+proxy raises the ceiling but still can't measure the detector's real edge. Separately, I confirmed (vision
++ y-distribution) that the existing Spencerport human labels (`spc_clip1..5`) are **far-ball** GT — they
+correctly feed HARD and are NOT usable as normal-play GT. So no existing human normal-play GT existed.
+
+**Decision:** The honest NORMAL split uses **human normal-play labels**, collected with the same far-label
+tool that produced `spc_clip*`. Concretely:
+- New set **`spc_normal1`** = Spencerport frames 9460–10020 (141 frames, every-4th) — a continuous
+  near/mid-field active-play stretch inside the eval window [7900,11500], in the gap between spc_clip3 and
+  spc_clip4. Built by the canonical `G:\ballresearch\farlabel_clip.py`; served by the running annotation
+  server from `D:\training_data\far_label\spc_normal1\`.
+- **Naming convention:** `spc_normal*` = human NORMAL-play GT; `spc_clip*` / `spc_diverge` /
+  `spc_hard_review` = human FAR GT (HARD). The eval split routes by this prefix.
+- **Wiring (server scratch `iter_run.py` + `reeval_clean.py`):** HARD ingestion excludes `spc_normal*`;
+  NORMAL prefers human `spc_normal*` labels and falls back to the (filtered) AutoCam proxy ONLY while no
+  `spc_normal*` labels exist — so the in-flight curve is not disturbed and self-corrects once labeled.
+- The filter-only approach from the prior entry is retained solely as the labeled-yet fallback, not the
+  target metric.
+
+**Why:** A detector whose whole value proposition is "finds balls AutoCam loses" cannot be honestly graded
+against "balls AutoCam found." Human GT is the only non-circular NORMAL reference. The cost is one ~141-
+click human pass; the payoff is the first interpretable NORMAL number for the venue-diversity question.
+
+## 2026-06-15: v4 (perspective-normalized, warped) added ALONGSIDE v3 (tile) — additive, not a rename
+
+**Context:** The perspective-normalized full-frame detector was drafted on this branch under the
+name "v3", but "v3" was already the tile-based detector lineage (`train_v3.py`, `train.py`'s
+`V3_*` config + their tests). Conflating them was confusing.
+
+**Decisions:**
+- **The new perspective-normalized, warped-full-frame strategy is designated v4.** The existing
+  tile-based detector keeps the v3 name. They are two coexisting strategies.
+- **Additive, not a rename.** The v3 path is **fully maintained** and left untouched —
+  `train_v3.py`, `training/train.py` (incl. its `V3_*` hyperparameters), the shared `manifest.py`
+  dataset knobs, and their tests are unchanged. v4 is added as **new files only**:
+  `training/train_v4.py` (warped entry scaffold), `training/data_prep/warped_pack.py`
+  (pre-decoded warped-frame shards), `training/experiments/io_benchmark.py` (the I/O gate),
+  `tests/test_warped_pack.py`. The perspective **design docs** (PERSPECTIVE_NORMALIZED_DETECTOR.md)
+  are relabeled v4 because they describe the v4 strategy — that is correct labeling, not removal of
+  any v3 content.
+- **train_v4 fixes the v3 starvation:** persistent-worker DataLoader (`workers` default 8, not 0)
+  + no train-time JPEG decode (warp once, offline, into shards).
+
+**Trade-off:** Two training entry points (tile v3 + warped v4) and some shared dataset knobs. Worth
+it: v3 stays a working fallback while v4 is validated, and the lineage is unambiguous.
+
+---
+
+## 2026-06-15: Reolink capture image profile tuned for on-field color differentiation
+
+**Context:** Far balls wash out against bright sky/sun-flared grass. The fix is capture-side
+(can't repair recorded footage). Tuned the "SoccerCam" Duo 3 PoE against a controlled paused scene
+and measured each setting objectively on the field region (Lab chroma spread = color separability,
+luminance contrast, and saturation/highlight clipping %).
+
+**Findings (measured, not eyeballed):**
+- **Color differentiation is near its ceiling at moderate saturation.** `chroma_spread` is ~flat
+  (~14) across all settings — more saturation raises vividness (chroma_mean 47→63) but NOT
+  separability, and **clips**: saturation 175 → 23% of field pixels saturation-clipped, 185 → 37%.
+  Clipping *merges* colors, so over-saturation actively hurts. ⇒ **cap saturation at 150.**
+- **WDR (`backLight=DynamicRangeControl`) on** keeps highlight detail in the high-dynamic-range
+  sun+field scene; `drc` 150 (110–200 barely moved the metric).
+- **`nr3d` (3D noise reduction) is the big un-baked lever:** OFF recovers ~16× more fine detail
+  (Laplacian variance 8→160), i.e. it currently smooths away the texture a 3–8px far ball lives in.
+  NOT flipped by default — it trades detail for noise that eats the 20 Mbps bitrate. **Open
+  experiment:** A/B nr3d on/off (likely with a bitrate bump) on real far-ball footage before
+  committing.
+- Window/highlight clipping itself is lens/sensor physics and is NOT a goal (per Mark).
+
+**Decision:** Baked the proven profile into `ReolinkCamera.apply_optimal_settings`
+(`OUTDOOR_ISP`/`OUTDOOR_IMAGE` in `video_grouper/cameras/reolink.py`): WDR on, drc 150,
+dayNight=Color (locked, no daytime IR flip), antiFlicker Off, saturation 150, contrast 140,
+bright 118, sharpen 145. `get_current_settings` now reports WDR/sat/contrast/nr3d.
+
+**Caveat:** Tuned on an emissive TV scene; saturation/contrast/WDR are scene-independent processing
+curves so this is a sound baseline, but validate on the next real game. `gain` is locked 40–40 and
+not settable via the HTTP API on this model, limiting direct exposure control.
+
+---
+
+## 2026-06-15: v4 detector pivots from bbox regression to a heatmap + multi-frame design
+
+**Context:** The first real eval killed the bbox approach. A nano bbox detector trained on the
+reference-detector bootstrap at TW=3264, evaluated center-distance vs Mark's human far-ball ground
+truth (162 balls): **far-recall 12% @ conf0.05 (precision 22%)**, vs the reference detector's
+**74% far-recall / 76% precision**. Two structural causes: (a) at TW=3264 the far ball is ~3.6px —
+at/below the detector's smallest stride (8px) and meaningless for IoU-mAP (a 2px miss → IoU≈0);
+(b) the bootstrap training labels (from the reference detector) miss far balls, so there's little
+far-ball signal to learn. Bbox regression is the wrong tool for a 3–8px ball.
+
+**Decision:** Adopt a **ball-center heatmap + multi-frame (temporal)** detector for v4 with a
+lightweight high-resolution-feature backbone; output a per-pixel center heatmap and peak-pick (x,y).
+Why it fits us: removes the tiny-box / anchor / stride / IoU failure mode entirely; **exploits motion**
+across consecutive frames (our **static camera** makes frame-differencing clean — a lever bbox
+regression ignored); center-distance is the native metric (already our eval); **our far-label clicks
+ARE heatmap targets** (Gaussian at the click — no bbox relabel); the perspective warp still helps
+(scale-normalize + field-band crop → fewer pixels, ball ~uniform size). Detailed survey of candidate
+architectures + the no-train baseline comparison are archived on **F:** (external research stays out
+of the OSS repo).
+
+**Edge constraint is non-binding:** requirement is 90 min @ 20 fps in <24 h = **~1.25 fps** (≈0.3 fps
+at every-4th-frame). Lightweight heatmap trackers run far faster than this on CPU (tens–hundreds of
+fps), so realtime is plausible while we optimize for ACCURACY (high input resolution, tiling) not
+speed. Hard requirement: stay CPU-executable + export to ONNX/CoreML/TFLite — **no required GPU**.
+
+**Next:** a no-training baseline of a pretrained heatmap model on the Irondequoit clip vs the 74%
+reference, then fine-tune on our warped frames + human far-ball labels. The nano bbox run (12%
+far-recall) stands as the recorded bbox baseline.
+
+---
+
+## 2026-06-15: `target_width` is a swept speed/accuracy knob (the 1280 warp default is wrong for v4)
+
+**Context:** `field_warp.build_field_warp` resizes the warped band horizontally to `target_width`
+(vertical scaled by the same `target_width/src_w` ratio). The module default
+`DEFAULT_TARGET_WIDTH=1280` is a 6× horizontal downscale from 7680 → a ~0.08 MP image that crushes a
+far ball from ~8.5px to ~1.4px — **below AutoCam's ~3264 working width**, so it cannot beat AutoCam
+on far balls. The earlier "~0.08 MP / fits-on-G:" sizing came from this default and was wrong.
+
+**Decisions:**
+- **`target_width` is the central speed/accuracy trade-off, not a fixed value.** Ideal is high-res
+  (TW≈5120–7680 → ~1.2–2.7 MP warped frames; far field full-res, near field vertically compressed).
+  We **sweep** TW ∈ {3264, 5120, 7680} and pick the **lowest** that still **beats AutoCam on
+  far-ball recall** at acceptable speed (floor ≈ AutoCam's 3264).
+- **Match train + infer resolution.** Training at one TW and inferring at a lower one shrinks balls
+  below the learned scale → under-detection (train-test resolution discrepancy / FixRes). Compare
+  matched `(train@TW, infer@TW)` pairs; explore downscaling via a short FixRes fine-tune at the
+  target TW, not by inferring a high-res model low.
+- **Two halves:** the speed axis is measured now (I/O benchmark); the accuracy axis (far-ball recall
+  vs AutoCam at each TW) is the downstream resolution experiment that selects the production TW.
+- At ~2.7 MP/frame the pre-decoded set is hundreds of GB→>1 TB and does **not** fit on G:, so
+  shard-rotation streaming (`warped_pack.ShardRotator`) is required.
+
 ---
 
 ## 2026-06-30: Truncation representation — explicit start/end booleans in game.json

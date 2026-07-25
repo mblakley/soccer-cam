@@ -100,7 +100,12 @@ _HOMEGROWN_STAGE_FIELDS: dict[str, list[str]] = {
         "detect_confidence",
         "detect_frame_interval",
     ],
-    "track": ["track_kalman_gate", "track_max_missing"],
+    # Legacy "track" migrates to ball_select; its Kalman-gate tunables have no
+    # analogue in the selection stack (learned emission + physics Viterbi) and
+    # are dropped. The selector model is supplied post-migration like the
+    # detector model.
+    "ball_select": [],
+    "plan_camera": [],
     # Only the output resolution survives the migration; the legacy render
     # tunables (ema / lead_room / fov_deg) have no analogue in the cylindrical
     # broadcast render, which uses its own (defaulted) control params.
@@ -149,8 +154,13 @@ def migrate_ball_tracking_to_pipeline(bt: dict | None) -> dict | None:
         )
         # Part of the migration: the legacy "detect" stage IS the ball_detect
         # step (renamed when field_detect arrived and bare "detect" became
-        # ambiguous).
-        stages = ["ball_detect" if s == "detect" else s for s in stages]
+        # ambiguous), and legacy "track" IS the ball_select step (the selection
+        # stack replaced the plain Kalman tracker). plan_camera joins the chain
+        # before render — the renderer executes its camera path.
+        renames = {"detect": "ball_detect", "track": "ball_select"}
+        stages = [renames.get(s, s) for s in stages]
+        if "render" in stages and "plan_camera" not in stages:
+            stages.insert(stages.index("render"), "plan_camera")
         out["steps"] = stages
         for stage in stages:
             fields = _HOMEGROWN_STAGE_FIELDS.get(stage, [])

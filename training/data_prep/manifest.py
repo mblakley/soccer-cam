@@ -1104,8 +1104,32 @@ def migrate_all(
 # Tile position pattern: _r{row}_c{col} at end of stem
 _TILE_POS_RE = re.compile(r"_r(\d+)_c(\d+)$")
 
-DEFAULT_EXCLUDE_ROWS = {0}
+# Far-field recall fix (v3): row 0 is the *far* third of a 7x3 tile grid
+# (rows 0=far, 1=mid, 2=near). v2 unconditionally dropped row 0, so the model
+# never saw a far-field tile and far-ball recall collapsed (~0.29). The default
+# is now to INCLUDE every row; callers that genuinely want a row gone pass it in
+# explicitly via `exclude_rows`.
+DEFAULT_EXCLUDE_ROWS: set[int] = set()
+
+# Which grid row(s) are "far field". Far positives are rare and are exactly
+# where recall is worst, so we up-weight them (see FAR_POSITIVE_MULTIPLIER).
+FAR_FIELD_ROWS: frozenset[int] = frozenset({0})
+
+# Multiplier applied to far-field positive samples on top of their per-tile
+# spatial weight. Far balls are small, rare, and the production camera differs
+# most from the training cameras out there, so they need extra gradient.
+FAR_POSITIVE_MULTIPLIER = 4.0
+
 DEFAULT_TILE_WEIGHTS = {
+    # Far row (0) — now included and weighted like the other corners/edges.
+    # The big far-field emphasis comes from FAR_POSITIVE_MULTIPLIER, not these.
+    (0, 0): 3,
+    (0, 1): 2,
+    (0, 2): 2,
+    (0, 3): 2,
+    (0, 4): 2,
+    (0, 5): 2,
+    (0, 6): 3,
     (1, 0): 3,
     (1, 1): 2,
     (1, 2): 2,
@@ -1124,6 +1148,93 @@ DEFAULT_TILE_WEIGHTS = {
 DEFAULT_VAL_SPLIT = 0.15
 DEFAULT_NEG_RATIO = 1.0
 ROW_2_OVERSAMPLE = 2
+
+# ---------------------------------------------------------------------------
+# Camera-balanced sampling (v3)
+# ---------------------------------------------------------------------------
+# Production is a Reolink camera (7680x2160), but the labeled training set is
+# overwhelmingly Dahua (~81 games vs ~1 Reolink). Left unweighted, Dahua tiles
+# dominate the gradient ~81:1 and the model barely learns the production camera
+# — which is exactly where far balls differ most. We re-weight whole games by
+# camera so the *effective* (weighted) Dahua:Reolink tile contribution matches a
+# target ratio instead of the raw game-count ratio.
+#
+# Math (see compute_camera_weights):
+#   Let n_reo, n_dahua = effective unweighted tile counts per camera class.
+#   We want   (n_dahua * w_dahua) : (n_reo * w_reo) == TARGET_DAHUA_REOLINK_RATIO.
+#   We anchor Reolink at weight 1.0 (w_reo = 1.0) and solve for w_dahua:
+#       w_dahua = TARGET * n_reo / n_dahua
+#   A TARGET of 1.0 means "balanced" (Dahua and Reolink contribute equally);
+#   <1.0 means "Reolink-favored". Default 1.0 = balanced, which already lifts the
+#   single Reolink game from a ~1% share to ~50% of the effective gradient.
+TARGET_DAHUA_REOLINK_RATIO = 1.0
+
+# video_format values in the game registry that map to each camera class.
+# (See data_prep/game_registry.py::_detect_video_format.)
+REOLINK_VIDEO_FORMATS: frozenset[str] = frozenset({"reolink_segments"})
+DAHUA_VIDEO_FORMATS: frozenset[str] = frozenset({"dahua_segments", "dav_only"})
+
+
+def classify_camera(video_format: str | None) -> str:
+    """Map a registry ``video_format`` to a camera class.
+
+    Returns one of ``"reolink"``, ``"dahua"``, or ``"other"`` (unknown/non-
+    panoramic formats that should not participate in camera balancing).
+    """
+    if video_format in REOLINK_VIDEO_FORMATS:
+        return "reolink"
+    if video_format in DAHUA_VIDEO_FORMATS:
+        return "dahua"
+    return "other"
+
+
+def compute_camera_weights(
+    game_tile_counts: dict[str, int],
+    game_formats: dict[str, str | None],
+    target_ratio: float = TARGET_DAHUA_REOLINK_RATIO,
+) -> dict[str, float]:
+    """Compute a per-game sampling weight that camera-balances the gradient.
+
+    Reolink (production) is anchored at weight 1.0. Dahua games are scaled so the
+    *effective* Dahua:Reolink tile contribution equals ``target_ratio`` instead
+    of the raw count ratio. Games whose camera class is "other" (or whose class
+    has zero tiles) get weight 1.0 and are left untouched.
+
+    Args:
+        game_tile_counts: game_id -> number of (sampled) tiles for that game.
+        game_formats: game_id -> registry ``video_format`` (or None).
+        target_ratio: desired effective Dahua:Reolink ratio (1.0 == balanced,
+            <1.0 == Reolink-favored).
+
+    Returns:
+        game_id -> float weight (multiplies how many times each tile is emitted).
+    """
+    n_reo = 0
+    n_dahua = 0
+    for gid, count in game_tile_counts.items():
+        cam = classify_camera(game_formats.get(gid))
+        if cam == "reolink":
+            n_reo += count
+        elif cam == "dahua":
+            n_dahua += count
+
+    # If either camera class is absent, there is nothing to balance.
+    if n_reo == 0 or n_dahua == 0:
+        return dict.fromkeys(game_tile_counts, 1.0)
+
+    w_reo = 1.0
+    w_dahua = target_ratio * n_reo / n_dahua
+
+    weights: dict[str, float] = {}
+    for gid in game_tile_counts:
+        cam = classify_camera(game_formats.get(gid))
+        if cam == "reolink":
+            weights[gid] = w_reo
+        elif cam == "dahua":
+            weights[gid] = w_dahua
+        else:
+            weights[gid] = 1.0
+    return weights
 
 
 def _parse_tile_position(stem: str) -> tuple[int, int] | None:
@@ -1190,11 +1301,28 @@ def build_dataset(
     tile_weights: dict[tuple[int, int], int] | None = None,
     filter_games: list[str] | None = None,
     include_negatives: bool = True,
+    far_positive_multiplier: float = FAR_POSITIVE_MULTIPLIER,
+    game_formats: dict[str, str | None] | None = None,
+    camera_balance_ratio: float | None = TARGET_DAHUA_REOLINK_RATIO,
 ) -> dict[str, int]:
     """Build a YOLO dataset from manifest, with smart sampling.
 
     Hardlinks tile images from tiles_dir and writes .txt labels from SQLite.
     Produces train.txt/val.txt with spatial weighting and hard-negative sampling.
+
+    v3 far-ball recall knobs:
+        exclude_rows: rows of the tile grid to drop entirely. Defaults to
+            DEFAULT_EXCLUDE_ROWS (now empty), so the far row (0) is INCLUDED.
+        far_positive_multiplier: extra emphasis applied to far-field (row in
+            FAR_FIELD_ROWS) positive samples on top of their per-tile weight.
+            Default FAR_POSITIVE_MULTIPLIER (~4x). 1.0 disables it.
+        game_formats: game_id -> registry ``video_format``, used to camera-balance
+            sampling. If None, no camera balancing is applied (every game weight
+            1.0). Load it from the game registry — e.g. ``{g["game_id"]:
+            g["video_format"] for g in load_registry()}``.
+        camera_balance_ratio: target effective Dahua:Reolink ratio when
+            game_formats is provided (1.0 == balanced, <1.0 == Reolink-favored).
+            None disables camera balancing even if game_formats is given.
     """
     random.seed(seed)
     if exclude_rows is None:
@@ -1370,12 +1498,34 @@ def build_dataset(
     t0 = time.time()
     train_paths = []
 
-    # All positives
+    # Camera-balanced per-game weights. Production is Reolink but the labeled set
+    # is ~81:1 Dahua; without this the gradient barely sees the production camera
+    # (and far balls are where the cameras differ most). We balance on positive
+    # tile counts per game, anchoring Reolink at 1.0. See compute_camera_weights.
+    camera_weight: dict[str, float] = {}
+    if game_formats is not None and camera_balance_ratio is not None:
+        pos_counts: dict[str, int] = {}
+        for key in train_positive_stems:
+            gid = key.split("/", 1)[0]
+            pos_counts[gid] = pos_counts.get(gid, 0) + 1
+        camera_weight = compute_camera_weights(
+            pos_counts, game_formats, camera_balance_ratio
+        )
+
+    # All positives. Effective repeats = spatial tile weight
+    #   * far-field multiplier (row in FAR_FIELD_ROWS)
+    #   * camera-balance weight (per game).
     for key in sorted(train_positive_stems):
         path_str = str(train_tile_index[key]).replace("\\", "/")
+        gid = key.split("/", 1)[0]
         pos = _parse_tile_position(key.split("/")[-1])
-        weight = tile_weights.get(pos, 1) if pos else 1
-        for _ in range(weight):
+        weight = float(tile_weights.get(pos, 1)) if pos else 1.0
+        if pos and pos[0] in FAR_FIELD_ROWS:
+            weight *= far_positive_multiplier
+        weight *= camera_weight.get(gid, 1.0)
+        # Round to an integer emit count; never drop a positive below 1.
+        repeats = max(1, round(weight))
+        for _ in range(repeats):
             train_paths.append(path_str)
 
     # Hard negatives
@@ -1676,7 +1826,31 @@ def main():
         "--no-weights", action="store_true", help="Disable spatial weighting"
     )
     bld.add_argument(
-        "--no-exclude", action="store_true", help="Don't exclude any tile rows"
+        "--no-exclude",
+        action="store_true",
+        help="Don't exclude any tile rows (default already includes all rows)",
+    )
+    bld.add_argument(
+        "--exclude-rows",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Grid rows to drop entirely (default: none — far row 0 is included)",
+    )
+    bld.add_argument(
+        "--far-mult",
+        type=float,
+        default=FAR_POSITIVE_MULTIPLIER,
+        help="Far-field positive oversampling multiplier (default: %(default)s)",
+    )
+    bld.add_argument(
+        "--camera-balance",
+        type=float,
+        default=None,
+        metavar="RATIO",
+        help="Camera-balance sampling to this effective Dahua:Reolink ratio "
+        "(1.0=balanced); reads video_format from the game registry. "
+        "Omit to disable camera balancing.",
     )
 
     # catalog
@@ -1762,6 +1936,26 @@ def main():
         conn.close()
     elif args.command == "build-dataset":
         conn = open_db(args.db)
+
+        # Resolve which rows to exclude. --exclude-rows wins; --no-exclude forces
+        # empty; otherwise fall back to the (now empty) default that includes the
+        # far row.
+        if args.exclude_rows is not None:
+            exclude_rows = set(args.exclude_rows)
+        elif args.no_exclude:
+            exclude_rows = set()
+        else:
+            exclude_rows = DEFAULT_EXCLUDE_ROWS
+
+        # Camera balancing reads video_format per game from the registry.
+        game_formats = None
+        if args.camera_balance is not None:
+            from training.data_prep.game_registry import load_registry
+
+            game_formats = {
+                g["game_id"]: g.get("video_format") for g in load_registry()
+            }
+
         build_dataset(
             conn,
             tiles_dir=args.tiles,
@@ -1769,10 +1963,13 @@ def main():
             val_split=args.val_split,
             neg_ratio=args.neg_ratio,
             seed=args.seed,
-            exclude_rows=set() if args.no_exclude else DEFAULT_EXCLUDE_ROWS,
+            exclude_rows=exclude_rows,
             tile_weights=None if args.no_weights else DEFAULT_TILE_WEIGHTS,
             filter_games=args.games,
             include_negatives=not args.no_negatives,
+            far_positive_multiplier=args.far_mult,
+            game_formats=game_formats,
+            camera_balance_ratio=args.camera_balance,
         )
         conn.close()
     elif args.command == "backup":

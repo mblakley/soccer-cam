@@ -107,6 +107,9 @@ Now resolved by game registry update -- all games have paths in registry.
 ### 4.4 Sonnet QA Integration (Issue 13)
 QA system exists but isn't in the pipeline. Add `action_sonnet_qa()` to orchestrator between labeling and human review. Create `training/pipeline/sonnet_reviewer.py` for Claude API vision calls.
 
+### 4.5 Game-phase (game_state) audit — ALL games (Mark 2026-07-21)
+`active_play_ranges` (warm-up/HT/pre-&post filtering, used by dumps + the viewport-label builder) is only as good as each game's `game_state`. Fairport 2026.06.06 mislabels warm-up as `first_half` from frame 0 with a zero-length `pre_game` — so its viewport set was 194 warm-up frames (manually pruned; kickoff ~1:53). Audit every game's phase boundaries (kickoff / HT / second-half start / final whistle), correct the mislabels, so all downstream active-play filtering is trustworthy. Not urgent; Fairport specifically not worth a one-off fix.
+
 ---
 
 ## Priority 5: Training Diversity
@@ -149,6 +152,29 @@ Add orchestrator actions: `action_tile_untiled_games()`, `action_pack_unpacked_g
 Replace all Copy-Item with robocopy in `machine_manager.py`.
 
 ---
+
+## Player Analytics via Person Detection (Future — Mark, 2026-07-18)
+
+The ph1 person-head work produced reusable player-detection foundations (yolo26n sidecar corpus,
+person channel in the detector, person centroids as framing fallback). Planned extension:
+
+- [ ] Person boxes over full COLOR bands at dump time (multi_dump-style pass)
+- [ ] Torso-region jersey-color descriptor per box -> per-game 2-3-way clustering
+      (team A / team B / referee+keepers)
+- [ ] Team-labeled player positions per frame -> possession estimates, per-team heatmaps,
+      formation views (TTT coaching-platform features)
+- Sequencing: ph1v2 validation -> person-channel selector feature -> color band plumbing
+  (shared with the parked chroma/ball-encoding work — one color store serves both) -> jersey
+  classification as the first analytics consumer.
+- Sway measurement (2026-07-18, CORRECTED after Mark challenged the first pass): BASELINE sway is
+  sub-pixel (Spencerport 0.63 px median; windy-game mid-segments similar) BUT gusts are episodic
+  and ROLL-dominated — audio-guided sampling of the windy 06.06 Fairport game found peak windows
+  with 10-13 px single-frame shifts on the BAND EDGES (L 12.8 / R 10.2 vs center 4.2 = mast
+  twist), i.e. multi-ball-diameter diff halos exactly where far-corner balls live. First
+  unsampled center-patch pass missed both effects — episodic phenomena need signal-guided
+  sampling. Exposure fraction (frames affected) being quantified; if material, the cheap fix is
+  per-tile phase-correlate alignment of the 3-frame window (not the full stabilize-step port).
+  Wind blur (intra-exposure) still unmeasured.
 
 ## Video Inventory System (Future)
 

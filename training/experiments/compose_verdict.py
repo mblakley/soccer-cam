@@ -1,0 +1,346 @@
+"""Verdict composer — emits the BOUND verdict composition (DECISIONS 2026-07-23):
+the tie-break hierarchy walked top-down with every row stated decisive-or-zero,
+plus the full arm x instrument x strata table with no cell omitted as noise.
+
+Protocol lives in tooling: a verdict that takes longer to read than to run is a
+protocol bug. Runs on cached eval dumps (zero GPU).
+
+Usage (server):
+    python -m training.experiments.compose_verdict \
+        --dump-dir G:/ballresearch/geodet --arms mg_ctrl mg_geo mg_norm
+
+Dump naming: cands_<instrument>_<arm>.pkl. Instrument registry (EXP-DIST-71,
+amended 07-24): spc = SPC-134 (continuity) | spc18k = SPC-18k@5473 |
+spcfull = SPC-FULL (whole 1,351-GT pool) | fair = FAIR-6k@47640 |
+iron18k = IRON-18k@1501, GOLDEN-HOUR STRESS row only — Iron 06.15 is the
+documented pure-lighting game (EXP-DIST-43/45: low-sun backlight, ball often
+not a candidate at all), so its far events measure glare robustness, not
+ranking quality; demoted from primary by Mark 2026-07-24 before the composed
+read. Pittsford-human + viewport rows are appended manually when available
+(printed as PENDING otherwise).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pickle
+from pathlib import Path
+
+import numpy as np
+
+GAP = 64
+NBOOT = 2000
+FAR_PX = 8.0
+# hierarchy order (DECISIONS 07-23, amended 07-24 (i)+(i-addendum)): Iron
+# demoted to stress context (golden hour, never decisive); SPC-18k is primary.
+# SPC-FULL was attempted and WITHDRAWN the same day — a full-pool single-span
+# eval costs ~5x an 18k window and the first attempt silently scored only the
+# SPC-134 window (max-frames truncation; eval_detector now hard-errors there).
+# Detector-metric instruments only — human/viewport rows sit above and are
+# appended by the caller.
+HIERARCHY = ["spc18k", "spc", "fair"]
+STRESS = ["iron18k"]  # printed with full stats, excluded from the decisive walk
+INSTRUMENT_NAMES = {
+    "spc": "SPC-134",
+    "spc18k": "SPC-18k@5473",
+    "iron18k": "IRON-18k@1501*",
+    # ^ = static-distractor robustness row (07-24 (l)): FULL decisive standing —
+    # annotated, not demoted; it caught a real product failure (the (1637,470)
+    # furniture object) and certifies the #19 size-prior + persistence pair.
+    "fair": "FAIR-6k@47640^",
+}
+SPC_DIR = Path(r"F:\Heat_2012s\2026.05.31 - vs Spencerport gold 2 (away)")
+
+
+def _events(frames: list[int]) -> list[list[int]]:
+    frames = sorted(frames)
+    if not frames:
+        return []
+    ev = [[frames[0]]]
+    for f in frames[1:]:
+        (ev[-1].append(f) if f - ev[-1][-1] <= GAP else ev.append([f]))
+    return ev
+
+
+def _load_strata(game_dir: Path) -> dict[int, str]:
+    """frame -> NORMAL/HARD/AGREE from ball_labels set provenance."""
+    from training.data_prep import distill_dataset as dd
+
+    out: dict[int, str] = {}
+    p = game_dir / "ball_labels.jsonl"
+    if not p.exists():
+        return out
+    gj = json.loads(
+        (game_dir / "game.json").read_text(encoding="utf-8", errors="ignore")
+    )
+    offs = dd.seg_offsets(gj["segments"])
+    with open(p, encoding="utf-8", errors="ignore") as fh:
+        for ln in fh:
+            try:
+                r = json.loads(ln)
+            except Exception:
+                continue
+            if r.get("seg") is None or r.get("f") is None:
+                continue
+            g = offs.get(r["seg"], 0) + int(r["f"])
+            s = str(r.get("set", "")).lower()
+            out[g] = (
+                "AGREE"
+                if "agree" in s
+                else "HARD"
+                if any(k in s for k in ("clip", "hard", "diverge", "uncertain"))
+                else "NORMAL"
+            )
+    return out
+
+
+def score_dump(pkl_path: Path, rng: np.random.Generator):
+    """{metric: (point, lo, hi, n_events)} for far/near ceiling/argmax."""
+    from video_grouper.inference.world_geometry import build_field_geometry
+
+    with open(pkl_path, "rb") as fh:
+        d = pickle.load(fh)
+    geom = build_field_geometry(np.asarray(d["polygon"], float))
+    if not geom.valid:
+        return None, None
+    ef = d["ef"]
+    pf: dict[int, tuple[bool, bool, bool]] = {}
+    for g, gt in d["balls"].items():
+        nf = min(ef, key=lambda f: abs(f - g))
+        if abs(nf - g) > 4:
+            continue
+        cl = d["cands"].get(nf) or []
+        gt = tuple(gt)
+        gw = geom.image_to_world(np.asarray([gt], float))[0]
+        far = float(geom.expected_ball_diameter_px(np.asarray([gt], float))[0]) < float(
+            d.get("far_size_px", FAR_PX)
+        )
+        ch = ah = False
+        if cl:
+            ws = geom.image_to_world(np.asarray([(c[0], c[1]) for c in cl], float))
+            dist = np.linalg.norm(ws - gw, axis=1)
+            ch = bool((dist <= 15.0).any())
+            ah = bool(dist[int(np.argmax([c[2] for c in cl]))] <= 15.0)
+        pf[g] = (ch, ah, far)
+    out = {}
+    for band in ("far", "near"):
+        ev = [[f for f in e if pf[f][2] == (band == "far")] for e in _events(list(pf))]
+        ev = [e for e in ev if e]
+        if not ev:
+            continue
+        for mi, mn in ((0, "ceil"), (1, "arg")):
+
+            def rate(el):
+                fs = [f for e in el for f in e]
+                return sum(pf[f][mi] for f in fs) / len(fs)
+
+            pt = rate(ev)
+            boots = [
+                rate([ev[i] for i in rng.integers(0, len(ev), len(ev))])
+                for _ in range(NBOOT)
+            ]
+            lo, hi = np.percentile(boots, [2.5, 97.5])
+            out[f"{band}-{mn}"] = (pt, float(lo), float(hi), len(ev))
+    return out, pf
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dump-dir", required=True)
+    ap.add_argument("--arms", nargs="+", required=True)
+    ap.add_argument(
+        "--pairs",
+        nargs="*",
+        default=None,
+        help="arm pairs 'A:B' for decisive-or-zero calls (default: all vs first arm + geo:norm)",
+    )
+    args = ap.parse_args()
+    dd_ = Path(args.dump_dir)
+    rng = np.random.default_rng(7)
+
+    # REFEREE PIN (DECISIONS 2026-07-23): the composer's commit hash prints in
+    # every verdict output; the rule set is FROZEN until Phase 2 is read; any
+    # future referee change re-reads affected verdicts via the embargo
+    # mechanism, never the live one.
+    import subprocess
+
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except Exception:
+        sha = "unknown"
+    print(
+        f"[referee: compose_verdict @ {sha or 'unknown'} — rule set frozen until Phase 2 is read]"
+    )
+
+    scored: dict[tuple[str, str], dict] = {}
+    frames: dict[tuple[str, str], dict] = {}
+    for inst in HIERARCHY + STRESS:
+        for arm in args.arms:
+            p = dd_ / f"cands_{inst}_{arm}.pkl"
+            if not p.exists():
+                continue
+            m, pf = score_dump(p, rng)
+            if m:
+                scored[(inst, arm)] = m
+                frames[(inst, arm)] = pf
+
+    print("=== FULL TABLE (arm x instrument; point [95% event-CI] (events)) ===")
+    print("    (* = golden-hour stress row, excluded from the decisive walk)")
+    print(
+        "    (^ = static-distractor robustness row — decisive; #19-pair certification row)"
+    )
+    metrics = ("far-ceil", "far-arg", "near-ceil", "near-arg")
+    for inst in HIERARCHY + STRESS:
+        rows = [(a, scored.get((inst, a))) for a in args.arms]
+        if not any(m for _, m in rows):
+            print(f"\n  {INSTRUMENT_NAMES[inst]}: PENDING (no dumps)")
+            continue
+        print(f"\n  {INSTRUMENT_NAMES[inst]}")
+        for arm, m in rows:
+            if not m:
+                print(f"    {arm:<10} PENDING")
+                continue
+            cells = "  ".join(
+                f"{k}={m[k][0]:.3f}[{m[k][1]:.2f},{m[k][2]:.2f}]e{m[k][3]}"
+                for k in metrics
+                if k in m
+            )
+            print(f"    {arm:<10} {cells}")
+
+    # strata columns for SPC instruments
+    strata = _load_strata(SPC_DIR)
+    if strata:
+        print("\n=== SPC STRATA (hit-rate by NORMAL/HARD/AGREE, argmax) ===")
+        for inst in ("spc", "spc18k"):
+            for arm in args.arms:
+                pf = frames.get((inst, arm))
+                if not pf:
+                    continue
+                cells = []
+                for st in ("NORMAL", "HARD", "AGREE"):
+                    fs = [f for f in pf if strata.get(f) == st]
+                    if fs:
+                        cells.append(
+                            f"{st}={sum(pf[f][1] for f in fs) / len(fs):.3f}(n{len(fs)})"
+                        )
+                if cells:
+                    print(
+                        f"  {INSTRUMENT_NAMES[inst]:<14} {arm:<10} " + "  ".join(cells)
+                    )
+
+    # hierarchy walk: decisive-or-zero per pair
+    pairs = args.pairs or []
+    if not pairs and len(args.arms) >= 2:
+        base = args.arms[0]
+        pairs = [f"{a}:{base}" for a in args.arms[1:]]
+        if len(args.arms) >= 3:
+            pairs.append(f"{args.arms[1]}:{args.arms[2]}")
+    print(
+        "\n=== HIERARCHY WALK (rows above: Pittsford-human, viewport-v1 = PENDING/manual) ==="
+    )
+    import math
+
+    def _sign_p(k: int, n: int) -> float:
+        if n == 0:
+            return 1.0
+        p = sum(math.comb(n, i) for i in range(0, min(k, n - k) + 1)) / 2**n * 2
+        return min(1.0, p)
+
+    for pair in pairs:
+        a, b = pair.split(":")
+        print(f"\n  pair {a} vs {b}:")
+        # DECISIONS 07-24 (j): the walk does NOT stop at the first decisive row —
+        # a decisive REGRESSION on any primary-family instrument disqualifies the
+        # arm regardless of decisive gains elsewhere (transfer failure outranks
+        # in-distribution gain). Wins only crown when no regression exists.
+        wins: list[tuple[str, str, float]] = []
+        regs: list[tuple[str, str, float]] = []
+        for inst in HIERARCHY + STRESS:
+            is_stress = inst in STRESS
+            ma, mb = scored.get((inst, a)), scored.get((inst, b))
+            pfa, pfb = frames.get((inst, a)), frames.get((inst, b))
+            if not ma or not mb or pfa is None or pfb is None:
+                print(f"    {INSTRUMENT_NAMES[inst]:<14} PENDING")
+                continue
+            # decisive-or-zero = the CALIBRATED pairwise read (2026-07-23,
+            # three validations: settled factorial, the one known-real effect,
+            # split-half null):
+            #  (i)  paired EVENT sign test (COUNT asymmetry; EXP-DIST-68) —
+            #       v1's unpaired CI-exclusion wrongly called diff5 DECISIVE;
+            #  (ii) paired PER-EVENT SIGN-FLIP PERMUTATION on the Δ-rate
+            #       (MAGNITUDE asymmetry) — v2's Δ-bootstrap measured
+            #       anti-conservative (split-half null: α@95≈0.10 at 7 events,
+            #       α@99 still ≈0.07); the permutation test's α is nominal BY
+            #       CONSTRUCTION at any event count. The sign test alone was
+            #       blind to ph1v2's long-passage magnitude damage.
+            # Decisive if EITHER fires at p<0.05.
+            verdicts = []
+            common = sorted(set(pfa) & set(pfb))
+            ev_common = _events(common)
+            rng2 = np.random.default_rng(11)
+            for mi, k in ((0, "ceil"), (1, "arg")):
+                a_only = [g for g in common if pfa[g][mi] and not pfb[g][mi]]
+                b_only = [g for g in common if pfb[g][mi] and not pfa[g][mi]]
+                ea, eb = len(_events(a_only)), len(_events(b_only))
+                p = _sign_p(ea, ea + eb)
+                # per-event Δ contributions (frame-count weighted)
+                contrib = np.array(
+                    [
+                        sum(pfa[f][mi] for f in e) - sum(pfb[f][mi] for f in e)
+                        for e in ev_common
+                    ],
+                    float,
+                )
+                nfr = sum(len(e) for e in ev_common)
+                d_obs = contrib.sum() / max(nfr, 1)
+                if np.any(contrib != 0):
+                    flips = rng2.choice([-1.0, 1.0], size=(4000, len(contrib)))
+                    perm = (flips * contrib).sum(axis=1) / max(nfr, 1)
+                    p_mag = float(np.mean(np.abs(perm) >= abs(d_obs) - 1e-12))
+                else:
+                    p_mag = 1.0
+                decisive = (p < 0.05) or (p_mag < 0.05)
+                verdicts.append((k, decisive, ea, eb, p, d_obs, p_mag))
+            line = "  ".join(
+                f"{k}:{'DECISIVE' if d else 'zero'}"
+                f"(ev{ea}v{eb},p={p:.2f};d={dr:+.3f},pm={pm:.3f})"
+                for k, d, ea, eb, p, dr, pm in verdicts
+            )
+            tag = "  [stress context — cannot decide]" if is_stress else ""
+            print(f"    {INSTRUMENT_NAMES[inst]:<14} {line}{tag}")
+            if not is_stress:
+                for k, d, _ea, _eb, _p, dr, _pm in verdicts:
+                    if d:
+                        (regs if dr < 0 else wins).append(
+                            (INSTRUMENT_NAMES[inst], k, dr)
+                        )
+        if regs:
+            rows = "; ".join(f"{nm} {k} d={dr:+.3f}" for nm, k, dr in regs)
+            print(
+                f"    >>> DISQUALIFIER: decisive primary-family regression ({rows}) "
+                f"— transfer failure outranks in-distribution gain; {a} cannot be "
+                "promoted regardless of decisive gains elsewhere (DECISIONS 07-24 (j))"
+            )
+        elif wins:
+            nm, k, dr = wins[0]
+            # DECISIONS 07-24 (k): detector rows may VETO, never PROMOTE — a
+            # clean decisive win is favorable input, not adoption.
+            print(
+                f"    >>> detector rows favor {a} ({nm} {k}, d={dr:+.3f}) — NOT "
+                "sufficient for adoption; viewport/human rows must confirm (DECISIONS 07-24 (k))"
+            )
+        else:
+            print(
+                "    >>> no decisive detector row: pattern 4 (nothing separates) unless a human/viewport row decides"
+            )
+
+
+if __name__ == "__main__":
+    main()

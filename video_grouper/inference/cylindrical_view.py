@@ -463,16 +463,36 @@ def build_leveled_pano(
     src_h: int,
     src_hfov_deg: float,
     src_vfov_deg: float = -1.0,
-    az_margin_deg: float = 8.0,
+    az_margin_deg: float = 2.0,
     el_margin_deg: float = 12.0,
     deg_per_px: float | None = None,
 ) -> LeveledPano:
-    """Build the constant world-up cylindrical leveling map covering the field + margin."""
+    """Build the constant world-up cylindrical leveling map covering the FULL source.
+
+    The pano spans the whole source footprint (its border under the leveling
+    rotation), not just the field polygon: a view window cropped from the pano
+    must always find real pixels (or the honest black cap above the source top)
+    wherever the camera can legally aim — a pano that stops at the field edge
+    forces :func:`crop_box` windows against its boundary during end-field pans,
+    and the clipped crop resized to the output stretched the picture (the
+    2026-07-10 "warps when it scrolls" defect: 10% of full-game frames width-
+    truncated up to x3.1, 33% height-truncated). ``el_margin_deg`` keeps room
+    above the source top for the bounded black cap framing.
+    """
     if src_vfov_deg < 0:
         src_vfov_deg = src_hfov_deg * src_h / src_w
     r_cw = _cam_from_world(world_up)
+    # Sample the SOURCE BORDER (plus the polygon, which lies inside it) through
+    # the leveling rotation to get the pano's az/el footprint.
+    border: list[tuple[float, float]] = []
+    for t in np.linspace(0.0, 1.0, 65):
+        border.append((t * src_w, 0.0))
+        border.append((t * src_w, float(src_h)))
+        border.append((0.0, t * src_h))
+        border.append((float(src_w), t * src_h))
+    pts = np.concatenate([np.asarray(border, float), np.asarray(polygon, float)])
     azs, els = [], []
-    for px, py in np.asarray(polygon, float):
+    for px, py in pts:
         ya, pa = pixel_to_yaw_pitch(px, py, src_w, src_h, src_hfov_deg, src_vfov_deg)
         dw = r_cw.T @ np.array(_vec(np.deg2rad(ya), np.deg2rad(pa)))
         azs.append(np.degrees(np.arctan2(dw[0], dw[2])))
@@ -521,12 +541,22 @@ def crop_box(pano: LeveledPano, p: CylindricalViewParams, view_yaw_deg: float):
     """The view's window in the leveled panorama as integer ``(x0, y0, w, h)`` pano pixels.
 
     Centres on the optical axis and spans the view's hfov/vfov (cylindrical zoom = linear
-    crop), clamped to the pano. Shared by the cv2 (:func:`warp_crop_maps`) and OpenCL warp
-    backends so they sample identical windows.
+    crop). A window that would cross the pano boundary is SHIFTED to fit, never
+    truncated: truncation + the output resize stretched the picture during
+    end-field pans (2026-07-10 defect) — shifting means the camera simply stops
+    at the source edge, the broadcast behavior. Shared by the cv2
+    (:func:`warp_crop_maps`) and OpenCL warp backends so they sample identical
+    windows.
     """
     caz, cel = _optical_axis_world(p, view_yaw_deg, pano.r_cw)
     hf, vf = p.view_hfov_deg, _resolved_view_vfov(p)
     ph, pw = pano.map_x.shape
+    # Shift-to-fit in angle space (degenerates to full-span when the window is
+    # wider than the pano itself).
+    half_az = min(hf / 2, (pano.az_hi - pano.az_lo) / 2)
+    half_el = min(vf / 2, (pano.el_hi - pano.el_lo) / 2)
+    caz = min(max(caz, pano.az_lo + half_az), pano.az_hi - half_az)
+    cel = min(max(cel, pano.el_lo + half_el), pano.el_hi - half_el)
 
     def to_px(az_d, el_d):
         return (
@@ -534,8 +564,8 @@ def crop_box(pano: LeveledPano, p: CylindricalViewParams, view_yaw_deg: float):
             (el_d - pano.el_lo) / (pano.el_hi - pano.el_lo) * ph,
         )
 
-    x0, y0 = to_px(caz - hf / 2, cel - vf / 2)
-    x1, y1 = to_px(caz + hf / 2, cel + vf / 2)
+    x0, y0 = to_px(caz - half_az, cel - half_el)
+    x1, y1 = to_px(caz + half_az, cel + half_el)
     x0i, x1i = max(int(round(min(x0, x1))), 0), min(int(round(max(x0, x1))), pw)
     y0i, y1i = max(int(round(min(y0, y1))), 0), min(int(round(max(y0, y1))), ph)
     return x0i, y0i, x1i - x0i, y1i - y0i

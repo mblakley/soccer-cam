@@ -60,6 +60,34 @@ JPEG_QUALITY = 90
 _SKIP_VIDEO_PREFIXES = ("temp_", "thumb_")
 _SKIP_VIDEO_SUFFIXES = (".tmp",)
 
+# Per-camera distillation FRAME gate. The teacher keypoint model is only
+# moderately confident everywhere -- ~0.55-0.70 mean on Reolink field frames and
+# ~0.40-0.65 on Dahua -- despite producing geometrically sound polygons. The
+# original 0.70 gate dropped EVERY Dahua frame and 13 of ~21 Reolink production
+# venues, so gate per camera at the level that keeps venue coverage. Quality is
+# protected downstream by the geometry sanity check (gate_pass also requires the
+# near sideline below the far) and augment.COORD_SCORE_MIN=0.5, which drops the
+# least-confident per-keypoint coords inside a gated frame (keeps only keypoints
+# the teacher is sure about). The Sonnet QA confirmed the <0.5 keypoints are
+# mostly wrong, so that per-keypoint floor is the real quality guard, not the
+# frame gate. gate_pass is recomputable from stored mean_score/camera/geometry_ok,
+# so these thresholds can be retuned without re-running label generation.
+GATE_BY_CAMERA = {"reolink": 0.50, "dahua": 0.45, "other": 0.55}
+
+
+def _camera_of(group_dir: Path) -> str:
+    """Classify the capture camera from the group's video files (for the gate).
+
+    Dahua panoramas use ``[F][0@0]`` segment names; Reolink uses ``RecM09``
+    segments / a ``combined.mp4``.
+    """
+    names = [p.name for p in group_dir.glob("*.mp4")]
+    if any("[F]" in n for n in names):
+        return "dahua"
+    if any(n.startswith("RecM09") for n in names) or "combined.mp4" in names:
+        return "reolink"
+    return "other"
+
 
 @dataclass
 class GameSpec:
@@ -72,6 +100,8 @@ class GameSpec:
     venue: str
     date: str
     my_team_name: str
+    camera: str = "other"
+    orientation: str = "right_side_up"
     videos: list[Path] = field(default_factory=list)
     unknown_reason: str | None = None
 
@@ -105,11 +135,30 @@ def _select_videos(group_dir: Path, use_segments: bool) -> list[Path]:
 
 
 def discover_games(
-    roots: list[Path], groups_glob: str | None, use_segments: bool
+    roots: list[Path],
+    groups_glob: str | None,
+    use_segments: bool,
+    default_team: str | None = None,
 ) -> list[GameSpec]:
-    """Find recording groups under ``roots`` and resolve team/venue/videos."""
+    """Find recording groups under ``roots`` and resolve team/venue/videos.
+
+    ``default_team`` is a per-archive override (e.g. ``F:/Heat_2012s`` is all
+    heat): when set it labels every game under ``roots`` with that team,
+    bypassing ``match_info.ini``. This is what lets the Dahua archives — which
+    carry no ``match_info.ini`` — into the training set. When a game has no
+    match_info (Dahua) its venue/opponent fall back to the group dir name so
+    each game seeds its own placement cluster; ``build_clusters`` then merges
+    genuinely-identical fields by polygon IoU.
+    """
     games: list[GameSpec] = []
     seen_ids: dict[str, Path] = {}
+    # Orientation is metadata, not detected: read it from the game registry
+    # (keyed by the game dir path). Default right_side_up if a game isn't listed.
+    from training.data_prep.game_registry import load_registry
+
+    reg_orient = {
+        g.get("path"): g.get("orientation", "right_side_up") for g in load_registry()
+    }
 
     for root in roots:
         if not root.exists():
@@ -122,6 +171,8 @@ def discover_games(
             videos = _select_videos(group_dir, use_segments)
             if not videos:
                 continue  # not a footage group
+            camera = _camera_of(group_dir)
+            orientation = reg_orient.get(str(group_dir), "right_side_up")
 
             mi_path = group_dir / "match_info.ini"
             mi = MatchInfo.from_file(str(mi_path)) if mi_path.exists() else None
@@ -129,7 +180,19 @@ def discover_games(
             opponent = mi.opponent_team_name if mi else ""
             venue = mi.location if mi else ""
             date = group_dir.name[:10]  # YYYY.MM.DD prefix of the group dir
-            team = team_from_name(my_team)
+            # --team is a per-archive override; else infer from match_info.
+            team = default_team or team_from_name(my_team)
+            # Seed venue/opponent from the dir name when match_info gives nothing
+            # specific. This covers both Dahua (no match_info at all) AND generic
+            # "home"/"away" locations, which would otherwise collapse every
+            # same-side game of a team into one leaky (team, "home") cluster. With
+            # a per-game venue, build_clusters' polygon-IoU merge — not a vague
+            # label — decides which games actually share a field. A real, specific
+            # venue (e.g. "Davis Park") is kept and clusters as before.
+            if venue.strip().lower() in ("", "home", "away"):
+                venue = group_dir.name
+            if not opponent:
+                opponent = group_dir.name[11:].strip() or group_dir.name
 
             if team is None:
                 games.append(
@@ -141,6 +204,8 @@ def discover_games(
                         venue=venue,
                         date=date,
                         my_team_name=my_team,
+                        camera=camera,
+                        orientation=orientation,
                         videos=videos,
                         unknown_reason=(
                             "no_match_info"
@@ -166,6 +231,8 @@ def discover_games(
                     venue=venue,
                     date=date,
                     my_team_name=my_team,
+                    camera=camera,
+                    orientation=orientation,
                     videos=videos,
                 )
             )
@@ -336,15 +403,23 @@ def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
                     continue
 
                 try:
+                    # Orientation comes from the registry metadata (reliable), not
+                    # detection: flip upside-down mounts 180deg so the student trains
+                    # on upright frames.
+                    if spec.orientation == "upside_down":
+                        frame_bgr = cv2.flip(frame_bgr, -1)
                     orig_h, orig_w = frame_bgr.shape[:2]
                     kpts = detect_field_keypoints(frame_bgr, sess, score_threshold=0.0)
-                    # threshold 0.0 => every point returned with coords + score
                     kpts_norm = [
                         [float(kp[0]) / orig_w, float(kp[1]) / orig_h] for kp in kpts
                     ]
                     scores = [float(kp[2]) for kp in kpts]
                     mean_score = sum(scores) / len(scores)
-
+                    # Per-frame quality guard (not orientation): the near sideline
+                    # must sit below the far in image-y, else the polygon is broken.
+                    near_y = sum(p[1] for p in kpts_norm[:5]) / 5
+                    far_y = sum(p[1] for p in kpts_norm[5:]) / 5
+                    geometry_ok = near_y > far_y
                     stored_w, stored_h = _store_frame(frame_bgr, jpg_path)
                     label = {
                         "schema_version": LABEL_SCHEMA_VERSION,
@@ -362,7 +437,14 @@ def process_game(spec: GameSpec, sess, args, teacher_sha: str) -> dict:
                         "keypoints_norm": kpts_norm,
                         "scores": scores,
                         "mean_score": round(mean_score, 4),
-                        "gate_pass": mean_score >= GATE_THRESHOLD,
+                        "camera": spec.camera,
+                        "gate_threshold": GATE_BY_CAMERA.get(
+                            spec.camera, GATE_THRESHOLD
+                        ),
+                        "geometry_ok": geometry_ok,
+                        "gate_pass": geometry_ok
+                        and mean_score
+                        >= GATE_BY_CAMERA.get(spec.camera, GATE_THRESHOLD),
                         "teacher_sha256": teacher_sha,
                         "created_at": time.time(),
                     }
@@ -417,7 +499,14 @@ def main() -> None:
         type=Path,
         nargs="+",
         required=True,
-        help="Directories whose subdirs are recording groups (Reolink footage)",
+        help="Directories whose subdirs are recording groups (Reolink or Dahua)",
+    )
+    parser.add_argument(
+        "--team",
+        choices=["flash", "heat"],
+        default=None,
+        help="Per-archive team override (e.g. F:/Heat_2012s -> heat). Required for "
+        "Dahua archives, which carry no match_info.ini; harmless on Reolink archives.",
     )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(
@@ -450,7 +539,9 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    games = discover_games(args.roots, args.groups, args.use_segments)
+    games = discover_games(
+        args.roots, args.groups, args.use_segments, default_team=args.team
+    )
     if not games:
         logger.error("No recording groups found under %s", args.roots)
         return

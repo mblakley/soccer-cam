@@ -99,12 +99,20 @@ async def test_field_detect_writes_polygon_and_manifest(tmp_path, monkeypatch):
         return object()
 
     def fake_detect_polygon(
-        video_path, session, score_threshold, min_keypoints, sample_frames
+        video_path,
+        session,
+        score_threshold,
+        min_keypoints,
+        sample_frames,
+        min_confident_frames=1,
+        fallback_to_best=True,
     ):
         captured["video_path"] = video_path
         captured["score_threshold"] = score_threshold
         captured["min_keypoints"] = min_keypoints
         captured["sample_frames"] = sample_frames
+        captured["min_confident_frames"] = min_confident_frames
+        captured["fallback_to_best"] = fallback_to_best
         return polygon, 0.91
 
     monkeypatch.setattr(

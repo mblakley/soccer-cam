@@ -171,9 +171,18 @@ def main() -> None:
     if args.limit_frames:
         train_ds.samples = train_ds.samples[: args.limit_frames]
 
+    # Data loading is the bottleneck (GPU was 0% util, starved): keep workers
+    # alive across epochs (Windows re-spawn is very expensive), pin memory, and
+    # prefetch so the GPU isn't waiting on JPEG decode.
+    loader_kw = {
+        "num_workers": args.num_workers,
+        "pin_memory": True,
+        "persistent_workers": args.num_workers > 0,
+        "prefetch_factor": 4 if args.num_workers > 0 else None,
+    }
     if args.limit_frames:
         train_loader = DataLoader(
-            train_ds, batch_size=args.batch, shuffle=True, num_workers=args.num_workers
+            train_ds, batch_size=args.batch, shuffle=True, **loader_kw
         )
     else:
         weights = cluster_weights(train_ds.samples)
@@ -181,15 +190,10 @@ def main() -> None:
             weights, num_samples=len(train_ds), replacement=True
         )
         train_loader = DataLoader(
-            train_ds,
-            batch_size=args.batch,
-            sampler=sampler,
-            num_workers=args.num_workers,
+            train_ds, batch_size=args.batch, sampler=sampler, **loader_kw
         )
     val_loader = (
-        DataLoader(val_ds, batch_size=args.batch, num_workers=args.num_workers)
-        if len(val_ds)
-        else None
+        DataLoader(val_ds, batch_size=args.batch, **loader_kw) if len(val_ds) else None
     )
 
     device = torch.device(args.device)

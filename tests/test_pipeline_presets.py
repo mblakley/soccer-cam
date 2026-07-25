@@ -92,7 +92,8 @@ def test_homegrown_preset_has_expected_steps_in_order():
         "field_detect",
         "phase_detect",
         "ball_detect",
-        "track",
+        "ball_select",
+        "plan_camera",
         "render",
     ]
     assert [s.step_id for s in ordered] == [
@@ -100,7 +101,8 @@ def test_homegrown_preset_has_expected_steps_in_order():
         "field_detect",
         "phase_detect",
         "ball_detect",
-        "track",
+        "ball_select",
+        "plan_camera",
         "render",
     ]
 

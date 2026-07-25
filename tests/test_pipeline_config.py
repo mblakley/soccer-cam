@@ -137,7 +137,13 @@ def test_migrate_homegrown_splits_fields_per_step():
             },
         }
     )
-    assert out["steps"] == ["stitch_correct", "ball_detect", "track", "render"]
+    assert out["steps"] == [
+        "stitch_correct",
+        "ball_detect",
+        "ball_select",
+        "plan_camera",
+        "render",
+    ]
     specs = out["step_specs"]
     assert specs["stitch_correct"]["config"] == {"stitch_profile_path": "/p.json"}
     # detect gets only detect fields, not track/render fields
@@ -145,13 +151,16 @@ def test_migrate_homegrown_splits_fields_per_step():
         "model_key": "video.ball",
         "detect_confidence": "0.45",
     }
-    assert specs["track"]["config"] == {"track_kalman_gate": "200"}
+    # legacy Kalman-gate tunables have no analogue in the selection stack
+    assert specs["ball_select"]["config"] == {}
+    assert specs["plan_camera"]["config"] == {}
     assert specs["render"]["config"] == {"render_output_width": "1920"}
     pc = PipelineConfig.model_validate(out)
     assert [s.type for s in pc.ordered_steps()] == [
         "stitch_correct",
         "ball_detect",
-        "track",
+        "ball_select",
+        "plan_camera",
         "render",
     ]
 
@@ -308,7 +317,8 @@ def test_load_migrates_ball_tracking_when_no_pipeline_section(tmp_path):
     assert [s.type for s in ordered] == [
         "stitch_correct",
         "ball_detect",
-        "track",
+        "ball_select",
+        "plan_camera",
         "render",
     ]
     # per-step fields split correctly through migration.
