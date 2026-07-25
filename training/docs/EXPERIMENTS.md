@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-03: FIRST FORMAL PER-BAND READS (referee v3 port) + amended hold unit results (2026-07-25)
+
+**Referee port validated twice:** dual_rule_read is a line-exact port of compose_verdict @
+ac1f42c (diffed against the pin before porting), and its PIT ALL read reproduces EXP-72's
+pair read exactly (ev5v18, p_sign=0.0106 vs the banked "ev5v18, sign p≈0.011").
+
+**Formal champion-vs-AutoCam reads on PIT-GT (capture@600, dual rule, per band):**
+- **ALL/all: DECISIVE → AutoCam** (ev5v18, p_sign=0.011).
+- **ALL/far: DECISIVE → AutoCam** (ev4v13, p_sign=0.049; d=−0.484, p_mag=0.057). The far gap
+  is now formal — W4's target cell, confirmed at the ALL tier.
+- **ALL/mid: ZERO** (ev2v6, p_sign=0.29, d=+0.215, p_mag=0.75). The raw mid rates (0.640 vs
+  0.426) do NOT survive event-level power — "champion wins mid" is a positive delta at
+  insufficient power, not a win. Original-500/far also zero at its event count (ev1v4) —
+  the far mass sits in FEW events on the original sample; ext-div/all is DECISIVE → AC
+  (ev4v15, p=0.019/0.020).
+- Near: unmeasurable everywhere (≤1 event).
+**Consequence:** at PIT's event structure, only ALL-tier and far reads are powered; mid/near
+need more events (event-spreading queues) before any "match" claim can even be tested.
+
+**Amended hold unit (gap-40, n≥4, GT<200, no arm conditioning): 2 qualifying clusters**
+(not (h)'s 4 — (h) additionally clustered over ALL manifest∩label rows, not just
+action=='view', which bridges clusters differently; the amended unit is now the
+pre-registered standard). Champion ratios 24.2 / 7.6 (median 15.9); split-half null band
+±16.6 at n=2 → **no calibrated hold claim yet — power-limited**, W2 needs either the
+event-spreading labels or its own eval design on GT v1.
+**Descriptive (not calibrated):** GT pan-velocity median is **0.0 px/s** (p90 374) across
+labeled segments — the human operator's default is a dead-still camera; champion median 137,
+AC 7.5. Velocity nulls (7 events): band [−352, +454] still swamps the arm gap.
+
+**Artifacts:** `G:/ballresearch/operator/pit_referee.json`. Next: oracle ladder runs
+(run-a spc/fair/pit — pit doubles as a consistency check vs the banked EXP-72 campath).
+
 ## EXP-OP-02: W1 scoreboard INSTRUMENT LANDS — fixture reproduces EXP-72 to the digit; first per-band cells; null calibration rejects 3 of 4 framing metrics as operationalized (2026-07-25, overnight)
 
 **Fixture (hard gate): PASS.** The committed scorer (`training/cli/operator_scoreboard.py` @
