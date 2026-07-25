@@ -5,10 +5,15 @@ per viewport-label set, every arm (named campaths + the AutoCam reference "AC") 
 scored against the SAME GT views in every cell. The table is subset (ALL / original
 / ext-div) x range band (near/mid/far by expected ball diameter at the GT focal
 point through the game polygon) x arm: capture@300/600, |dcx| median + p90, n; plus
-the framing metrics per contiguous labeled segment (pan-velocity profile, reversal
-rate with the GT-derived threshold, hold fidelity) and paired flip reads
-champion-vs-AC. ``--fixture-exp72`` hard-fails unless the EXP-72 cells reproduce;
-``--null-calibration`` banks split-half null bands for the framing metrics.
+the framing metrics on the AMENDED pre-registered units (EXP-OP-02):
+velocity/reversal on gap-64 events with >= 5 frames only; the HEADLINE hold
+fidelity on gap-40 clusters (n >= 4, GT swing < 200 px, no arm-swing
+conditioning), with the old whole-event hold kept as a ``hold_wholeevent``
+diagnostic; and paired flip reads champion-vs-AC. ``--referee`` runs the
+dual-rule (referee v3 @ ac1f42c port) per subset x band for every named arm vs
+AC on the capture@600 dicts. ``--fixture-exp72`` hard-fails unless the EXP-72
+cells reproduce; ``--null-calibration`` banks split-half null bands for the
+framing metrics on their amended units.
 
 CPU-only, no torch; all inputs come from args (no server paths).
 
@@ -237,25 +242,58 @@ def build_framing(
     arms: dict[str, dict[int, float]],
     fps: float,
 ) -> tuple[dict, dict]:
-    """Framing metrics per contiguous labeled segment, pooled per arm: pan-velocity
-    median/p90 vs GT's, reversal rate with the GT-derived threshold, hold fidelity.
-    Non-computable on this instrument (no segment has 2+ GT labels) is STATED, not
-    silently skipped, per the pre-registration."""
+    """Framing metrics on the AMENDED pre-registered units (EXP-OP-02), pooled
+    per arm.
+
+    - pan-velocity median/p90 (vs GT's) and reversal rate (GT-derived threshold)
+      on :func:`om.framing_events` — gap-64 events with >= 5 frames only.
+    - HEADLINE hold fidelity on :func:`om.hold_fidelity_amended` — gap-40
+      clusters, n >= 4, GT swing < 200 px, no arm-swing conditioning.
+    - the old whole-event hold ((h)'s <= 400 px on gap-64 segments) is kept as
+      the ``hold_wholeevent`` DIAGNOSTIC row.
+
+    Non-computable on this instrument is STATED, not silently skipped, per the
+    pre-registration."""
     gt_fx = {f: float(r["fx"]) for f, r in labels.items()}
-    segments = om.segment_series(sorted(labels), gap=GAP)
-    ctx = {"segments": segments, "gt_fx": gt_fx, "v_thresh": None}
-    gt_vels = [v for seg in segments for v in om.pan_velocity(gt_fx, seg, fps)]
-    if not gt_vels:
-        note = "framing not computable: no labeled segment has 2+ GT frames"
-        return {"computable": False, "note": note, "n_segments": len(segments)}, ctx
-    v_thresh = om.gt_velocity_threshold(gt_vels)
-    ctx["v_thresh"] = v_thresh
+    frames_sorted = sorted(labels)
+    segments = om.segment_series(frames_sorted, gap=GAP)
+    fevents = om.framing_events(frames_sorted, gap=GAP)
+    hclusters = om.hold_clusters(gt_fx)
+    ctx = {
+        "segments": segments,
+        "framing_events": fevents,
+        "hold_clusters": hclusters,
+        "gt_fx": gt_fx,
+        "v_thresh": None,
+    }
+    out: dict = {
+        "n_segments": len(segments),
+        "n_framing_events": len(fevents),
+        "n_hold_clusters": len(hclusters),
+        "framing_event_unit": {"gap": GAP, "min_frames": om.FRAMING_MIN_FRAMES},
+        "hold_unit": {
+            "gap": om.HOLD_GAP,
+            "min_frames": om.HOLD_MIN_FRAMES,
+            "gt_swing_max": om.HOLD_GT_SWING_MAX_PX,
+        },
+    }
+    gt_vels = [v for ev in fevents for v in om.pan_velocity(gt_fx, ev, fps)]
+    vel_ok = bool(gt_vels)
+    if not vel_ok:
+        out["computable"] = False
+        out["note"] = (
+            "velocity/reversal not computable: no framing event "
+            f"(gap {GAP}, >= {om.FRAMING_MIN_FRAMES} frames) has 2+ GT frames"
+        )
+    else:
+        v_thresh = om.gt_velocity_threshold(gt_vels)
+        ctx["v_thresh"] = v_thresh
 
     def _pool(cx: dict[int, float]) -> dict:
-        vels = [v for seg in segments for v in om.pan_velocity(cx, seg, fps)]
+        vels = [v for ev in fevents for v in om.pan_velocity(cx, ev, fps)]
         flips, minutes = 0, 0.0
-        for seg in segments:
-            rr = om.reversal_rate(cx, seg, fps, v_thresh)
+        for ev in fevents:
+            rr = om.reversal_rate(cx, ev, fps, ctx["v_thresh"])
             flips += rr["flips"]
             minutes += rr["minutes"]
         return {
@@ -267,21 +305,28 @@ def build_framing(
             },
         }
 
-    out = {
-        "computable": True,
-        "n_segments": len(segments),
-        "gt": {**_pool(gt_fx), "v_thresh": v_thresh},
-        "arms": {},
-    }
+    if vel_ok:
+        out["computable"] = True
+        out["gt"] = {**_pool(gt_fx), "v_thresh": ctx["v_thresh"]}
+    out["arms"] = {}
     for aname, cx in arms.items():
-        block = _pool(cx)
-        rows, med = om.hold_fidelity(cx, gt_fx, segments)
+        block: dict = _pool(cx) if vel_ok else {}
+        rows, med, n = om.hold_fidelity_amended(cx, gt_fx)
         block["hold"] = {
-            "n_segments": len(rows),
+            "n_clusters": n,
             "median_ratio": _finite(med),
             "rows": [
+                [cl[0], cl[-1], gsw, asw, _finite(ratio)]
+                for cl, gsw, asw, ratio in rows
+            ],
+        }
+        wrows, wmed = om.hold_fidelity(cx, gt_fx, segments)
+        block["hold_wholeevent"] = {
+            "n_segments": len(wrows),
+            "median_ratio": _finite(wmed),
+            "rows": [
                 [seg[0], seg[-1], gsw, asw, _finite(ratio)]
-                for seg, gsw, asw, ratio in rows
+                for seg, gsw, asw, ratio in wrows
             ],
         }
         out["arms"][aname] = block
@@ -314,8 +359,50 @@ def build_pair_flips(
     return out
 
 
+def build_referee(
+    labels: dict[int, dict],
+    arms: dict[str, dict[int, float]],
+    subsets: dict[str, list[int]],
+    band_by_frame: dict[int, str],
+    champ_names: list[str],
+) -> dict:
+    """Dual-rule reads (referee v3 @ ac1f42c port, :func:`om.dual_rule_read`) per
+    subset x band ('all' always included): every named arm vs AC on the
+    capture@600 frame dicts, over the frames both arms cover."""
+    bands = ["all"] + [b for b in BAND_ORDER[1:] if b in set(band_by_frame.values())]
+    out: dict = {}
+    for sname, sframes in subsets.items():
+        out[sname] = {}
+        for bname in bands:
+            bframes = (
+                sframes
+                if bname == "all"
+                else [f for f in sframes if band_by_frame.get(f) == bname]
+            )
+            reads = {}
+            for name in champ_names:
+                caps = {}
+                for arm in (name, "AC"):
+                    cx = arms[arm]
+                    caps[arm] = {
+                        f: abs(cx[f] - float(labels[f]["fx"])) <= PAIR_RADIUS
+                        for f in bframes
+                        if f in cx
+                    }
+                reads[f"{name}_vs_AC"] = om.dual_rule_read(
+                    caps[name], caps["AC"], gap=GAP
+                )
+            out[sname][bname] = reads
+    return out
+
+
 def score_set(
-    set_dir: str, game_dir: str, campaths: list[tuple[str, str]], fps: float
+    set_dir: str,
+    game_dir: str,
+    campaths: list[tuple[str, str]],
+    fps: float,
+    *,
+    with_referee: bool = False,
 ) -> tuple[dict, dict, dict]:
     """Score one viewport-label set. Returns (report block, raw deltas for
     pooling, context for null calibration)."""
@@ -339,6 +426,10 @@ def score_set(
         "framing": framing,
         "pair_flips": build_pair_flips(labels, arms, subsets, champ_names),
     }
+    if with_referee:
+        block["referee"] = build_referee(
+            labels, arms, subsets, band_by_frame, champ_names
+        )
     ctx["labels"] = labels
     ctx["arms"] = arms
     return block, raw, ctx
@@ -364,17 +455,20 @@ def pool_cells(raw_by_set: list[dict]) -> dict:
 
 def run_null_calibration(ctx: dict, champ: str, fps: float, seed: int) -> dict:
     """Split-half null bands for each framing metric on the champion arm of one
-    instrument (set). 300 reps, event = contiguous labeled segment. A band that
-    cannot be computed records its power floor EXPLICITLY (n_events + reason) in
-    the report — never a silent absence."""
-    segments, gt_fx, v_thresh = ctx["segments"], ctx["gt_fx"], ctx["v_thresh"]
+    instrument (set), on the AMENDED pre-registered units (EXP-OP-02): 300 reps;
+    velocity/reversal split over the framing events (gap-64, >= 5 frames only);
+    hold split over the amended hold clusters (gap-40, n >= 4, GT swing < 200).
+    A band that cannot be computed records its power floor EXPLICITLY (n_events
+    + reason) in the report — never a silent absence."""
+    fevents, hclusters = ctx["framing_events"], ctx["hold_clusters"]
+    gt_fx, v_thresh = ctx["gt_fx"], ctx["v_thresh"]
     cx = ctx["arms"][champ]
 
     def _vels(frames: list[int]) -> list[float]:
         return [
             v
-            for seg in om.segment_series(frames, gap=GAP)
-            for v in om.pan_velocity(cx, seg, fps)
+            for ev in om.framing_events(frames, gap=GAP)
+            for v in om.pan_velocity(cx, ev, fps)
         ]
 
     def m_vel_median(frames: list[int]) -> float | None:
@@ -385,34 +479,48 @@ def run_null_calibration(ctx: dict, champ: str, fps: float, seed: int) -> dict:
 
     def m_reversal(frames: list[int]) -> float | None:
         flips, minutes = 0, 0.0
-        for seg in om.segment_series(frames, gap=GAP):
-            rr = om.reversal_rate(cx, seg, fps, v_thresh)
+        for ev in om.framing_events(frames, gap=GAP):
+            rr = om.reversal_rate(cx, ev, fps, v_thresh)
             flips += rr["flips"]
             minutes += rr["minutes"]
         return (flips / minutes) if minutes > 0 else None
 
     def m_hold(frames: list[int]) -> float | None:
-        _rows, med = om.hold_fidelity(cx, gt_fx, om.segment_series(frames, gap=GAP))
+        gt_half = {f: gt_fx[f] for f in frames if f in gt_fx}
+        _rows, med, _n = om.hold_fidelity_amended(cx, gt_half)
         return med
 
     metrics: dict = {
-        "pan_velocity_median": m_vel_median,
-        "pan_velocity_p90": m_vel_p90,
-        "reversal_rate": m_reversal if v_thresh is not None else None,
-        "hold_fidelity_median_ratio": m_hold,
+        "pan_velocity_median": (m_vel_median, fevents),
+        "pan_velocity_p90": (m_vel_p90, fevents),
+        "reversal_rate": (m_reversal if v_thresh is not None else None, fevents),
+        "hold_fidelity_median_ratio": (m_hold, hclusters),
     }
-    out: dict = {"arm": champ, "reps": 300, "seed": seed}
-    for mname, fn in metrics.items():
+    out: dict = {
+        "arm": champ,
+        "reps": 300,
+        "seed": seed,
+        "units": {
+            "velocity_reversal": (
+                f"framing_events(gap={GAP}, min_frames={om.FRAMING_MIN_FRAMES})"
+            ),
+            "hold": (
+                f"hold_clusters(gap={om.HOLD_GAP}, min_frames={om.HOLD_MIN_FRAMES}, "
+                f"gt_swing<{om.HOLD_GT_SWING_MAX_PX:g})"
+            ),
+        },
+    }
+    for mname, (fn, events) in metrics.items():
         if fn is None:
             out[mname] = {
                 "band": None,
                 "power_floor": {
-                    "n_events": len(segments),
+                    "n_events": len(events),
                     "reason": "no GT velocity threshold (framing not computable)",
                 },
             }
             continue
-        res = om.split_half_null(segments, cx, fn, reps=300, seed=seed)
+        res = om.split_half_null(events, cx, fn, reps=300, seed=seed)
         entry = {"n_events": res["n_events"], "reps_valid": res["reps_valid"]}
         if res["band"] is None:
             entry["band"] = None
@@ -454,27 +562,42 @@ def print_table(report: dict) -> None:
                         f"{_fmt(st['median'], '.1f'):>8s} {_fmt(st['p90'], '.1f'):>8s}"
                     )
         fr = blk["framing"]
+        print(
+            f"framing units: {fr['n_framing_events']} framing events "
+            f"(gap {GAP}, >={om.FRAMING_MIN_FRAMES} fr), "
+            f"{fr['n_hold_clusters']} hold clusters "
+            f"(gap {om.HOLD_GAP}, n>={om.HOLD_MIN_FRAMES}, "
+            f"GT swing <{om.HOLD_GT_SWING_MAX_PX:g}px), "
+            f"{fr['n_segments']} gap-{GAP} segments"
+        )
         if not fr.get("computable"):
-            print(f"framing: {fr['note']}")
+            print(f"  {fr['note']}")
         else:
             gt = fr["gt"]
             print(
-                f"framing ({fr['n_segments']} segments): GT vel med/p90 "
+                f"  GT vel med/p90 "
                 f"{_fmt(gt['velocity']['median'], '.1f')}/{_fmt(gt['velocity']['p90'], '.1f')} px/s, "
                 f"v_thresh {gt['v_thresh']:.1f}, GT reversal rate "
                 f"{_fmt(gt['reversal']['rate'], '.2f')}/min"
             )
-            for aname, ab in fr["arms"].items():
-                hold = ab["hold"]
-                print(
-                    f"  {aname:10s} vel med/p90 "
+        for aname, ab in fr["arms"].items():
+            hold = ab["hold"]
+            whole = ab["hold_wholeevent"]
+            vel_part = ""
+            if "velocity" in ab:
+                vel_part = (
+                    f"vel med/p90 "
                     f"{_fmt(ab['velocity']['median'], '.1f')}/{_fmt(ab['velocity']['p90'], '.1f')} px/s, "
                     f"reversal {ab['reversal']['flips']} flips / "
                     f"{ab['reversal']['minutes']:.2f} min = "
                     f"{_fmt(ab['reversal']['rate'], '.2f')}/min, "
-                    f"hold median ratio {_fmt(hold['median_ratio'], '.2f')} "
-                    f"(n={hold['n_segments']})"
                 )
+            print(
+                f"  {aname:10s} {vel_part}hold(amended) median ratio "
+                f"{_fmt(hold['median_ratio'], '.2f')} (n={hold['n_clusters']}), "
+                f"hold_wholeevent {_fmt(whole['median_ratio'], '.2f')} "
+                f"(n={whole['n_segments']})"
+            )
         for sname, pairs in blk["pair_flips"].items():
             for pname, pf in pairs.items():
                 print(
@@ -482,6 +605,21 @@ def print_table(report: dict) -> None:
                     f"{pf['a_only_frames']} fr, b-only {pf['b_only_events']} ev / "
                     f"{pf['b_only_frames']} fr (common n={pf['n_common']})"
                 )
+        for sname, by_band in blk.get("referee", {}).items():
+            for bname, reads in by_band.items():
+                for pname, r in reads.items():
+                    aname = pname.removesuffix("_vs_AC")
+                    tag = "DECISIVE" if r["decisive"] else "zero"
+                    winner = "none"
+                    if r["decisive"] and r["direction"] == "a":
+                        winner = aname
+                    elif r["decisive"] and r["direction"] == "b":
+                        winner = "AC"
+                    print(
+                        f"pair {aname} vs AC [{sname}/{bname}]: {tag} "
+                        f"(ev{r['ea']}v{r['eb']}, p={r['p_sign']:.2f}; "
+                        f"d={r['d_obs']:+.3f}, pm={r['p_mag']:.3f}) -> {winner}"
+                    )
     if "pooled" in report:
         print("\n=== POOLED (all sets) ===")
         print(hdr)
@@ -566,7 +704,14 @@ def main(argv: list[str] | None = None) -> None:
         "--null-calibration",
         action="store_true",
         help="bank split-half null bands (300 reps) for each framing metric x "
-        "instrument on the champion arm",
+        "instrument on the champion arm (amended units: framing events >= 5 "
+        "frames for velocity/reversal, gap-40 clusters for hold)",
+    )
+    ap.add_argument(
+        "--referee",
+        action="store_true",
+        help="dual-rule reads (referee v3 @ ac1f42c port) per subset x band: "
+        "every named arm vs AC on the capture@600 dicts",
     )
     ap.add_argument("--seed", type=int, default=72)
     ap.add_argument("--fps", type=float, default=30.0)
@@ -601,7 +746,9 @@ def main(argv: list[str] | None = None) -> None:
     ctx_by_set: dict[str, dict] = {}
     for set_dir, game_dir in zip(args.set_dir, args.game_dir, strict=True):
         set_name = Path(set_dir).name
-        block, raw, ctx = score_set(set_dir, game_dir, campaths, args.fps)
+        block, raw, ctx = score_set(
+            set_dir, game_dir, campaths, args.fps, with_referee=args.referee
+        )
         report["sets"][set_name] = block
         raw_by_set.append(raw)
         ctx_by_set[set_name] = ctx
@@ -613,7 +760,11 @@ def main(argv: list[str] | None = None) -> None:
             nc = run_null_calibration(ctx, champ, args.fps, args.seed)
             report["null_calibration"][set_name] = nc
             for mname, entry in nc.items():
-                if isinstance(entry, dict) and entry.get("band") is None:
+                if (
+                    isinstance(entry, dict)
+                    and "power_floor" in entry
+                    and entry.get("band") is None
+                ):
                     print(
                         f"NULL-CAL {set_name}/{mname}: band NOT computable -- "
                         f"power floor recorded ({entry['power_floor']})"

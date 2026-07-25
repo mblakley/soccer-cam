@@ -68,8 +68,84 @@ def test_pair_flip_read_hand_computed():
 
 
 # ---------------------------------------------------------------------------
+# Dual rule (referee v3 @ ac1f42c port)
+# ---------------------------------------------------------------------------
+
+
+def test_dual_rule_read_sign_test_hand_computed():
+    # 5 a-only single-frame events, no b-only: p_sign = 2*C(5,0)/2^5 = 0.0625
+    cap_a = dict.fromkeys((0, 100, 200, 300, 400), True)
+    cap_b = dict.fromkeys((0, 100, 200, 300, 400), False)
+    r = om.dual_rule_read(cap_a, cap_b)
+    assert r["ea"] == 5 and r["eb"] == 0
+    assert r["p_sign"] == pytest.approx(0.0625)
+    assert r["d_obs"] == pytest.approx(1.0)  # every common frame flips to a
+    assert r["direction"] == "a"
+    # 6v0 crosses 0.05: p_sign = 2*C(6,0)/2^6 = 0.03125 -> decisive by sign
+    cap_a6 = dict.fromkeys((0, 100, 200, 300, 400, 500), True)
+    cap_b6 = dict.fromkeys(cap_a6, False)
+    r6 = om.dual_rule_read(cap_a6, cap_b6)
+    assert r6["p_sign"] == pytest.approx(0.03125)
+    assert r6["decisive"] is True and r6["direction"] == "a"
+
+
+def test_dual_rule_read_all_zero_contribs():
+    # identical arms: no flips anywhere -> both tests inert (p = pm = 1.0)
+    caps = {0: True, 100: False, 200: True}
+    r = om.dual_rule_read(caps, dict(caps))
+    assert r["ea"] == 0 and r["eb"] == 0
+    assert r["p_sign"] == 1.0 and r["p_mag"] == 1.0
+    assert r["d_obs"] == 0.0
+    assert r["decisive"] is False and r["direction"] is None
+    # no common frames at all: same inert read (n == 0 -> p_sign 1.0)
+    r0 = om.dual_rule_read({0: True}, {100: True})
+    assert r0["p_sign"] == 1.0 and r0["p_mag"] == 1.0 and r0["decisive"] is False
+
+
+def test_dual_rule_read_deterministic_with_seed():
+    cap_a = dict.fromkeys((0, 100, 200, 300, 400), True)
+    cap_b = dict.fromkeys((0, 100, 200, 300, 400), False)
+    r1 = om.dual_rule_read(cap_a, cap_b)
+    r2 = om.dual_rule_read(cap_a, cap_b)
+    assert r1 == r2  # default_rng(seed) -> bit-identical reads
+    # pinned seeded permutation value (seed 11, 4000 flips) for this geometry
+    assert r1["p_mag"] == pytest.approx(0.06425)
+    # a different seed draws different flips
+    r3 = om.dual_rule_read(cap_a, cap_b, seed=12)
+    assert r3["p_mag"] != r1["p_mag"]
+
+
+def test_dual_rule_read_direction():
+    # b the clear winner: d_obs < 0 -> 'b'
+    cap_a = dict.fromkeys((0, 100, 200), False)
+    cap_b = {0: True, 100: True, 200: False}
+    r = om.dual_rule_read(cap_a, cap_b)
+    assert r["d_obs"] < 0 and r["direction"] == "b"
+    # d_obs == 0 (2 a-only frames vs 2 b-only frames) but ea=2 > eb=1 -> 'a'
+    ca = {0: True, 200: True, 400: False, 410: False}
+    cb = {0: False, 200: False, 400: True, 410: True}
+    rt = om.dual_rule_read(ca, cb)
+    assert rt["d_obs"] == 0.0 and rt["ea"] == 2 and rt["eb"] == 1
+    assert rt["direction"] == "a"
+    # |d_obs| = 0 threshold makes the permutation inert
+    assert rt["p_mag"] == 1.0
+
+
+# ---------------------------------------------------------------------------
 # Framing metrics
 # ---------------------------------------------------------------------------
+
+
+def test_framing_events_min_frames():
+    frames = [0, 8, 16, 24, 32, 200, 208, 216, 224, 900]
+    # gap-64 events: [0..32] (5 fr), [200..224] (4 fr), [900] (1 fr)
+    assert om.framing_events(frames) == [[0, 8, 16, 24, 32]]
+    assert om.framing_events(frames, min_frames=4) == [
+        [0, 8, 16, 24, 32],
+        [200, 208, 216, 224],
+    ]
+    assert om.framing_events(frames, min_frames=1) == om.cluster_events(frames)
+    assert om.framing_events([]) == []
 
 
 def test_pan_velocity_stride_normalized():
@@ -135,6 +211,49 @@ def test_hold_fidelity_swing_ratio():
     assert rows[0][3] == 0.0 and med == 0.0
     rows, _med = om.hold_fidelity(arm, gt_static, [seg])
     assert math.isinf(rows[0][3])
+
+
+# ---------------------------------------------------------------------------
+# Amended hold unit (EXP-OP-02 final correction)
+# ---------------------------------------------------------------------------
+
+
+def test_hold_clusters_amended_unit():
+    # gap-40 clustering: 40 apart joins, 41 splits
+    fx = {0: 0.0, 40: 10.0, 80: 20.0, 120: 30.0}
+    assert om.hold_clusters(fx) == [[0, 40, 80, 120]]
+    fxsplit = {0: 0.0, 41: 0.0, 82: 0.0, 123: 0.0}  # 41-gaps -> 4 singletons
+    assert om.hold_clusters(fxsplit) == []
+    # n = 3 cluster excluded (min_frames 4)
+    assert om.hold_clusters({0: 0.0, 8: 1.0, 16: 2.0}) == []
+    # GT swing exactly 200 px excluded -- STRICT < (the (h) script's rule)
+    fx200 = {0: 1000.0, 8: 1200.0, 16: 1000.0, 24: 1000.0}
+    assert om.hold_clusters(fx200) == []
+    fx199 = {0: 1000.0, 8: 1199.9, 16: 1000.0, 24: 1000.0}
+    assert om.hold_clusters(fx199) == [[0, 8, 16, 24]]
+
+
+def test_hold_fidelity_amended():
+    frames = [0, 8, 16, 24]
+    gt = {0: 1000.0, 8: 1050.0, 16: 1000.0, 24: 1050.0}  # swing 50 < 200
+    arm = {f: 1000.0 + 2.0 * f for f in frames}  # swing 48 -> ratio 0.96
+    rows, med, n = om.hold_fidelity_amended(arm, gt)
+    assert n == 1 and med == pytest.approx(48.0 / 50.0)
+    cl, gt_swing, arm_swing, ratio = rows[0]
+    assert cl == frames and gt_swing == 50.0 and arm_swing == 48.0
+    assert ratio == pytest.approx(0.96)
+    # arm covering < 2 cluster frames -> cluster skipped (uncovered)
+    assert om.hold_fidelity_amended({0: 1.0}, gt) == ([], None, 0)
+    # zero GT swing: ratio 0.0 when the arm also held, inf when it swung
+    gt0 = dict.fromkeys(frames, 1000.0)
+    _r, med0, n0 = om.hold_fidelity_amended(dict.fromkeys(frames, 5.0), gt0)
+    assert med0 == 0.0 and n0 == 1
+    rinf, _m, _n = om.hold_fidelity_amended({f: float(f) for f in frames}, gt0)
+    assert math.isinf(rinf[0][3])
+    # NO conditioning on the arm's swing: a wildly swinging arm still qualifies
+    wild = {0: 0.0, 8: 5000.0, 16: 0.0, 24: 5000.0}
+    _rows, med_wild, n_wild = om.hold_fidelity_amended(wild, gt)
+    assert n_wild == 1 and med_wild == pytest.approx(5000.0 / 50.0)
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +326,11 @@ LABEL_FRAMES = [0, 8, 16, 24, 100, 108, 900, 908]
 LABEL_FX = [1000.0, 1050.0, 1000.0, 1050.0, 2000.0, 2050.0, 3000.0, 3050.0]
 
 
-def _write_synthetic(tmp_path, campath_len=1000, ac_frames=500, skip_labels=False):
-    """Tiny synthetic set dir + game dir + campath: champ cx constant 1100,
-    AutoCam x constant 1000 over the first ``ac_frames`` frames."""
+def _write_synthetic(
+    tmp_path, campath_len=1000, ac_frames=500, skip_labels=False, champ_cx=1100.0
+):
+    """Tiny synthetic set dir + game dir + campath: champ cx constant
+    ``champ_cx``, AutoCam x constant 1000 over the first ``ac_frames`` frames."""
     sd = tmp_path / "synth_set"
     sd.mkdir(exist_ok=True)
     rows = [
@@ -249,7 +370,57 @@ def _write_synthetic(tmp_path, campath_len=1000, ac_frames=500, skip_labels=Fals
                 "src_w": 3840,
                 "src_h": 1080,
                 "fps": 30.0,
-                "frames": [[1100.0, 500.0, 42.0]] * campath_len,
+                "frames": [[champ_cx, 500.0, 42.0]] * campath_len,
+            }
+        )
+    )
+    return sd, gd, cp
+
+
+# 4 framing events of 5 frames each (gap-64; separations 168 > 64) which are
+# also 4 amended hold clusters (gap-40, n=5 >= 4, GT swing 50 < 200): dense
+# enough that every amended-unit metric and null band is computable.
+DENSE_EVENTS = [list(range(s, s + 40, 8)) for s in (0, 200, 400, 600)]
+DENSE_FRAMES = [f for ev in DENSE_EVENTS for f in ev]
+
+
+def _write_synthetic_dense(tmp_path):
+    """Denser synthetic set: champ cx constant 1100, AutoCam covers everything,
+    GT fx alternates 1000/1050 inside each event."""
+    sd = tmp_path / "synth_dense"
+    sd.mkdir(exist_ok=True)
+    rows = [
+        {"frame_idx": f, "action": "view", "fx": 1000.0 + 50.0 * (i % 2), "fy": None}
+        for i, f in enumerate(DENSE_FRAMES)
+    ]
+    (sd / "labels.json").write_text(json.dumps(rows))
+    (sd / "manifest.json").write_text(
+        json.dumps(
+            {
+                "set": "synth_dense",
+                "n_frames": len(DENSE_FRAMES),
+                "frames": [{"frame_idx": f, "kind": "?"} for f in DENSE_FRAMES],
+            }
+        )
+    )
+    gd = tmp_path / "game_dense"
+    gd.mkdir(exist_ok=True)
+    (gd / "game.json").write_text(
+        json.dumps({"segments": [{"seg": "s0", "global_offset": 0}]})
+    )
+    with open(gd / "autocam_viewport.jsonl", "w") as fh:
+        for f in range(700):
+            fh.write(json.dumps({"seg": "s0", "f": f, "x": 1000.0, "y": 500.0}) + "\n")
+    cp = tmp_path / "campath_dense.json"
+    cp.write_text(
+        json.dumps(
+            {
+                "schema": "camera_path/1",
+                "g_start": 0,
+                "src_w": 3840,
+                "src_h": 1080,
+                "fps": 30.0,
+                "frames": [[1100.0, 500.0, 42.0]] * 700,
             }
         )
     )
@@ -298,15 +469,25 @@ def test_cli_smoke_report_cells(tmp_path):
     # ext-div present -> original / ext-div subsets appear with the right ns
     assert blk["cells"]["ext-div"]["all"]["n_labeled"] == 2
     assert blk["cells"]["original"]["all"]["n_labeled"] == 6
-    # framing computable: 3 contiguous segments, GT-derived threshold present
-    assert blk["framing"]["computable"] is True
-    assert blk["framing"]["n_segments"] == 3
-    assert blk["framing"]["gt"]["v_thresh"] > 0
-    assert "champ" in blk["framing"]["arms"] and "AC" in blk["framing"]["arms"]
-    # champ is constant -> zero pan velocity everywhere
-    assert blk["framing"]["arms"]["champ"]["velocity"]["median"] == pytest.approx(0.0)
+    # framing on the AMENDED units: the sparse set has NO >=5-frame gap-64 event
+    # (events are 4/2/2 frames), so velocity/reversal are STATED non-computable
+    fr = blk["framing"]
+    assert fr["computable"] is False and "no framing event" in fr["note"]
+    assert fr["n_segments"] == 3 and fr["n_framing_events"] == 0
+    assert "champ" in fr["arms"] and "AC" in fr["arms"]
+    assert "velocity" not in fr["arms"]["champ"]  # absent, not faked
+    # ONE amended hold cluster ([0,8,16,24], GT swing 50 < 200); champ constant
+    # -> arm swing 0 -> ratio 0.0; old whole-event hold kept as the diagnostic
+    assert fr["n_hold_clusters"] == 1
+    champ_fr = fr["arms"]["champ"]
+    assert champ_fr["hold"]["n_clusters"] == 1
+    assert champ_fr["hold"]["median_ratio"] == pytest.approx(0.0)
+    assert champ_fr["hold_wholeevent"]["n_segments"] == 3
+    assert champ_fr["hold_wholeevent"]["median_ratio"] == pytest.approx(0.0)
     # pair flips exist per subset
     assert "champ_vs_AC" in blk["pair_flips"]["ALL"]
+    # no --referee flag -> no referee block
+    assert "referee" not in blk
     # pooled table mirrors the single set
     assert report["pooled"]["ALL"]["all"]["arms"]["champ"]["n"] == 8
 
@@ -325,17 +506,69 @@ def test_cli_short_campath_reports_coverage(tmp_path):
 
 
 def test_cli_null_calibration_bands(tmp_path):
-    sd, gd, cp = _write_synthetic(tmp_path)
+    # dense set: 4 framing events (>=5 frames) = 4 amended hold clusters
+    sd, gd, cp = _write_synthetic_dense(tmp_path)
     report = _run_scoreboard(
         tmp_path, sd, gd, cp, extra=["--null-calibration", "--seed", "5"]
     )
-    nc = report["null_calibration"]["synth_set"]
+    blk = report["sets"]["synth_dense"]
+    assert blk["framing"]["computable"] is True
+    assert blk["framing"]["n_framing_events"] == 4
+    assert blk["framing"]["n_hold_clusters"] == 4
+    assert blk["framing"]["gt"]["v_thresh"] > 0
+    # champ is constant -> zero pan velocity everywhere
+    assert blk["framing"]["arms"]["champ"]["velocity"]["median"] == pytest.approx(0.0)
+    nc = report["null_calibration"]["synth_dense"]
     assert nc["arm"] == "champ" and nc["reps"] == 300 and nc["seed"] == 5
     # champ is constant -> every framing metric is 0 on every half-split
     assert nc["pan_velocity_median"]["band"] == [0.0, 0.0]
     assert nc["reversal_rate"]["band"] == [0.0, 0.0]
     assert nc["hold_fidelity_median_ratio"]["band"] == [0.0, 0.0]
-    assert nc["pan_velocity_median"]["n_events"] == 3
+    # velocity/reversal split over the 4 framing events; hold over the 4 clusters
+    assert nc["pan_velocity_median"]["n_events"] == 4
+    assert nc["hold_fidelity_median_ratio"]["n_events"] == 4
+    assert "framing_events" in nc["units"]["velocity_reversal"]
+    assert "hold_clusters" in nc["units"]["hold"]
+
+
+def test_cli_null_calibration_power_floors_on_sparse_set(tmp_path):
+    # the sparse set has 0 framing events (>=5 fr) and 1 amended hold cluster:
+    # every band is incomputable and must record its power floor EXPLICITLY
+    sd, gd, cp = _write_synthetic(tmp_path)
+    report = _run_scoreboard(tmp_path, sd, gd, cp, extra=["--null-calibration"])
+    nc = report["null_calibration"]["synth_set"]
+    assert nc["pan_velocity_median"]["band"] is None
+    assert "power_floor" in nc["pan_velocity_median"]
+    # no framing event -> no GT velocity threshold -> reversal power floor
+    assert nc["reversal_rate"]["band"] is None
+    assert "no GT velocity threshold" in nc["reversal_rate"]["power_floor"]["reason"]
+    # 1 amended hold cluster -> fewer than 2 events -> power floor
+    hf = nc["hold_fidelity_median_ratio"]
+    assert hf["band"] is None
+    assert hf["power_floor"]["n_events"] == 1
+    assert "fewer than 2" in hf["power_floor"]["reason"]
+
+
+def test_cli_referee_dual_rule_reads(tmp_path):
+    # champ cx 2000: captures@600 exactly {100, 108}; AC (covers frames < 500)
+    # captures {0, 8, 16, 24}. Common frames {0,8,16,24,100,108} -> 2 events;
+    # contribs (0-4) and (2-0) -> d_obs = -2/6; ea=1, eb=1 -> p_sign = 1.0;
+    # permutation of (-4, +2): |sum|/6 >= 1/3 for all 4 patterns -> p_mag = 1.0.
+    sd, gd, cp = _write_synthetic(tmp_path, champ_cx=2000.0)
+    report = _run_scoreboard(tmp_path, sd, gd, cp, extra=["--referee"])
+    ref = report["sets"]["synth_set"]["referee"]
+    r = ref["ALL"]["all"]["champ_vs_AC"]
+    assert r["ea"] == 1 and r["eb"] == 1
+    assert r["p_sign"] == 1.0
+    assert r["d_obs"] == pytest.approx(-2.0 / 6.0)
+    assert r["p_mag"] == 1.0
+    assert r["decisive"] is False and r["direction"] == "b"
+    # subsets and the 'all' band always present (no fy -> no geometry bands)
+    assert set(ref.keys()) == {"ALL", "original", "ext-div"}
+    assert list(ref["ALL"].keys()) == ["all"]
+    # ext-div frames (900, 908) are beyond AC coverage -> no common frames
+    rx = ref["ext-div"]["all"]["champ_vs_AC"]
+    assert rx["ea"] == 0 and rx["eb"] == 0 and rx["p_sign"] == 1.0
 
 
 def test_cli_empty_labels_hard_fails(tmp_path):

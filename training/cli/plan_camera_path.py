@@ -93,6 +93,112 @@ def score_plan(
     }
 
 
+def replay_champion_chain(
+    fullgame_dir: Path | str,
+    game_dir: Path | str,
+    net_path: str,
+    *,
+    emission_weight: float = 1.0,
+    pnone_scale: float = 1.0,
+    phys_sigma_px: float = 5.0,
+    bridge_w: float = 2.0,
+    oob_w: float = 2.0,
+    static_w: float = 2.0,
+    stride: int = 1,
+) -> dict:
+    """The CURRENT champion camera chain, exactly as this CLI runs it: cached
+    ``fullgame_candidates/1`` dump -> selector emissions -> rerank (shipped
+    config) -> aerial bridge -> Kalman smooth -> upsample -> depth ->
+    :func:`plan_camera`.
+
+    Extracted UNCHANGED from ``main`` (2026-07-25) so the oracle ladder
+    (``training.cli.operator_ladder`` run-a) replays the same code instead of
+    forking it; the CLI behavior is identical. ``stride`` (ladder-only, default
+    1 = CLI behavior) subsamples the candidate grid before the chain.
+
+    Returns ``{"ef", "sel", "track", "traj", "depth01", "plan", "g_start",
+    "src_w", "src_h", "fps", "gj", "polygon"}``.
+    """
+    from training.cli.build_selector_labels import load_fullgame_candidates
+    from training.models.selector_net import load_selector, pack_frames, predict_probs
+    from training.world_model.camera_planner import plan_camera, upsample_track
+    from training.world_model.geometry import build_field_geometry
+    from training.world_model.reranker import (
+        RerankConfig,
+        bridge_aerial_gaps,
+        kalman_smooth,
+        rerank,
+    )
+    from training.world_model.selector_features import build_features
+    from training.world_model.tbd import Candidate
+
+    gd = Path(game_dir)
+    ef, cands, _meta = load_fullgame_candidates(Path(fullgame_dir))
+    if stride > 1:
+        ef = ef[::stride]
+    if len(ef) < 2:
+        raise SystemExit(
+            f"plan_camera_path: candidate dump {fullgame_dir} has {len(ef)} "
+            "frames after stride -- need >= 2"
+        )
+    gj = json.loads((gd / "game.json").read_text(encoding="utf-8", errors="ignore"))
+    polygon = np.asarray(gj["field_polygon"], float)
+    geom = build_field_geometry(polygon)
+    seg0 = gj["segments"][0]
+    src_w, src_h = int(seg0["w"]), int(seg0["h"])
+    frames = [
+        [Candidate(x=x, y=y, score=s, size_px=None) for (x, y, s, _z) in cands[g]]
+        for g in ef
+    ]
+    gaps = [1] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
+    net, keep = load_selector(net_path)
+    feats = [x[:, keep] for x in build_features(frames, geom, ef=ef)]
+    packed, mask = pack_frames(feats)
+    probs = predict_probs(net, packed, mask)
+    w = emission_weight
+    priors = [
+        w * -np.log(np.maximum(probs[i, : len(fr)], 1e-6)) if fr else np.zeros(0)
+        for i, fr in enumerate(frames)
+    ]
+    mc = [
+        float(pnone_scale * w * -np.log(max(float(probs[i, -1]), 1e-6)))
+        for i in range(len(frames))
+    ]
+    cfg = replace(
+        RerankConfig(),
+        alpha=0.0,
+        static_w=static_w,
+        motion_w=0.0,
+        phys_sigma_px=phys_sigma_px,
+        bridge_w=bridge_w,
+        oob_w=oob_w,
+    )
+    sel = rerank(
+        frames, geom, frame_gaps=gaps, priors=priors, miss_costs=mc, config=cfg
+    )
+    sel = bridge_aerial_gaps(sel, geom, frame_gaps=gaps, config=cfg)
+    track = kalman_smooth(sel, geom)
+
+    g_start, g_end = int(ef[0]), int(ef[-1]) + 1
+    traj = upsample_track(track, ef, g_start, g_end)
+    depth01 = depth_from_polygon(traj, polygon)
+    plan = plan_camera(traj, src_w=src_w, src_h=src_h, depth01=depth01)
+    return {
+        "ef": ef,
+        "sel": sel,
+        "track": track,
+        "traj": traj,
+        "depth01": depth01,
+        "plan": plan,
+        "g_start": g_start,
+        "src_w": src_w,
+        "src_h": src_h,
+        "fps": float(gj.get("fps", 20.0)),
+        "gj": gj,
+        "polygon": polygon,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--net", required=True)
@@ -107,74 +213,29 @@ def main() -> None:
     ap.add_argument("--static-w", type=float, default=2.0)
     args = ap.parse_args()
 
-    from training.cli.build_selector_labels import load_fullgame_candidates
-    from training.models.selector_net import load_selector, pack_frames, predict_probs
-    from training.world_model.camera_planner import (
-        plan_camera,
-        save_camera_path,
-        upsample_track,
-    )
-    from training.world_model.geometry import build_field_geometry
-    from training.world_model.reranker import (
-        RerankConfig,
-        bridge_aerial_gaps,
-        kalman_smooth,
-        rerank,
-    )
-    from training.world_model.selector_features import build_features
-    from training.world_model.tbd import Candidate
+    from training.world_model.camera_planner import save_camera_path
 
     gd = Path(args.game_dir)
-    ef, cands, _meta = load_fullgame_candidates(Path(args.fullgame_dir))
-    gj = json.loads((gd / "game.json").read_text(encoding="utf-8", errors="ignore"))
-    polygon = np.asarray(gj["field_polygon"], float)
-    geom = build_field_geometry(polygon)
-    seg0 = gj["segments"][0]
-    src_w, src_h = int(seg0["w"]), int(seg0["h"])
-    frames = [
-        [Candidate(x=x, y=y, score=s, size_px=None) for (x, y, s, _z) in cands[g]]
-        for g in ef
-    ]
-    gaps = [1] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
-    net, keep = load_selector(args.net)
-    feats = [x[:, keep] for x in build_features(frames, geom, ef=ef)]
-    packed, mask = pack_frames(feats)
-    probs = predict_probs(net, packed, mask)
-    w = args.emission_weight
-    priors = [
-        w * -np.log(np.maximum(probs[i, : len(fr)], 1e-6)) if fr else np.zeros(0)
-        for i, fr in enumerate(frames)
-    ]
-    mc = [
-        float(args.pnone_scale * w * -np.log(max(float(probs[i, -1]), 1e-6)))
-        for i in range(len(frames))
-    ]
-    cfg = replace(
-        RerankConfig(),
-        alpha=0.0,
-        static_w=args.static_w,
-        motion_w=0.0,
+    res = replay_champion_chain(
+        args.fullgame_dir,
+        args.game_dir,
+        args.net,
+        emission_weight=args.emission_weight,
+        pnone_scale=args.pnone_scale,
         phys_sigma_px=args.phys_sigma_px,
         bridge_w=args.bridge_w,
         oob_w=args.oob_w,
+        static_w=args.static_w,
     )
-    sel = rerank(
-        frames, geom, frame_gaps=gaps, priors=priors, miss_costs=mc, config=cfg
-    )
-    sel = bridge_aerial_gaps(sel, geom, frame_gaps=gaps, config=cfg)
-    track = kalman_smooth(sel, geom)
-
-    g_start, g_end = int(ef[0]), int(ef[-1]) + 1
-    traj = upsample_track(track, ef, g_start, g_end)
-    depth01 = depth_from_polygon(traj, polygon)
-    plan = plan_camera(traj, src_w=src_w, src_h=src_h, depth01=depth01)
+    ef, sel, traj, plan = res["ef"], res["sel"], res["traj"], res["plan"]
+    g_start, src_w = res["g_start"], res["src_w"]
     save_camera_path(
         args.out,
         plan,
         g_start=g_start,
         src_w=src_w,
-        src_h=src_h,
-        fps=float(gj.get("fps", 20.0)),
+        src_h=res["src_h"],
+        fps=res["fps"],
     )
     # Debug sidecar for the eval renderer. Two distinct signals:
     #  - "detections": the RAW per-frame SELECTED ball (rerank's chosen candidate at
