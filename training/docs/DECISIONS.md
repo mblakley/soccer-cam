@@ -20,16 +20,24 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   DISCREPANCY ALARM, never a polygon gate ((n)); guards HARD-FAIL in chains ((j).3).
 - **DAY-ONE ORDER (07-25, fresh):** 1) stoppage-HOLD planner state (task #20; 56% of div
   frames; zero-click eval banked). 2) ray-geometry fix + interim curve/scalar (task #19
-  triple context). 3) per branch (q)(b) + PARKED items (Dahua-refresh retrain of the product
-  detector — the arms beat the champion 0.63 vs 0.45 on Pittsford, a DATA effect; mg_norm's
-  suggestive 28v22 edge — pending seed-2 noise band, read noise-band-first per #12).
+  triple context). 3) **Dahua-refresh retrain of the product detector (task #21, promoted
+  07-25): measured ~+0.19 expected on the adversarial Pittsford set (ctrl 0.630 vs champion
+  0.452 capture@600, arm-independent data effect); viewport consumer = Dahua-holdout capture;
+  gate = primary-family viewport NON-REGRESSION (frozen GT v1) + Pittsford confirmation.**
+  mg_norm's suggestive 28v22 edge is read ONLY after seed-2's noise band, as bound (#12).
+- **POWER (07-25, replaces the void row):** SPC-18k detector rows = WEAK nulls (9 events;
+  block power ~0 at all Δ). PIT-viewport = the POWERED instrument (142 events; ≥97% at
+  Δ≥0.10 block, 100% diffuse). Pattern-4 claims cite the viewport tier; detector-tier
+  event enrichment is the fix if a detector null must ever stand alone.
 - **Champions:** detector hn4 (far-CEILING 0.965), selector v7. **Cross-camera reality:
   AutoCam beats our champion on the Dahua holdout failure-mode set (0.759 vs 0.542) —
   Dahua transfer is open; Dahua training data closes most of it (arm ctrl 0.644).**
 - **VIEWPORT MATCH IS THE OBJECTIVE (07-24 (k)).** Detector rows VETO, never PROMOTE;
   decisive detector-vs-viewport conflicts → viewport wins + EXPERIMENTS entry; every lever
   names its viewport consumer; labeling economy favors viewport coverage. Detector rows are
-  DIAGNOSTIC (stage attribution).
+  DIAGNOSTIC (stage attribution). **(j)-recalibration (07-25): the tracker measurably
+  absorbs 1.7–2.8x ruler damage — a detector veto FORCES the viewport check; it is not
+  itself evidence of product damage.**
 - **Gates (G1):** ceiling + product VIEWPORT capture vs AutoCam (frozen GT v1). Argmax =
   directional color only. Every size-conditioned number cites its instrument's RULER RATIO.
 - **Noise protocol:** event-level sign test (gap=64) + exact sign-flip permutation (dual

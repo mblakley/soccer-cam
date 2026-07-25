@@ -84,6 +84,22 @@ Pittsford edge is a data finding, not a promotion case). Detector arc CLOSES per
 ray-geometry fix + interim curve/scalar #2, then per branch (q)(b): no channel
 revisit before the ruler fix certifies.
 
+**POWER ADDENDUM (07-25, analysis-only on banked dumps — the pre-registered
+pattern-4 qualifier):** dual rule at the deciding instruments, 300 reps:
+| instrument | structure | Δ=0.05 | Δ=0.10 | Δ=0.15 |
+|---|---|---|---|---|
+| SPC-18k (detector) | 494 fr / 9 ev | iid 0.24 / block 0.00 | 0.58 / 0.02 | 0.85 / 0.03 |
+| PIT-viewport | 640 fr / 142 ev | iid 1.00 / block 0.72 | 1.00 / 0.97 | 1.00 / 1.00 |
+
+**Qualified pattern-4 language:** the detector-tier arm zeros are WEAK nulls —
+SPC-18k's 9-event structure cannot detect block effects at any tested magnitude
+(passage-clustered misses are invisible to it). The VIEWPORT-tier arm parity is a
+POWERED null: no effect ≥0.05 diffuse / ≥0.10 block at ≥97% power. The verdict's
+"arms do not separate" claim therefore rests on the viewport tier, which is both
+the objective (k) and the powered instrument — the detector tier contributes vetoes
+and diagnostics only. Detector-tier event enrichment (more SPC windows/events)
+remains the fix if a detector-tier null ever needs to carry weight alone.
+
 **PARKED (surfaced tonight, no pre-statement, no action):** (i) mg-arms-vs-champion
 Pittsford gap suggests a Dahua-refresh retrain of the product detector — parked for
 the day-one roadmap discussion; (ii) mg_norm's suggestive viewport edge over ctrl
