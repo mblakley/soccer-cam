@@ -4,6 +4,66 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-06: THE W1 TABLE — goal-as-numbers per band × family, headroom split, lookahead priced, ceiling check (2026-07-25, BANKED)
+
+**The scoreboard the arc runs on. Champion = hn4@s4 dumps → v7 → shipped tracker → planner
+(provenance verified per cell). Reolink = primary family (DECISIONS (t)); PIT-Dahua =
+supplemental robustness row. All GT = human viewport views; capture@600 / med|Δcx| px.**
+
+### Goal cells (champion vs AutoCam)
+| family (n far/mid/near) | band | champion | AutoCam | verdict (dual rule) |
+|---|---|---|---|---|
+| **SPC-Reolink** (290/317/42) | far | 0.441 / 1625 | 0.443 / 752 | **zero** (parity at power) |
+| | mid | 0.719 / 82 | 0.804 / 354 | **zero** |
+| | near | 0.762 / 25 | 1.000 / 47 | **zero** (2 events) |
+| | ALL | 0.598 / 232 | 0.640 / 453 | **zero** (ev4v4) |
+| **FAIR-Reolink** (217/397/92) | far | 0.525 / 360 | — | **AC reference PENDING** |
+| | mid | 0.327 / 960 | — | (fresh aim run failed 07-11: |
+| | near | 0.793 / 281 | — | version-error stub; re-run queued) |
+| **PIT-Dahua** (397/242/1) — supplemental | far | 0.481 / 698 | 0.965 / 129 | **AC decisive** (floor row per (t)) |
+| | mid | 0.640 / 345 | 0.426 / 1191 | zero (power) |
+| | ALL | 0.542 / 450 | 0.759 / 207 | AC decisive |
+
+**Goal status in one line: MATCH on the primary family = already true within instrument
+power (no decisive cell either way on SPC); BEAT far = open everywhere; the Dahua
+supplemental row is decisively behind (non-collapse floor applies, not "beat").**
+
+### Oracle ladder / headroom split (spc = the readable family)
+- **A (baseline)**: table above. **B (GT-ball injection, 1,351 anchors)**: spc far 0.620 →
+  **B−A = +0.18 far = input-side headroom** (calibration/coverage through the CURRENT
+  interpreter). fair-B UNREADABLE (208 anchors too sparse to drive the chain — B needs
+  dense GT); PIT-B impossible (0 ball GT).
+- **GT−B (interpretation-only) ≈ 0.38 far on spc** (GT viewport ceiling ≈1.0 vs B 0.620) —
+  **interpretation headroom is ~2× input headroom in the far band.** W2/W3's half of the
+  ledger is bigger than the detector-side half, on the family that matters.
+- **C (stoppage-freeze, PIT only): far +0.053 lower bound** (span-entry anchor; W2's
+  last-good anchor should beat it).
+- **D (lookahead pricing): DEAD on all three families.** Leads ≈0 or negative (PIT far
+  degrades 0.481→0.443@2-3s; spc flat; fair 0.525→0.493@0.5s); zero-phase ≤ +0.02.
+  **W4's lookahead lever is UNFUNDED, three-family verdict.**
+
+### Pixel-ceiling check ((t).4, pre-registered): NOT confirmed as a hard ceiling
+Far candidate-present ≤100px of GT focal (each family's own failure-weighted views):
+PIT-Dahua **0.647**, SPC-Reolink 0.471, FAIR-Reolink 0.664. The far ball IS a candidate on
+~65% of Dahua failure views — the far-Dahua gap is mostly NOT missing pixels; it remains
+selection/coast/planner discipline. (t)'s re-anchor stands on its strategic grounds
+(Reolink resolution + product default), not on a proven sensor ceiling. Caveats: 100px is
+generous; candidate ≠ selectable; sets are family-specific failure samples, not matched.
+
+### Nulls & instruments (banked artifacts)
+`G:/ballresearch/operator/{pit_referee,spc_v1,spc_v2,fair_v1,pit_ladder,pit_ladder2,pit_coldaudit}.json`
++ `ladder/` campaths+trajectories. Framing metrics power-limited everywhere (7 velocity
+events PIT; hold clusters n=2); capture/|Δcx| are the powered cells. fair AC pending;
+mid/near event counts thin — event-spreading queue is the instrument unblocker.
+
+### What this funds next (per §3b pricing)
+1. **W2 stoppage-HOLD** (built, e8f6f4d): tune against the GT−B interpretation ledger;
+   headline = hold cells + far/ALL non-regression. 2. **W3 miss-cost + coast** vs B−A far
+   (+0.18) and GT−B. 3. **W4 far policy WITHOUT lookahead** (deadband/FOV floor/velocity
+   profile in field units, after #19). 4. **#21**: gate evidence in flight (mg_ctrl dumps);
+   promotion now ALSO gated on the (t) framing. 5. fair AutoCam re-run (server console
+   session) to fill the PENDING cells.
+
 ## EXP-OP-05: AUTOCAM REFERENCE CORRECTED on the primary family — the legacy viewport jsonl is the documented-BAD file; "we crush AutoCam" (07-19) is RETRACTED for spc/fair (2026-07-25)
 
 **Trigger:** Mark rejected the spc read "AC capture@600 = 0.063 mid" as impossible. He was

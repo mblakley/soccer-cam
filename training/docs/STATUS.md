@@ -1,6 +1,25 @@
 # Current Status
 
-*Last updated: 2026-07-25 (pre-dawn) — W1 instrument LANDED; fixture reproduces EXP-72; first per-band cells*
+*Last updated: 2026-07-25 (night) — **THE W1 TABLE IS BANKED (EXP-OP-06)***
+
+## 2026-07-25 (night) — W1 TABLE BANKED; W2 built; goal re-anchored Reolink-primary ((t))
+
+- **EXP-OP-06 = the arc's scoreboard.** Headline: MATCH on the primary family is already
+  true within power (SPC: no decisive cell either way vs the corrected AC reference);
+  BEAT-far is open; PIT-Dahua decisively behind (supplemental floor row per (t)).
+  Headroom: far interpretation (GT−B ≈ 0.38) ≈ 2× input (B−A = +0.18) on spc. Lookahead
+  DEAD (3-family Run D). Pixel-ceiling NOT confirmed (0.647 candidate-present on Dahua
+  far failure views). fair AC cells PENDING an AutoCam re-run (07-11 run was a stub).
+- **W2 stoppage-HOLD BUILT** (`feat/operator-w2-stoppage-hold` e8f6f4d, 1803 tests):
+  trajectory/2 seam + LIVE/HOLD/REACQUIRE FSM (off-by-default bit-identical) + the
+  candidates/1|2 gate fix. Next: tune vs this table.
+- **Day's protocol catches:** AC legacy jsonl banned (EXP-OP-05 retraction); dump
+  provenance mandatory (EXP-OP-04); (h) hold unit recovered + amended; seed-2 trained
+  (0.433 best-val); mg_ctrl spc/fair dumps for the #21 gate running overnight on the 4070.
+- Ops scars for FLEET: 3-way GPU dump thrash (single-owner re-proven); PS-remoting
+  double-hop cannot reach shares (scheduled-task pattern is mandatory); decode-bound
+  dumps ~20min/chunk regardless of GPU tier; 4070 laptop trains ~2.5× slower than the
+  FLEET table's estimate (measured 4h20 for 40ep).
 
 ## 2026-07-25 (pre-dawn) — W1 scoreboard instrument DONE + first reads (EXP-OP-01/02)
 
