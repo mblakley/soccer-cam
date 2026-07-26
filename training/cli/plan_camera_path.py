@@ -106,6 +106,9 @@ def replay_champion_chain(
     static_w: float = 2.0,
     stride: int = 1,
     planner_config=None,
+    static_filter_frac: float | None = None,
+    static_filter_cell: float = 50.0,
+    static_filter_radius: float = 60.0,
 ) -> dict:
     """The CURRENT champion camera chain, exactly as this CLI runs it: cached
     ``fullgame_candidates/1`` dump -> selector emissions -> rerank (shipped
@@ -139,6 +142,7 @@ def replay_champion_chain(
         candidate_dispersion,
         kalman_smooth,
         rerank,
+        static_candidate_filter,
     )
     from training.world_model.selector_features import build_features
     from training.world_model.tbd import Candidate
@@ -147,6 +151,15 @@ def replay_champion_chain(
     ef, cands, _meta = load_fullgame_candidates(Path(fullgame_dir))
     if stride > 1:
         ef = ef[::stride]
+    static_centers: list[tuple[float, float]] = []
+    if static_filter_frac:
+        cands, static_centers = static_candidate_filter(
+            ef,
+            cands,
+            cell_px=static_filter_cell,
+            presence_frac=static_filter_frac,
+            radius_px=static_filter_radius,
+        )
     if len(ef) < 2:
         raise SystemExit(
             f"plan_camera_path: candidate dump {fullgame_dir} has {len(ef)} "
@@ -231,6 +244,7 @@ def replay_champion_chain(
         "fps": float(gj.get("fps", 20.0)),
         "gj": gj,
         "polygon": polygon,
+        "static_centers": static_centers,
     }
 
 

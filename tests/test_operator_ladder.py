@@ -403,3 +403,52 @@ def test_run_b_missing_labels_hard_fails(tmp_path):
             ]
         )
     assert ei.value.code not in (0, None)
+
+
+# ---------------------------------------------------------------------------
+# static_candidate_filter (EXP-OP-10 arm F; #19 persistence component v0)
+# ---------------------------------------------------------------------------
+
+
+def test_static_filter_drops_persistent_keeps_moving():
+    from video_grouper.inference.ball_tracker import static_candidate_filter
+
+    ef = list(range(0, 400, 4))
+    cands = {}
+    for i, g in enumerate(ef):
+        rows = [(6060.0, 500.0, 0.9, None)]  # static distractor, every frame
+        if i % 2 == 0:
+            rows.append((100.0 + 12.0 * i, 800.0, 0.7, None))  # moving ball
+        cands[g] = rows
+    filtered, centers = static_candidate_filter(
+        ef, cands, cell_px=50.0, presence_frac=0.20, radius_px=60.0
+    )
+    assert len(centers) == 1
+    cx, cy = centers[0]
+    assert abs(cx - 6075.0) <= 50.0 and abs(cy - 525.0) <= 50.0
+    for g in ef:
+        assert all(abs(r[0] - 6060.0) > 1.0 for r in filtered[g])
+    moving = sum(len(v) for v in filtered.values())
+    assert moving == sum(1 for i, _ in enumerate(ef) if i % 2 == 0)
+
+
+def test_static_filter_below_threshold_kept():
+    from video_grouper.inference.ball_tracker import static_candidate_filter
+
+    ef = list(range(0, 400, 4))
+    cands = {
+        g: ([(3000.0, 900.0, 0.8, None)] if i < 10 else [])  # 10% presence
+        for i, g in enumerate(ef)
+    }
+    filtered, centers = static_candidate_filter(ef, cands, presence_frac=0.20)
+    assert centers == []
+    assert sum(len(v) for v in filtered.values()) == 10
+
+
+def test_static_filter_off_is_identity():
+    from video_grouper.inference.ball_tracker import static_candidate_filter
+
+    ef = [0, 4, 8]
+    cands = {0: [(10.0, 10.0, 0.5, None)], 4: [], 8: [(20.0, 20.0, 0.6, None)]}
+    filtered, centers = static_candidate_filter(ef, cands, presence_frac=0.99)
+    assert centers == [] and filtered == cands

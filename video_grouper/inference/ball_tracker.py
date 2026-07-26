@@ -284,6 +284,54 @@ def static_persistence(
     return out
 
 
+def static_candidate_filter(
+    ef: list[int],
+    cands: dict[int, list[tuple]],
+    *,
+    cell_px: float = 50.0,
+    presence_frac: float = 0.20,
+    radius_px: float = 60.0,
+) -> tuple[dict[int, list[tuple]], list[tuple[float, float]]]:
+    """Session-scoped static-object suppression (#19 persistence component v0).
+
+    A real ball is never parked at one spot for a large fraction of a game;
+    adjacent-field balls and furniture are (EXP-OP-08/09: fixed-position
+    candidates at x~6059/6302 scoring 0.8-0.9 snared both our tracker AND
+    AutoCam for 13+ s while the true ball was a scored candidate nearby).
+    Grid cells (``cell_px``) containing a candidate in >= ``presence_frac`` of
+    the sampled frames are static objects; candidates within ``radius_px`` of
+    a static cell center are dropped from every frame. Offline equivalent of
+    an online rolling-window filter — no cross-game state.
+
+    Returns ``(filtered_cands, static_centers)``.
+    """
+    from collections import Counter
+
+    counts: Counter[tuple[int, int]] = Counter()
+    for g in ef:
+        counts.update(
+            {(int(row[0] // cell_px), int(row[1] // cell_px)) for row in cands[g]}
+        )
+    thr = presence_frac * len(ef)
+    centers = [
+        ((cx + 0.5) * cell_px, (cy + 0.5) * cell_px)
+        for (cx, cy), k in counts.items()
+        if k >= thr
+    ]
+    if not centers:
+        return dict(cands), []
+    r2 = radius_px * radius_px
+    filtered = {
+        g: [
+            row
+            for row in cands[g]
+            if not any((row[0] - a) ** 2 + (row[1] - b) ** 2 <= r2 for a, b in centers)
+        ]
+        for g in ef
+    }
+    return filtered, centers
+
+
 def candidate_dispersion(frames: list[list[Candidate]]) -> list[float | None]:
     """Per-frame candidate-cloud dispersion: RMS distance (source px) of the
     frame's candidates from their centroid — the trajectory/2 ``disp`` channel.

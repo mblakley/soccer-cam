@@ -17,6 +17,7 @@ from video_grouper.inference.ball_tracker import (  # noqa: F401
     coast_occlusions,
     kalman_smooth,
     rerank,
+    static_candidate_filter,
     static_persistence,
     track_ball,
 )

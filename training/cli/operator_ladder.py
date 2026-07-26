@@ -281,11 +281,20 @@ def cmd_run_a(args: argparse.Namespace) -> None:
     from video_grouper.inference.camera_planner import save_camera_path
 
     res = replay_champion_chain(
-        fg, gd, args.net, stride=args.stride, planner_config=pcfg
+        fg,
+        gd,
+        args.net,
+        stride=args.stride,
+        planner_config=pcfg,
+        static_filter_frac=args.static_filter_frac,
+        static_filter_cell=args.static_filter_cell,
+        static_filter_radius=args.static_filter_radius,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
-    gid = fg.name
+    if args.static_filter_frac and not res["static_centers"]:
+        print("run-a NOTE: static filter enabled but found no static cells")
+    gid = fg.name + (f".{args.tag}" if args.tag else "")
     outd.mkdir(parents=True, exist_ok=True)
     tpath = outd / f"{gid}.trajectory.json"
     cpath = outd / f"{gid}.campath.json"
@@ -310,7 +319,14 @@ def cmd_run_a(args: argparse.Namespace) -> None:
     print(
         f"run-a {gid}: dump {fg} + net {Path(args.net).name} (stride "
         f"{args.stride}) -> {tpath.name} + {cpath.name} in {outd} "
-        f"({len(res['plan'])} frames, {n_pts} tracked points)"
+        f"({len(res['plan'])} frames, {n_pts} tracked points"
+        + (
+            f", static filter: {len(res['static_centers'])} centers "
+            f"@frac={args.static_filter_frac}"
+            if args.static_filter_frac
+            else ""
+        )
+        + ")"
     )
 
 
@@ -516,6 +532,21 @@ def main(argv: list[str] | None = None) -> None:
         default=1,
         help="subsample the dump's candidate grid (default 1 = full grid, the "
         "pipeline behavior)",
+    )
+    a.add_argument(
+        "--static-filter-frac",
+        type=float,
+        default=None,
+        help="enable session-scoped static-object suppression: drop candidates "
+        "near cells occupied in >= this fraction of frames (EXP-OP-10 arm F; "
+        "e.g. 0.20)",
+    )
+    a.add_argument("--static-filter-cell", type=float, default=50.0)
+    a.add_argument("--static-filter-radius", type=float, default=60.0)
+    a.add_argument(
+        "--tag",
+        default=None,
+        help="suffix for output basenames (arm separation in one out-dir)",
     )
     a.set_defaults(fn=cmd_run_a)
 
