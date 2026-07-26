@@ -4,6 +4,21 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-12: #21 GATE, SPC LEG — mg_ctrl PASSES non-regression; far +0.28 raw on the primary family; the one near loss is a single 4.4s event (2026-07-26)
+
+mg_ctrl(seed-1)@s4 dump -> v7 -> shipped chain, vs hn4 champion on spc_viewport_worst:
+ALL 0.687 vs 0.598 · far 0.724 vs 0.441 (best far cell measured on any arm, beats
+hn4+F@0.20's 0.707) · mid 0.685 vs 0.719 · near 0.452 vs 0.762 (med 3612).
+Dual rule mgctrl-vs-hn4: ZERO on every band (near ev0v1 — the whole regression is ONE
+contiguous 13-view event, g 5416-5504, 4.4s: the near-autopsy tracker-dynamics class,
+exactly W3's target). far ev4v1 d=+0.24 (not decisive, power). **Gate leg: PASS (no
+decisive regression), with the near event logged.** Pittsford confirmation already banked
+(EXP-72: 0.630 vs 0.452, arm-independent data effect). Remaining for the gate: fair leg
+(mg_ctrl fair dump finishing on the 4070) + the (t) framing note (coverage serves
+cross-camera robustness). Open composition read (not run): mg_ctrl + F@0.20 —
+the candidate PRODUCT stack for far.
+**Artifacts:** t21_spc.json; dumps/spc_mgctrl_s4 (relayed); ladder spc_mgctrl_s4.*.
+
 ## EXP-OP-11: FILTER CROSS-CHECKS + two refinement arms REJECTED — F@0.20 pixel-space is the promotion candidate (2026-07-26 morning)
 
 **F (frac 0.20) cross-game (capture@600, A0 -> F):**
