@@ -4,6 +4,31 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-08: WINFAR1 CLIP AUTOPSY (Mark's eyeball → mechanism) — selection COMMITMENT on a static distractor; the ball was a candidate the whole time (2026-07-26)
+
+**Trigger:** Mark watched `spc_winfar1_stack.mp4` (g 6624-7224): GT pinned far-left corner
+until ~0:24; BOTH viewports swing right. Frame trace (banked dump + trajectory + campaths):
+- sec 5-21: GT fx 2250-3300 (far left). **A candidate ≤20-130px from GT exists at every
+  sampled frame, scores to 0.91.** Perception clean; the WIN column is interpreter loss.
+- sec 3-8: top-1 candidates are right-side distractors (x≈5321/6059/6303 @ 0.83-0.91);
+  the Viterbi commits, track marches 2400→5600, then **parks 13 s** — the ~3000px switch
+  back is transition-cost-prohibitive, so the wrong path survives despite a persistent
+  in-place true-ball candidate. Planner follows its input honestly. **AutoCam parks at the
+  SAME distractor on the same frames** (5300-5570, sec 9-19); both recover ~sec 22-24.
+- x≈6059/6302 recur at FIXED positions all clip: a STATIC distractor (adjacent-field
+  ball class) — second measured kill for the #19 persistence/static filter (first: IRON's
+  (1637,470) furniture, (l)).
+**Mechanism named: selection commitment — per-frame emissions carry no credit for a
+spatially-CONSISTENT competing cluster, so 17 s of "same spot, decent score" evidence
+never accumulates against one wrong high-score commitment.**
+**W3 design amendment (pre-registered lever, joins the 3 arms):** competing-cluster
+track-switch — maintain cheap statistics of persistent off-path candidate clusters
+(position-stable, score≥thr, k-of-n frames); when one out-persists the current path,
+propose a switch (Viterbi restart or explicit switch state) instead of requiring a
+single-frame out-score. Priced vs GT−B like the rest of W3; scored on the WIN column.
+Also: the persistence filter's expected effect on THIS clip (killing 6059/6302) may
+alone flip the commitment — test filter-first, switch-second (cheapest-first order).
+
 ## EXP-OP-07: AC-CONDITIONAL CELLS + AGREEMENT ROW — the goal decomposed per (u); the far prize is one column (2026-07-25, addendum to the table)
 
 Champion capture@600 on GT views split by whether AutoCam captured the same view
