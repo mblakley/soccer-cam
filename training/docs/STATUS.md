@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-07-25 (night) — **THE W1 TABLE IS BANKED (EXP-OP-06)***
+*Last updated: 2026-07-26 (morning) — persistence filter PROVEN cross-game (EXP-OP-10/11); F@0.20 = promotion candidate*
 
 ## 2026-07-25 (night) — W1 TABLE BANKED; W2 built; goal re-anchored Reolink-primary ((t))
 

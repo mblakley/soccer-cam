@@ -4,6 +4,33 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-11: FILTER CROSS-CHECKS + two refinement arms REJECTED — F@0.20 pixel-space is the promotion candidate (2026-07-26 morning)
+
+**F (frac 0.20) cross-game (capture@600, A0 -> F):**
+- SPC far 0.441 -> 0.669 · PIT-orig far 0.303 -> 0.632 · FAIR far 0.525 -> 0.562
+- near: +0.24 / (n=1) / +0.16 · ALL: +0.07 / +0.11 / -0.01
+- mid (the trade): -0.088 / -0.167 / -0.075 — raw only, dual rule ZERO everywhere tested.
+- **PIT far vs AC: DECISIVE LOSS -> ZERO** (d halves -0.484 -> -0.257) — the (t)
+  non-collapse floor passes with room to spare.
+**F2 (world-gated, off-field-only): REJECTED.** SPC far collapses to 0.428, PIT to 0.372 —
+the 'in-field' statics near the far boundary are classified by exactly the world geometry
+the ONE BUG CLASS proved untrustworthy there (ruler error near/beyond boundaries). World-
+gating the filter re-imports the broken ruler; pixel-space-only survives until #19
+certifies. (The keeper-deletion theory of the mid dip also DIES here: F2 kept in-field
+cells and mid dropped anyway — the dip is indirect global-path re-solve, not deletions;
+only 10/34 lost spc mid views sit near a center.)
+**F30 (frac 0.30): REJECTED for robustness.** Better on spc (far 0.707!) and fair (0.608)
+but COLLAPSES on PIT (far 0.267 < A0; decisive AC loss returns) — PIT's statics sit below
+30% presence; frac is not robust above 0.20. Adaptive/percentile thresholds = future work
+(session-scoped only).
+**VERDICT: F @ frac 0.20, cell 50, radius 60, pixel-space, drop-all = the promotion
+candidate.** Wins far on all three games, no decisive regression anywhere, flips the WIN
+column 0.195 -> 0.558 on spc. mid raw dip (threshold-independent, never decisive) and the
+winfar2 goal-kick residual are W3's opening problems. Next: filter into the product
+ball_select path behind config + standard promotion protocol; then W3 arms on the F stream.
+**Artifacts:** exp11_{pit,fair,spc_f2,pit_f2,fair_f2,spc_f30,pit_f30,fair_f30}.json;
+ladder *.{F,F2,F30}.*; code @ w2 4e35e65.
+
 ## EXP-OP-10 RESULTS: the persistence filter PROVES OUT on far GT — WIN-far 0.195 -> 0.558, winfar1 fixed on the exact frames Mark watched; HOLD alone hurts on a dirty stream (2026-07-26)
 
 **Arms on SPC (649 views), capture@600 / med|dcx|:**
