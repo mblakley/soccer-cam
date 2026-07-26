@@ -4,6 +4,24 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-13: AC SOURCE VERIFICATION vs ball GT (Mark's directive) — aim file validated WITH a measured ~1s follower lag; legacy jsonls condemned by direct evidence; override gate amended (2026-07-26)
+
+Lag scan of med|ac_x - ball_gt_x| (spc: 1,351 ball anchors):
+- **SPC fresh aim: clean U-curve with minimum at lag +20 frames (~1s): 913/721/666/587/540/606/730 px at lags -100..-40..+100.** Reading: the file is frame-aligned (smooth
+  structure, no gross offset) and AutoCam's viewport TRAILS the ball by ~1s — consistent
+  with the RE'd ~3s recency-weighted follower. Median 540-587px vs instantaneous ball is
+  sane for a smoothed viewport. VALIDATED as tier-3 source.
+- **SPC + FAIR legacy viewport jsonls: flat 1530-1750px at ALL lags — no alignment
+  minimum exists.** Decorrelated at every shift; the EXP-OP-05 ban now rests on direct
+  ball-GT evidence on two games, not just the README note.
+- PIT jsonl: no ball GT; stands on the 50/60 cold audit + 0.759 vs human GT.
+**Consequence for (w) — override-gate amendment (pre-registered):** AC trailing the ball
+by ~1s means ball(f) vs ac(f) > 600px fires on pure follower lag during fast play, not
+just true losses. **Tier-1 (ball GT) divergence = min distance over the AC window
+ac[f-20..f+20] > 600px** — a trailing follower stays within its window; a park on the
+wrong object does not. Tier-2 (viewport GT) gate unchanged (both are viewport-speed
+signals). Composite builder must implement the WINDOWED tier-1 gate.
+
 ## EXP-OP-12: #21 GATE, SPC LEG — mg_ctrl PASSES non-regression; far +0.28 raw on the primary family; the one near loss is a single 4.4s event (2026-07-26)
 
 mg_ctrl(seed-1)@s4 dump -> v7 -> shipped chain, vs hn4 champion on spc_viewport_worst:
