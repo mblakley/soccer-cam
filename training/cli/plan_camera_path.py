@@ -109,6 +109,8 @@ def replay_champion_chain(
     static_filter_frac: float | None = None,
     static_filter_cell: float = 50.0,
     static_filter_radius: float = 60.0,
+    static_filter_offfield_only: bool = False,
+    static_filter_field_margin_m: float = 2.0,
 ) -> dict:
     """The CURRENT champion camera chain, exactly as this CLI runs it: cached
     ``fullgame_candidates/1`` dump -> selector emissions -> rerank (shipped
@@ -151,6 +153,9 @@ def replay_champion_chain(
     ef, cands, _meta = load_fullgame_candidates(Path(fullgame_dir))
     if stride > 1:
         ef = ef[::stride]
+    gj = json.loads((gd / "game.json").read_text(encoding="utf-8", errors="ignore"))
+    polygon = np.asarray(gj["field_polygon"], float)
+    geom = build_field_geometry(polygon)
     static_centers: list[tuple[float, float]] = []
     if static_filter_frac:
         cands, static_centers = static_candidate_filter(
@@ -160,14 +165,48 @@ def replay_champion_chain(
             presence_frac=static_filter_frac,
             radius_px=static_filter_radius,
         )
+        if static_filter_offfield_only and static_centers:
+            # EXP-OP-11 F2: an OFF-FIELD static is never the ball in play; an
+            # IN-FIELD static may be the keeper holding it -- leave those to the
+            # world-cell static_w penalty. Re-drop with only off-field centers.
+            from video_grouper.inference.world_geometry import (
+                DEFAULT_FIELD_LENGTH_M,
+                DEFAULT_FIELD_WIDTH_M,
+            )
+
+            m = static_filter_field_margin_m
+            w = geom.image_to_world(np.asarray(static_centers, float))
+            off = [
+                c
+                for c, (wx, wy) in zip(static_centers, w, strict=False)
+                if not (
+                    -m <= wx <= DEFAULT_FIELD_LENGTH_M + m
+                    and -m <= wy <= DEFAULT_FIELD_WIDTH_M + m
+                )
+            ]
+            ef2, cands2, _ = load_fullgame_candidates(Path(fullgame_dir))
+            if stride > 1:
+                ef2 = ef2[::stride]
+            if off:
+                r2 = static_filter_radius**2
+                cands = {
+                    g: [
+                        row
+                        for row in cands2[g]
+                        if not any(
+                            (row[0] - a) ** 2 + (row[1] - b) ** 2 <= r2 for a, b in off
+                        )
+                    ]
+                    for g in ef2
+                }
+            else:
+                cands = cands2
+            static_centers = off
     if len(ef) < 2:
         raise SystemExit(
             f"plan_camera_path: candidate dump {fullgame_dir} has {len(ef)} "
             "frames after stride -- need >= 2"
         )
-    gj = json.loads((gd / "game.json").read_text(encoding="utf-8", errors="ignore"))
-    polygon = np.asarray(gj["field_polygon"], float)
-    geom = build_field_geometry(polygon)
     seg0 = gj["segments"][0]
     src_w, src_h = int(seg0["w"]), int(seg0["h"])
     frames = [

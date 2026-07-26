@@ -289,6 +289,7 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         static_filter_frac=args.static_filter_frac,
         static_filter_cell=args.static_filter_cell,
         static_filter_radius=args.static_filter_radius,
+        static_filter_offfield_only=args.static_filter_offfield_only,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -543,6 +544,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     a.add_argument("--static-filter-cell", type=float, default=50.0)
     a.add_argument("--static-filter-radius", type=float, default=60.0)
+    a.add_argument(
+        "--static-filter-offfield-only",
+        action="store_true",
+        help="drop only static centers whose WORLD position is outside the "
+        "field rectangle (+2m) -- in-field statics (keepers) are left to the "
+        "world-cell static_w penalty (EXP-OP-11 arm F2)",
+    )
     a.add_argument(
         "--tag",
         default=None,
