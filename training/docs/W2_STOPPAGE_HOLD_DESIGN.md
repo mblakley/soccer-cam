@@ -132,3 +132,21 @@ Extends the FSM with an OOB-DEAD state (grounded in the winfar1 autopsy, EXP-OP-
   session-scoped, no cross-game memory.
 Pre-registered read: WIN-column far + the OOB segments' hold-fidelity; scored with the
 same referee protocol as the base FSM.
+
+### 7.1 Exit-boundary taxonomy (Mark, 2026-07-26)
+
+Classify by WHICH polygon boundary segment was crossed (reliable, geometric); never by
+predicted restart type (depends on last touch — unknowable). Three classes:
+- **Touchline exit -> throw-in:** unimodal gate at the exit point (+-few m), SHORT decay
+  (throw-ins restart in 5-20 s); hold near exit, modest widen.
+- **End-line exit -> goal kick OR corner (bimodal until reappearance):** gate = goal area
+  UNION nearest corner arc (corner is taken on the side the ball crossed); LONGER decay
+  (15-40 s). Framing: pre-widened toward the goal area; if reappearance resolves to the
+  goal area, ARM the ballistic bridge (a 40-60 m launch is the expected next event —
+  winfar2 / EXP-DIST-40's punt class); if it resolves to the corner arc, frame the
+  penalty box (the play target), not the taker.
+- **Goal-mouth crossing -> goal -> kickoff at center:** rare third case; gate at the
+  center circle with a LONG dead period — without it the end-line gate points at the
+  goal area wrongly for a minute after every goal.
+All session-scoped; no cross-game state. The bimodal gate self-disambiguates on
+reappearance — no last-touch inference anywhere.
