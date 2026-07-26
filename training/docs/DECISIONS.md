@@ -83,6 +83,25 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-25 (u): GOAL SEMANTICS SHARPENED — "mostly the same as AutoCam; better where AutoCam loses the ball" = the MATCH column and the WIN column (Mark)
+
+**Directive (Mark, 2026-07-25 night):** "we should be mostly the same as autocam, but better
+where autocam loses the ball (usually far)."
+
+**Operationalization (standing, extends (k)/(t)):** every family's goal cells split by the
+AC-conditional read: **MATCH column** = champion capture on views AC captured (target ≈ AC,
+i.e. ≈1.0 relative) · **WIN column** = champion capture on views AC missed (every capture
+is a strict win; AC's floor there is 0 by construction). Plus an **AGREEMENT row** over ALL
+frames (fraction within 600px of AC + med |Δcx| vs AC) — "mostly the same" made measurable
+without labels. First measured values (EXP-OP-07): on SPC far we already MATCH where AC
+works (0.940) — **the entire beat-far prize on the primary family is the WIN column: 190
+AC-missed far views of which we capture 37 (0.195)**. The tracker/planner is discarding the
+detector's far advantage precisely on the views where AC also fails — consistent with
+GT−B (interpretation) being 2× B−A. W2/W3 reads add the conditional columns to their
+pre-registrations; the scoreboard gains both metrics as standing rows.
+
+---
+
 ## 2026-07-25 (t): GOAL RE-ANCHORED — Reolink is the primary optimization family; Dahua is SUPPLEMENTAL; far-Dahua may be pixel-limited (Mark)
 
 **Directive (Mark, 2026-07-25):** "far dahua might never be better than autocam — we might

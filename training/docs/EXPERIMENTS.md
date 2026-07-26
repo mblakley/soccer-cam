@@ -4,6 +4,35 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-07: AC-CONDITIONAL CELLS + AGREEMENT ROW — the goal decomposed per (u); the far prize is one column (2026-07-25, addendum to the table)
+
+Champion capture@600 on GT views split by whether AutoCam captured the same view
+(valid AC references only: SPC fresh aim, PIT validated jsonl):
+
+| family | band | MATCH col (AC captured) | WIN col (AC missed) |
+|---|---|---|---|
+| SPC | far | **0.940** (142/151) | **0.195** (37/190) |
+| SPC | mid | 0.749 (191/255) | 0.597 (37/62) |
+| SPC | near | 0.762 (32/42) | — (0 AC misses) |
+| PIT | far | 0.480 (184/383) | 0.500 (7/14) |
+| PIT | mid | 0.466 (48/103) | 0.770 (107/139) |
+
+**AGREEMENT row (all frames, vs AC):** SPC 0.542 within-600 / med 511px · PIT 0.798 / 150px.
+
+**Reads:** (1) On the primary family we already MATCH AC where it works far (0.940) — the
+"mostly the same" half of (u) is nearly closed far, with mid/near match cols (0.75-0.76)
+the polish targets. (2) **The beat-far goal collapses to ONE cell: SPC far WIN col = 190
+views where AC lost the ball, we currently rescue 37.** These are the hard views (both
+systems fail); our detector's measured far advantage should cash exactly here and the
+interpreter is discarding it — the W2 (hold instead of sweep) + W3 (don't coast, don't
+chase) target population, priced by GT−B. (3) PIT mid WIN col 0.770 shows the pattern
+already works cross-camera where AC's mid weakness gives us misses to rescue. (4) SPC
+all-frame agreement (0.542) is much lower than PIT's (0.798) — on Reolink we diverge from
+AC constantly; fine per (u) as long as GT sides with us on the divergences — the flip reads
+(ev5v3 our way, not decisive) say it's currently a coin toss. Pre-registration consequence:
+W2/W3 promotion reads ADD the WIN/MATCH columns; a lever that lifts WIN-far while holding
+MATCH-far ≥0.94 is the shaped target.
+
 ## EXP-OP-06: THE W1 TABLE — goal-as-numbers per band × family, headroom split, lookahead priced, ceiling check (2026-07-25, BANKED)
 
 **The scoreboard the arc runs on. Champion = hn4@s4 dumps → v7 → shipped tracker → planner
