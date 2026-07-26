@@ -4,6 +4,24 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-14: FIRST COMPOSITE-STANDARD READ (spc) — the (w) instrument changes the verdicts: F trades MATCH for BEAT; mgctrl is the balanced arm (2026-07-26)
+
+Composite: 81,444 rows (ball 607 / view 252 / ac 80,585; corroborated 1,187). Cells
+(cap600 / containment):
+| arm | MATCH (75k dense) | BEAT (859 GT-override) |
+|---|---|---|
+| A0 | 0.535 / 0.671 | 0.519 / 0.587 |
+| F@0.20 | 0.471 / 0.582 (−0.06 cap) | 0.560 / 0.616 (+0.04) |
+| mgctrl | 0.506 / 0.651 (−0.03) | **0.583 / 0.653 (+0.06)** |
+Under GT-only scoring F looked strictly dominant; under Mark's standard its cost is
+visible: it diverges from AC's (usually-good) viewport on dense frames to win the
+override moments. mgctrl buys MORE beat for HALF the match cost. Next reads (queued):
+per-band composite split (is F's MATCH loss the mid path-dip?), the mgctrl x F
+composition, nulls (in p0_spc.json), PIT/fair composites. NOTE: the scoreboard's
+auto-'AC' arm here is the LEGACY jsonl (0.278 match) — label it banned in the report
+or suppress; the reference's AC tier is the validated aim source.
+**Artifacts:** spc_composite.jsonl, p0_spc.json; instrument @ w2 31df9fa.
+
 ## EXP-OP-13: AC SOURCE VERIFICATION vs ball GT (Mark's directive) — aim file validated WITH a measured ~1s follower lag; legacy jsonls condemned by direct evidence; override gate amended (2026-07-26)
 
 Lag scan of med|ac_x - ball_gt_x| (spc: 1,351 ball anchors):
