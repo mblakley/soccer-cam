@@ -101,7 +101,7 @@ machines on first contact — this doc describes roles and patterns, not live st
 ## 7. Amendments (2026-07-26)
 
 - **FORTNITE-OP has a REALLY fast CPU (Ryzen 7 5800X, 16 threads) — approved as a
-  CPU-analysis node** (Mark 07-26): replay sweeps, composite scoring, fits may run there
+  CPU-analysis node** (Mark 07-26). **FREE FOR PROCESSING ~through 2026-08-02 (Mark 07-26)** — no gaming contention expected; still verify nvidia-smi before GPU jobs: replay sweeps, composite scoring, fits may run there
   when the server CPU is the bottleneck. Gaming-first etiquette STILL applies to CPU
   work: check for a running game before heavy jobs. Cred: fortnite-op-training.xml.
   Setup needed on first use: uv missing under the training user; C: has ~24 GB free —
