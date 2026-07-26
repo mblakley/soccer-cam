@@ -97,3 +97,21 @@ machines on first contact — this doc describes roles and patterns, not live st
    server; product-floor checks on the host laptop; everything ntfys; the chain's
    status file is the single source of truth.
 6. Arc closes → archive → working dirs disposable → CURRENT STATE updated.
+
+## 7. Amendments (2026-07-26)
+
+- **FORTNITE-OP has a REALLY fast CPU (Ryzen 7 5800X, 16 threads) — approved as a
+  CPU-analysis node** (Mark 07-26): replay sweeps, composite scoring, fits may run there
+  when the server CPU is the bottleneck. Gaming-first etiquette STILL applies to CPU
+  work: check for a running game before heavy jobs. Cred: fortnite-op-training.xml.
+  Setup needed on first use: uv missing under the training user; C: has ~24 GB free —
+  stage lean.
+- Scheduled ONCE tasks fire at their nominal /ST time — create with a far-future /SD
+  and trigger via /Run only (the 23:5x placeholder times re-fired everything at once,
+  2026-07-25).
+- PS-remoting sessions cannot reach SMB shares (double-hop); pushbacks run as local
+  scheduled tasks or relay through the operator's box.
+- Detector dumps are DECODE-bound (~20 min/chunk on 7680x2160 regardless of GPU tier);
+  one dump per GPU (three CUDA contexts on 8 GB = zero throughput, measured).
+- 4070 laptop 40-ep train measured 4h20m — ~2.5x the table's estimate; plan clocks
+  accordingly.
