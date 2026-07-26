@@ -115,3 +115,9 @@ machines on first contact — this doc describes roles and patterns, not live st
   one dump per GPU (three CUDA contexts on 8 GB = zero throughput, measured).
 - 4070 laptop 40-ep train measured 4h20m — ~2.5x the table's estimate; plan clocks
   accordingly.
+- **blakley-laptop approved as a CPU-analysis node** (Mark 07-26) — verify reachability/
+  creds on first contact (no credential file yet).
+- **BREADTH LANE APPROVED (Mark 07-26):** idle-GPU week = dump more GT-bearing games
+  (benchmark-set games, iron 06.15 holdout) at hn4s4 + mgctrl provenance on F-OP + 1060
+  in parallel with the CPU reads — widens composite coverage, W5 fit base, generality
+  claims. Stage-then-run; one dump per GPU; server owns the chain.
