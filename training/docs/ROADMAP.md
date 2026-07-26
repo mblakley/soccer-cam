@@ -1,3 +1,35 @@
+
+# Virtual Operator — measured plan v2 (2026-07-26, post EXP-OP-13)
+
+Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-first.
+
+## P0 — Re-anchor on the composite standard ((w), in build)
+- [ ] Composite builder + zoom-containment scorer land (agent; windowed tier-1 gate per EXP-OP-13) -> split-half nulls -> re-read A0 / F@0.20 / mg_ctrl on spc+PIT+fair. All later gates read MATCH (dense, be-like-AC) + BEAT (GT-certified AC losses) + containment. CPU, 0 clicks.
+
+## P1 — The composition read + #21 close-out (cheapest big number)
+- [ ] mg_ctrl x F@0.20 on 3 games (coverage + interpretation attack far independently: 0.724 / 0.669 on spc). CPU replay only.
+- [ ] #21 fair leg (dump ~done) -> promotion package under the composite standard. PIT confirmation + spc leg banked.
+
+## P2 — Ship the filter
+- [ ] F@0.20 into ball_select behind config; promotion read on composite; side-by-side comparison video (convention). The 4.4s-class near events + mid path-dip tracked as known residuals -> P4.
+
+## P3 — W2 HOLD revival (on the CLEAN stream only — H-on-dirty measured harmful)
+- [ ] OOB-DEAD state + exit taxonomy (SS7/SS7.1: windowed exit anchor, bimodal end-line gate, goal-mouth case) + retune default knobs on F stream. Read: composite MATCH discipline + stoppage segments + frantic-phase velocity. The winfar1-class insurance beyond filtering.
+
+## P4 — W3 loss discipline (now with two measured consumers)
+- [ ] LABEL ASK (~100 clicks): near-scramble batch — consumers: miss-cost arms AND the mgctrl 4.4s near-event class (EXP-OP-12). Mined from hn4s4/mgctrl dumps.
+- [ ] Stage-1 miss-cost arms on the F stream; competing-cluster switch only if commitment survives filtering (winfar2 says it does for moving clutter); goal-kick launch detector arming the EXP-DIST-31 bridge (winfar2's actual fix).
+
+## P5 — W5 imitation fit, reframed by (w)
+- [ ] Fit planner knobs to the COMPOSITE (clone AC's discipline densely, corrected at GT divergences) — supervision is now dense; re-runs after every label batch. CPU standing job.
+
+## Parallel / hygiene
+- [ ] fair AutoCam CLI re-run (console session) -> fair tier-3 + pending EXP-OP-06 cells.
+- [ ] Merge operator branches -> main once P0 lands; FLEET.md scar updates (ONCE-task trigger, PS-remoting double-hop, decode-bound dumps, laptop train pace).
+- [ ] Event-spreading queue: BEAT-side enrichment only now (composite killed the match-side power problem).
+
+---
+
 # Training Pipeline Roadmap
 
 Last updated: 2026-04-09
