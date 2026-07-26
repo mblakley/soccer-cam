@@ -109,3 +109,26 @@ Everything else (zoom curve, dead-ball widening, missing_hfov) unchanged.
 - Whistle/player-cluster voters (Tier-1 backlog; the FSM accepts them later).
 - Per-venue anything (binding: no cross-game memory; all knobs global or session-scoped).
 - Detector/selector changes of any kind.
+
+## 7. OOB-HOLD amendment (Mark, 2026-07-26 — "if the ball goes out, HOLD until it comes back in near where it went out")
+
+Extends the FSM with an OOB-DEAD state (grounded in the winfar1 autopsy, EXP-OP-08/09):
+- **Trigger:** the selected path crosses the field polygon outward (exit point + exit
+  velocity already computed in `rerank`'s OOB bookkeeping — plumb, don't rebuild).
+- **Seam:** trajectory/2 gains state `O` + an `exit_xy` anchor field (neutral-element
+  rules as before; v1 inputs never produce `O`).
+- **Planner:** OOB-DEAD behaves as HOLD anchored on the EXIT POINT (projected to view
+  coords), slight widen; it outranks the generic vote-based HOLD while active.
+- **Reacquisition GATE (not just bias):** during OOB-DEAD, candidates farther than R
+  meters from the rules-implied restart location (touchline exit -> exit point;
+  goal-line exit -> corner arc / goal area) are REJECTED for path re-entry; R grows
+  slowly; the gate decays to global reacquisition after T seconds (handles fouls/quick
+  restarts elsewhere). Insertion point: the existing `reacq_cap`/`reacq_dist_w`
+  machinery.
+- **Prerequisite:** the persistence/static filter (EXP-OP-09 lever 1) — without it the
+  commitment failure prevents the exit from being detected at all (winfar1's mechanism).
+- **Caveats:** polygon accuracy at the boundary ((n) ratio-alarm applies); exit-type
+  matters (goal-line exits can resume as long punts — R per exit type); knobs
+  session-scoped, no cross-game memory.
+Pre-registered read: WIN-column far + the OOB segments' hold-fidelity; scored with the
+same referee protocol as the base FSM.
