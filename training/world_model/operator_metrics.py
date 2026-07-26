@@ -20,6 +20,10 @@ pre-registration). Every definition here matches the pre-registered one exactly:
 - range bands by expected ball diameter: far < 8 px, mid 8–15 px, near > 15 px.
 - split-half null calibration: event-level random half-splits of ONE arm's data;
   the null band is the central 95% of half-vs-half deltas.
+- planned-view containment (DECISIONS 2026-07-26 (w), Mark's zoom directive):
+  reference point inside the planned 16:9 view RECTANGLE — the ``score_plan``
+  convention (``training/cli/plan_camera_path.py``): ``half_w = src_w *
+  (hfov / 180) / 2``, ``half_h = half_w * (1080 / 1920)``; edges inclusive.
 
 No file I/O, no torch, numpy only — callers (``training.cli.operator_scoreboard``)
 own loading and report assembly.
@@ -58,6 +62,15 @@ HOLD_GT_SWING_MAX_PX = 200.0
 # Framing-event unit (EXP-OP-02 correction): only events with >= 5 frames bear
 # velocity/reversal information; reads and nulls run on those events only.
 FRAMING_MIN_FRAMES = 5
+
+# Composite-reference capture radius (DECISIONS 2026-07-26 (w)): the standing
+# 600 src-px gate — capture@600 is the composite cells' proximity metric.
+COMPOSITE_CAPTURE_RADIUS_PX = 600.0
+
+# Planned-view aspect: the render output is 16:9 (1920x1080), so the planned
+# view rectangle's half-height is half_w * (1080 / 1920) — the score_plan
+# convention (training/cli/plan_camera_path.py).
+PLANNED_VIEW_ASPECT = 1080.0 / 1920.0
 
 
 # ---------------------------------------------------------------------------
@@ -496,3 +509,97 @@ def band_of(expected_diameter_px: float) -> str:
     if d > BAND_NEAR_MIN_PX:
         return "near"
     return "mid"
+
+
+# ---------------------------------------------------------------------------
+# Planned-view containment (composite reference, DECISIONS 2026-07-26 (w))
+# ---------------------------------------------------------------------------
+
+
+def planned_view_half_extents(hfov_deg: float, src_w: float) -> tuple[float, float]:
+    """Half extents (source px) of the planned 16:9 view rectangle.
+
+    The ``score_plan`` convention (``training/cli/plan_camera_path.py``), used
+    verbatim: ``half_w = src_w * (hfov / 180) / 2`` and ``half_h = half_w *
+    (1080 / 1920)``.
+    """
+    half_w = float(src_w) * (float(hfov_deg) / 180.0) / 2.0
+    return half_w, half_w * PLANNED_VIEW_ASPECT
+
+
+def planned_view_contains(
+    ref_x: float,
+    ref_y: float,
+    cx: float,
+    cy: float,
+    hfov_deg: float,
+    src_w: float,
+) -> bool:
+    """Reference point inside the planned view RECTANGLE (Mark's zoom
+    directive, (w)): ``|ref_x - cx| <= half_w AND |ref_y - cy| <= half_h``.
+    Edges are INCLUSIVE — a point exactly on the rectangle edge is inside."""
+    half_w, half_h = planned_view_half_extents(hfov_deg, src_w)
+    return (
+        abs(float(ref_x) - float(cx)) <= half_w
+        and abs(float(ref_y) - float(cy)) <= half_h
+    )
+
+
+def capture_contain_stats(
+    refs: dict[int, tuple[float, float | None]],
+    plans: dict[int, tuple[float, float | None, float | None]],
+    src_w: float,
+    frames: Iterable[int],
+) -> dict:
+    """One composite-cell column: capture@600 (x-axis) + planned-view
+    containment of one arm against composite-reference rows.
+
+    ``refs`` maps frame -> ``(ref_x, ref_y | None)`` (a view-tier row may carry
+    no y); ``plans`` maps frame -> the arm's planned view ``(cx, cy | None,
+    hfov_deg | None)`` — an arm without a planned hfov (e.g. the AC viewport
+    arm, whose rows are bare x/y) cannot be containment-scored and gets
+    ``contain`` None, never a faked number. ``n`` counts the frames the arm
+    covers; ``cap600`` (radius :data:`COMPOSITE_CAPTURE_RADIUS_PX`) is over
+    those; ``n_contain``/``contain`` only over covered frames where ref_y, cy
+    AND hfov are all present. Stats are None when their n is 0.
+    """
+    fs = [g for g in frames if g in plans]
+    cap = (
+        float(
+            np.mean(
+                [
+                    abs(plans[g][0] - refs[g][0]) <= COMPOSITE_CAPTURE_RADIUS_PX
+                    for g in fs
+                ]
+            )
+        )
+        if fs
+        else None
+    )
+    elig = [
+        g
+        for g in fs
+        if refs[g][1] is not None
+        and plans[g][1] is not None
+        and plans[g][2] is not None
+    ]
+    contain = (
+        float(
+            np.mean(
+                [
+                    planned_view_contains(
+                        refs[g][0],
+                        refs[g][1],
+                        plans[g][0],
+                        plans[g][1],
+                        plans[g][2],
+                        src_w,
+                    )
+                    for g in elig
+                ]
+            )
+        )
+        if elig
+        else None
+    )
+    return {"n": len(fs), "cap600": cap, "n_contain": len(elig), "contain": contain}

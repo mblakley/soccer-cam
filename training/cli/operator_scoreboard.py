@@ -15,6 +15,17 @@ AC on the capture@600 dicts. ``--fixture-exp72`` hard-fails unless the EXP-72
 cells reproduce; ``--null-calibration`` banks split-half null bands for the
 framing metrics on their amended units.
 
+``--composite`` (repeatable, paired with --game-dir order) adds the COMPOSITE
+REFERENCE cells (DECISIONS 2026-07-26 (w)): against a ``composite_reference/1``
+jsonl (``build_composite_reference.py``), per band x arm the **MATCH** column
+(tier-``ac`` frames: proximity to the standard), the **BEAT** column
+(GT-override frames — by construction the AC-failure moments) and **overall**,
+each scored as capture@600 + planned-view containment (the ``score_plan``
+rectangle convention: half_w = src_w * (hfov/180)/2, half_h = half_w *
+(1080/1920), edges inclusive). Composite cells are a NEW instrument type:
+``--null-calibration`` banks split-half bands for the MATCH-column metrics per
+set, and records the (possibly power-limited) BEAT column's power floors.
+
 CPU-only, no torch; all inputs come from args (no server paths).
 
     python -m training.cli.operator_scoreboard \
@@ -396,6 +407,139 @@ def build_referee(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Composite-reference cells (DECISIONS 2026-07-26 (w))
+# ---------------------------------------------------------------------------
+
+
+def load_composite(path: Path) -> tuple[list[dict], dict]:
+    """``composite_reference/1`` rows + the ``_meta`` provenance line.
+
+    Hard-fails (rule 8) on a missing file, an unparsable line, a wrong meta
+    schema, an unknown tier, or zero rows."""
+    if not path.exists():
+        _fail(f"missing composite reference: {path}")
+    rows: list[dict] = []
+    meta: dict = {}
+    for i, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            o = json.loads(ln)
+        except json.JSONDecodeError:
+            _fail(f"{path}:{i}: unparsable composite line")
+        if "_meta" in o:
+            meta = o["_meta"]
+            if meta.get("schema") != "composite_reference/1":
+                _fail(f"{path}: _meta schema is not composite_reference/1")
+            continue
+        if o.get("tier") not in ("ball", "view", "ac"):
+            _fail(f"{path}:{i}: unknown composite tier {o.get('tier')!r}")
+        rows.append(o)
+    if not rows:
+        _fail(f"{path}: zero composite rows")
+    return rows, meta
+
+
+def load_plan_arms(
+    campaths: list[tuple[str, str]], game_dir: Path
+) -> tuple[dict[str, dict[int, tuple[float, float | None, float | None]]], int]:
+    """Full per-frame PLANNED VIEWS for composite scoring.
+
+    Campath arms carry ``{g: (cx, cy, hfov)}`` over ``[g_start, len)`` (the
+    constant-pad head counts as uncovered, matching :func:`load_arms`); the AC
+    viewport arm carries ``(x, y, None)`` — with no planned hfov its
+    containment is reported None, never faked. ``src_w`` comes from game.json
+    ``segments[0].w`` (hard-fail if absent: containment needs it)."""
+    gj = json.loads(
+        (game_dir / "game.json").read_text(encoding="utf-8", errors="ignore")
+    )
+    src_w = int(gj["segments"][0].get("w") or 0)
+    if src_w <= 0:
+        _fail(
+            f"{game_dir}/game.json segments[0] has no source width 'w' -- "
+            "planned-view containment needs it"
+        )
+    plans: dict[str, dict[int, tuple[float, float | None, float | None]]] = {}
+    for name, path in campaths:
+        cams, g0 = load_cams(path)
+        plans[name] = {
+            g: (float(cams[g][0]), float(cams[g][1]), float(cams[g][2]))
+            for g in range(g0, len(cams))
+        }
+    vps = dd.load_viewport(
+        game_dir / "autocam_viewport.jsonl", dd.seg_offsets(gj["segments"])
+    )
+    plans["AC"] = {g: (float(x), float(y), None) for g, (x, y) in vps.items()}
+    return plans, src_w
+
+
+def assign_composite_bands(
+    comp_rows: list[dict], gj: dict
+) -> tuple[dict[int, str], str]:
+    """Range band per composite frame from the game polygon FieldGeometry at
+    the reference point ``(x, y)`` — the :func:`assign_bands` convention.
+    Rows without y stay band-less ('all' only)."""
+    poly = gj.get("field_polygon")
+    pts_rows = [r for r in comp_rows if r.get("y") is not None]
+    if poly is None:
+        return {}, "all-only: game.json has no field_polygon"
+    if not pts_rows:
+        return {}, "all-only: composite rows have no y"
+    geom = build_field_geometry(np.asarray(poly, dtype=np.float64))
+    if not geom.valid:
+        return {}, "all-only: field polygon fits no valid geometry (neutral fallback)"
+    pts = np.asarray([[float(r["x"]), float(r["y"])] for r in pts_rows], float)
+    dias = geom.expected_ball_diameter_px(pts)
+    return {
+        int(r["g"]): om.band_of(d) for r, d in zip(pts_rows, dias, strict=True)
+    }, "geometry"
+
+
+def build_composite_cells(
+    comp_rows: list[dict],
+    refs: dict[int, tuple[float, float | None]],
+    tier: dict[int, str],
+    plans: dict[str, dict[int, tuple[float, float | None, float | None]]],
+    gj: dict,
+    src_w: int,
+) -> dict:
+    """The (w) two-column read per band x arm: **MATCH** (tier-``ac`` frames:
+    dense proximity to the standard), **BEAT** (GT-override frames: by
+    construction the AC-failure moments) and **overall** — each cell
+    capture@600 + planned-view containment
+    (:func:`om.capture_contain_stats`)."""
+    band_by, note = assign_composite_bands(comp_rows, gj)
+    bands = ["all"] + [b for b in BAND_ORDER[1:] if b in set(band_by.values())]
+    frames = sorted(refs)
+    cells: dict = {}
+    for bname in bands:
+        bframes = (
+            frames if bname == "all" else [g for g in frames if band_by.get(g) == bname]
+        )
+        m = [g for g in bframes if tier[g] == "ac"]
+        bt = [g for g in bframes if tier[g] != "ac"]
+        row = {"n_match": len(m), "n_beat": len(bt), "arms": {}}
+        for aname, aplans in plans.items():
+            row["arms"][aname] = {
+                "match": om.capture_contain_stats(refs, aplans, src_w, m),
+                "beat": om.capture_contain_stats(refs, aplans, src_w, bt),
+                "overall": om.capture_contain_stats(refs, aplans, src_w, bframes),
+            }
+        cells[bname] = row
+    return {
+        "n_rows": len(frames),
+        "n_match": sum(1 for g in frames if tier[g] == "ac"),
+        "n_beat": sum(1 for g in frames if tier[g] != "ac"),
+        "n_corroborated": sum(1 for r in comp_rows if r.get("corroborated")),
+        "src_w": src_w,
+        "banding": "geometry" if band_by else "all-only",
+        "banding_note": note,
+        "cells": cells,
+    }
+
+
 def score_set(
     set_dir: str,
     game_dir: str,
@@ -403,6 +547,7 @@ def score_set(
     fps: float,
     *,
     with_referee: bool = False,
+    composite: str | None = None,
 ) -> tuple[dict, dict, dict]:
     """Score one viewport-label set. Returns (report block, raw deltas for
     pooling, context for null calibration)."""
@@ -430,6 +575,25 @@ def score_set(
         block["referee"] = build_referee(
             labels, arms, subsets, band_by_frame, champ_names
         )
+    if composite is not None:
+        comp_rows, comp_meta = load_composite(Path(composite))
+        refs = {
+            int(r["g"]): (float(r["x"]), None if r.get("y") is None else float(r["y"]))
+            for r in comp_rows
+        }
+        tier = {int(r["g"]): str(r["tier"]) for r in comp_rows}
+        plans, src_w = load_plan_arms(campaths, gd)
+        block["composite"] = {
+            "path": str(composite),
+            "ac_source": comp_meta.get("ac_source"),
+            **build_composite_cells(comp_rows, refs, tier, plans, gj, src_w),
+        }
+        ctx["composite"] = {
+            "refs": refs,
+            "tier": tier,
+            "plans": plans,
+            "src_w": src_w,
+        }
     ctx["labels"] = labels
     ctx["arms"] = arms
     return block, raw, ctx
@@ -521,16 +685,91 @@ def run_null_calibration(ctx: dict, champ: str, fps: float, seed: int) -> dict:
             }
             continue
         res = om.split_half_null(events, cx, fn, reps=300, seed=seed)
-        entry = {"n_events": res["n_events"], "reps_valid": res["reps_valid"]}
-        if res["band"] is None:
-            entry["band"] = None
-            entry["power_floor"] = {
-                "n_events": res["n_events"],
-                "reason": res["reason"],
-            }
-        else:
-            entry["band"] = [res["band"][0], res["band"][1]]
-        out[mname] = entry
+        out[mname] = _null_entry(res)
+    return out
+
+
+def _null_entry(res: dict) -> dict:
+    """Report entry from a split-half result: the band, or an EXPLICIT power
+    floor (n_events + reason) — never a silent absence."""
+    entry: dict = {"n_events": res["n_events"], "reps_valid": res["reps_valid"]}
+    if res["band"] is None:
+        entry["band"] = None
+        entry["power_floor"] = {"n_events": res["n_events"], "reason": res["reason"]}
+    else:
+        entry["band"] = [res["band"][0], res["band"][1]]
+    return entry
+
+
+def run_null_calibration_composite(comp_ctx: dict, champ: str, seed: int) -> dict:
+    """Split-half null bands for the NEW composite instrument (standing rule:
+    admission before the first live read).
+
+    On the champion arm, per column: MATCH (tier-``ac`` frames) capture@600 +
+    containment — the dense, powered side — and the BEAT column (GT-override
+    frames), which may be power-limited: a band that cannot be computed
+    records its power floor EXPLICITLY, as the framing nulls do. Events are
+    gap-64 (``DEFAULT_GAP``) clusters of each column's frames."""
+    refs: dict[int, tuple[float, float | None]] = comp_ctx["refs"]
+    tier: dict[int, str] = comp_ctx["tier"]
+    plans = comp_ctx["plans"][champ]
+    src_w = comp_ctx["src_w"]
+    values = {g: p[0] for g, p in plans.items() if g in refs}
+
+    def m_cap(fs: list[int]) -> float | None:
+        if not fs:
+            return None
+        return float(
+            np.mean(
+                [
+                    abs(values[g] - refs[g][0]) <= om.COMPOSITE_CAPTURE_RADIUS_PX
+                    for g in fs
+                ]
+            )
+        )
+
+    def m_contain(fs: list[int]) -> float | None:
+        elig = [
+            g
+            for g in fs
+            if refs[g][1] is not None
+            and plans[g][1] is not None
+            and plans[g][2] is not None
+        ]
+        if not elig:
+            return None
+        return float(
+            np.mean(
+                [
+                    om.planned_view_contains(
+                        refs[g][0],
+                        refs[g][1],
+                        plans[g][0],
+                        plans[g][1],
+                        plans[g][2],
+                        src_w,
+                    )
+                    for g in elig
+                ]
+            )
+        )
+
+    out: dict = {
+        "arm": champ,
+        "reps": 300,
+        "seed": seed,
+        "unit": f"cluster_events(gap={GAP}) over composite MATCH / BEAT frames",
+    }
+    frames = sorted(refs)
+    for col in ("match", "beat"):
+        col_frames = [g for g in frames if (tier[g] == "ac") == (col == "match")]
+        events = om.cluster_events(col_frames, gap=GAP)
+        for mname, fn in (
+            (f"{col}_capture600", m_cap),
+            (f"{col}_containment", m_contain),
+        ):
+            res = om.split_half_null(events, values, fn, reps=300, seed=seed)
+            out[mname] = _null_entry(res)
     return out
 
 
@@ -620,6 +859,26 @@ def print_table(report: dict) -> None:
                         f"(ev{r['ea']}v{r['eb']}, p={r['p_sign']:.2f}; "
                         f"d={r['d_obs']:+.3f}, pm={r['p_mag']:.3f}) -> {winner}"
                     )
+        comp = blk.get("composite")
+        if comp:
+            print(
+                f"composite [{comp['banding']}]: {comp['n_rows']} rows -- "
+                f"match {comp['n_match']} (corroborated {comp['n_corroborated']}), "
+                f"beat {comp['n_beat']} (ref: {comp.get('ac_source') or comp['path']})"
+            )
+            print(
+                f"{'band':5s} {'arm':10s} {'column':8s} {'n':>6s} {'cap600':>8s} "
+                f"{'n_cont':>7s} {'contain':>8s}"
+            )
+            for bname, row in comp["cells"].items():
+                for aname, cols in row["arms"].items():
+                    for col in ("match", "beat", "overall"):
+                        st = cols[col]
+                        print(
+                            f"{bname:5s} {aname:10s} {col:8s} {st['n']:6d} "
+                            f"{_fmt(st['cap600']):>8s} {st['n_contain']:7d} "
+                            f"{_fmt(st['contain']):>8s}"
+                        )
     if "pooled" in report:
         print("\n=== POOLED (all sets) ===")
         print(hdr)
@@ -694,6 +953,13 @@ def main(argv: list[str] | None = None) -> None:
         help="arm NAME=PATH (camera_path/1 JSON or the load_cams pickle); "
         "repeatable; the FIRST one is the champion",
     )
+    ap.add_argument(
+        "--composite",
+        action="append",
+        help="composite_reference/1 jsonl (build_composite_reference output), "
+        "paired with --game-dir order; adds the (w) MATCH/BEAT/overall cells "
+        "(capture@600 + planned-view containment) per band x arm",
+    )
     ap.add_argument("--out", required=True, help="JSON report path")
     ap.add_argument(
         "--fixture-exp72",
@@ -722,6 +988,14 @@ def main(argv: list[str] | None = None) -> None:
             f"--set-dir count ({len(args.set_dir)}) != --game-dir count "
             f"({len(args.game_dir)}) -- they pair by order"
         )
+    composites: list[str | None] = list(args.composite or [])
+    if composites and len(composites) != len(args.game_dir):
+        _fail(
+            f"--composite count ({len(composites)}) != --game-dir count "
+            f"({len(args.game_dir)}) -- they pair by order"
+        )
+    if not composites:
+        composites = [None] * len(args.game_dir)
     campaths: list[tuple[str, str]] = []
     for spec in args.campath:
         if "=" not in spec:
@@ -744,10 +1018,17 @@ def main(argv: list[str] | None = None) -> None:
     }
     raw_by_set: list[dict] = []
     ctx_by_set: dict[str, dict] = {}
-    for set_dir, game_dir in zip(args.set_dir, args.game_dir, strict=True):
+    for set_dir, game_dir, comp in zip(
+        args.set_dir, args.game_dir, composites, strict=True
+    ):
         set_name = Path(set_dir).name
         block, raw, ctx = score_set(
-            set_dir, game_dir, campaths, args.fps, with_referee=args.referee
+            set_dir,
+            game_dir,
+            campaths,
+            args.fps,
+            with_referee=args.referee,
+            composite=comp,
         )
         report["sets"][set_name] = block
         raw_by_set.append(raw)
@@ -769,6 +1050,20 @@ def main(argv: list[str] | None = None) -> None:
                         f"NULL-CAL {set_name}/{mname}: band NOT computable -- "
                         f"power floor recorded ({entry['power_floor']})"
                     )
+            if "composite" in ctx:
+                ncc = run_null_calibration_composite(ctx["composite"], champ, args.seed)
+                report.setdefault("null_calibration_composite", {})[set_name] = ncc
+                for mname, entry in ncc.items():
+                    if (
+                        isinstance(entry, dict)
+                        and "power_floor" in entry
+                        and entry.get("band") is None
+                    ):
+                        print(
+                            f"NULL-CAL-COMPOSITE {set_name}/{mname}: band NOT "
+                            f"computable -- power floor recorded "
+                            f"({entry['power_floor']})"
+                        )
 
     print_table(report)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
