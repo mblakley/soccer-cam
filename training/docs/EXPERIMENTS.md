@@ -4,6 +4,35 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-10: PRE-REGISTRATION — prove the levers on far GT: persistence filter x HOLD, four arms on SPC (2026-07-26, before any numbers)
+
+**Directive (Mark):** "prove it — run experiments around where we have far GT and show we
+can actually keep it in the viewport."
+
+**Arms (all CPU replay, spc hn4s4 dump, v7 selector, shipped tracker config):**
+A0 = banked champion baseline. F = persistence-filtered candidate stream (session-scoped:
+cell 50px, static = cell present in >=20% of sampled frames game-wide, drop radius 60px —
+the offline equivalent of an online rolling window) -> same chain. H = A0 + enable_hold
+(pre-registered default knobs, W2 design SS4). FH = F + H.
+
+**Instrument:** spc_viewport_worst (649 views; far n=290: WIN-col 190 / MATCH-col 151) +
+case traces on the winfar1/2 windows (g 6624-7224, 8496-8980). PIT re-score for
+cross-camera non-regression if any arm promotes.
+
+**Pre-registered reads (dual rule, referee port, gap-64 events):**
+1. HEADLINE: WIN-col far capture@600 (A0 = 0.195). Success = decisive improvement vs A0
+   on flip events; report raw delta regardless.
+2. GUARD: MATCH-col far (A0 = 0.940) must not regress beyond the split-half null band.
+3. GUARDS: ALL/mid/near capture non-regression (dual rule zero-or-better).
+4. CASE: winfar1/2 traces — does trk_x stay with GT (left) through the previously-parked
+   seconds? Reported as the same frame tables as EXP-OP-08/09.
+5. Attribution: F vs A0 and FH vs H isolate the filter; H vs A0 and FH vs F isolate HOLD.
+**Expected mechanism-level outcomes (stated before running):** F should flip the winfar
+commitment (the 6059/6302 snare dies); H should cut the frantic-phase velocity and hold
+stoppages; FH is the candidate product config. If F alone flips winfar but WIN-far moves
+<0.05 overall, the remaining mass is coast/chase (W3's arms), not statics — that is a
+finding, not a failure.
+
 ## EXP-OP-09: WINFAR2 AUTOPSY + the game-state/physics lever map (Mark's directive) — the SAME static distractors dominate both clips (2026-07-26)
 
 **Trace (g 8496-8980):** frantic phase sec 0-6 = GT STATIC ~5850 (goal-kick setup) while
