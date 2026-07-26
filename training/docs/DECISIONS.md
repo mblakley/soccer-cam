@@ -83,6 +83,40 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-07-26 (w): THE COMPOSITE REFERENCE STANDARD — AutoCam is the default viewport truth; GT overrides it by precision (Mark)
+
+**Directive (Mark):** "usually autocam provides a pretty good viewport on the rendered
+footage (through the GUI), it just sometimes loses the ball when it's far, and that's
+where we should beat it. Use autocam as the 'standard' for viewport position except where
+we have a GT ball position that diverges from the AC viewport, or an actual viewport GT
+that significantly diverges. GT always highest priority; GT ball detections beat GT
+viewports (single coordinate vs box)."
+
+**Binding measurement architecture (supersedes 'human-GT-only' scoring as the headline;
+the EXP-72-lineage cells remain as the frozen legacy tier):**
+- Per-frame reference = precedence ladder: **(1) GT ball detection > (2) GT viewport
+  label > (3) AC viewport from a VALIDATED source** (PIT-class validated jsonl or fresh
+  CLI aim; legacy Reolink viewport jsonls stay banned).
+- Override gates (pre-registered): a GT source overrides tier 3 only where it DIVERGES
+  from AC by > 600 src px (else AC's dense signal stands and the GT point corroborates
+  it); tier 1 overrides tier 2 wherever both exist on a frame.
+- Two-column score against the composite: **MATCH column** = proximity to the standard on
+  AC-sourced frames (dense, the '95% mostly-the-same' objective) · **BEAT column** =
+  capture at GT-override frames (sparse, precise — by construction the AC-failure
+  moments, usually far). Zoom enters per Mark's yes: containment = reference point inside
+  the PLANNED VIEW rectangle (cx +- half-width from hfov, 16:9), reported beside
+  capture@600.
+- Power consequence: dense tier-3 supervision across 39+ games ends the event-starvation
+  problem for match-side reads; the event-spreading label queue remains valuable only for
+  BEAT-side enrichment.
+- W5 consequence: the imitation fit's target becomes the composite (clone AC's operator
+  everywhere, corrected at GT divergences) — not sparse GT alone.
+- Instrument lineage: extends build_viewport_benchmark.py's best-of tiers into
+  viewport_benchmark/2 with the ball-GT tier + divergence gating; new instrument type =>
+  split-half null calibration before first live read (standing rule).
+
+---
+
 ## 2026-07-25 (u): GOAL SEMANTICS SHARPENED — "mostly the same as AutoCam; better where AutoCam loses the ball" = the MATCH column and the WIN column (Mark)
 
 **Directive (Mark, 2026-07-25 night):** "we should be mostly the same as autocam, but better
