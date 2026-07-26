@@ -4,6 +4,47 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-10 RESULTS: the persistence filter PROVES OUT on far GT — WIN-far 0.195 -> 0.558, winfar1 fixed on the exact frames Mark watched; HOLD alone hurts on a dirty stream (2026-07-26)
+
+**Arms on SPC (649 views), capture@600 / med|dcx|:**
+| band | A0 | **F (filter)** | H (hold) | FH | AC-fresh |
+|---|---|---|---|---|---|
+| far (290) | 0.441 / 1625 | **0.669 / 202** | 0.362 / 2756 | 0.483 / 1007 | 0.443 / 752 |
+| mid (317) | 0.719 / 82 | 0.631 / 260 | 0.754 / 232 | 0.710 / 201 | 0.804 / 354 |
+| near (42) | 0.762 / 25 | 1.000 / 52 | 1.000 / 245 | 1.000 / 309 | 1.000 / 47 |
+| ALL (649) | 0.598 / 232 | **0.672 / 204** | 0.595 / 304 | 0.627 / 266 | 0.640 / 453 |
+
+**Pre-registered reads:**
+1. HEADLINE WIN-far: **0.195 -> 0.558 (106/190 AC-missed far views rescued, was 37)** —
+   +0.363 raw. Event-level dual rule: zero (ev3v2 — the div-sampled set concentrates far
+   mass in few events; the KNOWN power ceiling, event-spreading queue is the fix). Raw
+   delta reported per prereg.
+2. GUARD MATCH-far: 0.940 -> 0.921 (-3 of 151 views; null band for this cell not yet
+   banked — flagged, not cleared).
+3. GUARDS: no decisive regression anywhere (mid raw -0.088, dual rule zero ev3v6
+   p_mag=0.13; near +0.238; ALL +0.074).
+4. CASES: **winfar1 FIXED** — F breaks the commitment in ~4s vs A0's 13s park; captures
+   9/12 labeled samples on the exact clip. **winfar2 NOT fixed** (1/10): its right-side
+   attractors are not static-persistent (goal-area clutter during the goal kick);
+   residual = selection commitment (W3 margin arms + competing-cluster switch) + the
+   launch-armed bridge. The filter is necessary, not sufficient.
+5. Attribution: F carries everything. **H alone HURTS far (0.362)** — HOLD on a
+   distractor-committed stream holds WRONG positions (EXP-OP-04's mechanism, now measured
+   at arm level); FH partial (0.483). HOLD is NOT refuted — it ran untuned, on default
+   knobs, without the OOB exit anchor, and its votes were computed from the UNFILTERED
+   stream's states. Re-tune ON TOP of F after the OOB amendment lands.
+6. F exceeded Run B's far ceiling (0.669 vs 0.620) — B was sparse-GT-limited (208-anchor
+   effect on spc too: B injected only labeled frames); B-A UNDERSTATED input headroom.
+**Also:** F beats AC-fresh raw on far (+0.226) and ALL (+0.032); zero at event level
+(power). **Mechanism note:** the shipped world-cell static_persistence penalty
+(static_w=2.0, 'the dominant lever') did NOT stop these statics — hypothesis: they live
+OFF-FIELD where homography extrapolation scatters world cells (pixel-space filter is
+immune); verify with a world-cell stability probe before promoting the filter into the
+product step.
+**Artifacts:** exp10_spc.json; ladder spc_hn4s4.{F,H,FH}.*; filter @ 0c16456 (26 static
+centers @ frac 0.20). **Next:** filter into the product ball_select path behind config +
+PIT/fair cross-checks + mid-dip investigation; then W3 margin arms on the F stream.
+
 ## EXP-OP-10: PRE-REGISTRATION — prove the levers on far GT: persistence filter x HOLD, four arms on SPC (2026-07-26, before any numbers)
 
 **Directive (Mark):** "prove it — run experiments around where we have far GT and show we
