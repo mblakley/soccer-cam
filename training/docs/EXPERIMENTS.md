@@ -4,6 +4,33 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-09: WINFAR2 AUTOPSY + the game-state/physics lever map (Mark's directive) — the SAME static distractors dominate both clips (2026-07-26)
+
+**Trace (g 8496-8980):** frantic phase sec 0-6 = GT STATIC ~5850 (goal-kick setup) while
+the track ping-pongs 5571-7171 among right-side distractors (campath speed med 14 px/fr,
+p90 71 - vs human GT median 0); goal kick sec 7-19 = GT sweeps 4662-2377 right-to-left
+with a 69-424px candidate present at every labeled frame; track never leaves the
+5300-7200 distractor zone. **x=6059 and x=6302 recur at fixed positions across BOTH
+winfar clips (thousands of frames apart): game-long static objects scoring 0.8-0.9.**
+
+**Lever map (Mark: "use game states or physics to guess better"), priority per evidence:**
+1. PERSISTENCE/STATIC FILTER (#19 component; session-scoped): a ball is never stationary
+   for minutes - kills the 6059/6302 snare; PREREQUISITE (in winfar1 it blocked the OOB
+   machinery from engaging). Kills 2+3 on record now.
+2. OUT-OF-PLAY STATE (rules; winfar1 = out over far touchline, thrown in): polygon exit
+   -> DEAD state -> W2 HOLD anchored at exit -> reacquisition prior at RESTART GEOMETRY
+   (throw-in near exit; corner/goal-area for goal-line exits). Extends the existing
+   reacq_dist_w loss-point bias to the rules-implied restart point.
+3. LAUNCH-ARMED BALLISTIC BRIDGE (physics; winfar2 = goal kick): ball-static-in-goal-area
+   + player repositioning arms the EXP-DIST-31 aerial bridge + flight-cone reacq bias in
+   world meters (<=35 m/s). W4/world-unit consumer, after #19.
+4. DEAD-BALL CAMERA DISCIPLINE: W2 dispersion+slow voters during restart setups; W4
+   velocity profile as the general jitter clamp (frantic phase = planner faithfully
+   following track churn).
+This is the SS3d play-state fusion with priorities MEASURED (two clip autopsies), not
+guessed. W3's sweep order amended: persistence filter FIRST, then miss-cost arms, then
+competing-cluster switch (EXP-OP-08) only if commitment survives filtering.
+
 ## EXP-OP-08: WINFAR1 CLIP AUTOPSY (Mark's eyeball → mechanism) — selection COMMITMENT on a static distractor; the ball was a candidate the whole time (2026-07-26)
 
 **Trigger:** Mark watched `spc_winfar1_stack.mp4` (g 6624-7224): GT pinned far-left corner
