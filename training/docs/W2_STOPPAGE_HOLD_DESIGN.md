@@ -140,7 +140,7 @@ predicted restart type (depends on last touch — unknowable). Three classes:
 - **Touchline exit -> throw-in:** unimodal gate at the exit point (+-few m), SHORT decay
   (throw-ins restart in 5-20 s); hold near exit, modest widen.
 - **End-line exit -> goal kick OR corner (bimodal until reappearance):** gate = goal area
-  UNION nearest corner arc (corner is taken on the side the ball crossed); LONGER decay
+  UNION the corner arc on the side of the GOAL the ball went out on (Mark 2026-07-26: exit point along the goal line vs the goal center picks left/right arc); LONGER decay
   (15-40 s). Framing: pre-widened toward the goal area; if reappearance resolves to the
   goal area, ARM the ballistic bridge (a 40-60 m launch is the expected next event —
   winfar2 / EXP-DIST-40's punt class); if it resolves to the corner arc, frame the
