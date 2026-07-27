@@ -40,6 +40,12 @@ ac[f-20..f+20] > 600px** — a trailing follower stays within its window; a park
 wrong object does not. Tier-2 (viewport GT) gate unchanged (both are viewport-speed
 signals). Composite builder must implement the WINDOWED tier-1 gate.
 
+**[ADDENDUM 07-26: Mark's rescale hypothesis tested and REFUTED]** — correlation is
+scale-invariant, so a downscaled coordinate space would still correlate: legacy-vs-ball
+Pearson x = 0.28 (spc) / 0.17 (fair), y NEGATIVE, Spearman (any monotonic remap incl.
+warp space) 0.27 / 0.08, best affine leaves 1,021px median residual, no lag helps, and
+the raw range already spans the full 7,680 frame. Not rescalable — ban stands.
+
 ## EXP-OP-12: #21 GATE, SPC LEG — mg_ctrl PASSES non-regression; far +0.28 raw on the primary family; the one near loss is a single 4.4s event (2026-07-26)
 
 mg_ctrl(seed-1)@s4 dump -> v7 -> shipped chain, vs hn4 champion on spc_viewport_worst:
