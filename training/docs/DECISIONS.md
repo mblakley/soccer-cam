@@ -9,8 +9,14 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 - **AC REFERENCES ((w)/(x), 07-27): tier-3 = fresh aim where one exists (spc), else
   remap-verified legacy viewport (fair: r 0.981 — the pending fair re-run is CLOSED,
   unnecessary), else PIT-class validated Dahua jsonl. Legacy Reolink jsonls admissible
-  ONLY through the verified trim remap ((x)); the scoreboard's auto-AC arm still loads
-  naively on Reolink — wire or suppress before its next run.**
+  ONLY through the verified trim remap ((x)); the scoreboard AC arm is WIRED through
+  this policy (w2 127b633).**
+- **P0 ANCHOR (EXP-OP-16, 07-27): the fair-far story REVERSED with the recovered AC
+  reference — AutoCam fair far 0.857 vs our 0.525 (the 07-19 wind claim was the
+  timebase bug); W4's beat-far target = fair-far. F@0.20 promotion BLOCKED (decisive
+  F-introduced mid loss vs AC on fair) — P4 before P2. F-OP certified as the CPU
+  analysis node (fixture to the digit; P0 chain 6 min). Composite MATCH nulls need a
+  block unit before any match-side verdict (gap queued).**
 
 - **GOAL RE-ANCHOR ((t), 07-25): Reolink = primary optimization family; Dahua = supplemental
   robustness row; far-Dahua possibly pixel-limited (4096×1800 vs 7680×2160 — ceiling check

@@ -3,21 +3,23 @@
 
 Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-first.
 
-## P0 — Re-anchor on the composite standard ((w), in build)
-- [ ] Composite builder + zoom-containment scorer land (agent; windowed tier-1 gate per EXP-OP-13) -> split-half nulls -> re-read A0 / F@0.20 / mg_ctrl on spc+PIT+fair. All later gates read MATCH (dense, be-like-AC) + BEAT (GT-certified AC losses) + containment. CPU, 0 clicks.
-  - [x] 2026-07-27: legacy viewport class RECOVERED (EXP-OP-15, (x)) — fair tier-3 = remap-verified legacy (r 0.981; E2E composite 92,844 rows); raw CLI aim parses directly (spc reproduction to the row). Remaining: server-side spc/fair/PIT composites WITH view sets + nulls + the re-reads; scoreboard auto-AC arm remap-or-suppress on Reolink.
+## P0 — Re-anchor on the composite standard ((w)) — BANKED 2026-07-27 (EXP-OP-16)
+- [x] 2026-07-27: legacy viewport class RECOVERED (EXP-OP-15, (x)) — fair tier-3 = remap-verified legacy (r 0.981); raw CLI aim parses directly; scoreboard AC arm wired through the (x) source policy.
+- [x] 2026-07-27: composites built (fair 92,966 / PIT 128,501 rows + banked spc); A0/F/mgctrl re-read on all three via F-OP (EXP-OP-16; fixture + EXP-OP-14 reproduction certify the node). Fair-far story REVERSED (AC 0.857 vs 0.525); spc referee zero-decisive holds.
+- [ ] REMAINING: block-unit MATCH nulls (the gap-64 event unit collapses on dense frames — match-side verdicts unevaluable until this lands; pre-register before the next match-side read).
 
 ## P1 — The composition read + #21 close-out (cheapest big number)
-- [ ] mg_ctrl x F@0.20 on 3 games (coverage + interpretation attack far independently: 0.724 / 0.669 on spc). CPU replay only.
-- [ ] #21 fair leg (dump ~done) -> promotion package under the composite standard. PIT confirmation + spc leg banked.
+- [ ] mg_ctrl x F@0.20 on 3 games (coverage + interpretation attack far independently: 0.724 / 0.669 on spc). CPU replay only (F-OP; 6-min-class).
+- [ ] #21 fair leg BLOCKED on the 4070's return (mg_ctrl_seed1 ckpt + its fair dump live only there) -> then promotion package under the composite standard. PIT confirmation re-anchored 07-27 (0.644 exact) + spc leg banked.
 
-## P2 — Ship the filter
-- [ ] F@0.20 into ball_select behind config; promotion read on composite; side-by-side comparison video (convention). The 4.4s-class near events + mid path-dip tracked as known residuals -> P4.
+## P2 — Ship the filter — BLOCKED 2026-07-27 pending P4 (pre-registered action fired)
+- [ ] EXP-OP-16: F's mid dip is DECISIVE vs AC on fair (d −0.48, an F-introduced AC loss) — the mid-path investigation (P4) must resolve it BEFORE F ships. Then: F@0.20 into ball_select behind config; promotion read on composite; side-by-side comparison video (convention).
 
 ## P3 — W2 HOLD revival (on the CLEAN stream only — H-on-dirty measured harmful)
 - [ ] OOB-DEAD state + exit taxonomy (SS7/SS7.1: windowed exit anchor, bimodal end-line gate, goal-mouth case) + retune default knobs on F stream. Read: composite MATCH discipline + stoppage segments + frantic-phase velocity. The winfar1-class insurance beyond filtering.
 
-## P4 — W3 loss discipline (now with two measured consumers)
+## P4 — W3 loss discipline (now with THREE measured consumers; promoted ahead of P2 2026-07-27)
+- [ ] F's mid path-dip (EXP-OP-11 mechanism: indirect global-path re-solve, not deletions) — now DECISIVE on fair vs AC (EXP-OP-16) and the P2 blocker. First read: does the miss-cost/coast work move the fair-mid cell?
 - [ ] LABEL ASK (~100 clicks): near-scramble batch — consumers: miss-cost arms AND the mgctrl 4.4s near-event class (EXP-OP-12). Mined from hn4s4/mgctrl dumps.
 - [ ] Stage-1 miss-cost arms on the F stream; competing-cluster switch only if commitment survives filtering (winfar2 says it does for moving clutter); goal-kick launch detector arming the EXP-DIST-31 bridge (winfar2's actual fix).
 

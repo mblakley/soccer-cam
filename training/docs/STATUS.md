@@ -1,6 +1,26 @@
 # Current Status
 
-*Last updated: 2026-07-27 (overnight) — legacy viewport class RECOVERED (EXP-OP-15); fair tier-3 restored without a re-run*
+*Last updated: 2026-07-27 (morning) — P0 BANKED (EXP-OP-16): fair-far story reverses; F promotion blocked on decisive fair-mid; F-OP certified as analysis node*
+
+## 2026-07-27 (morning, same session) — EXP-OP-16: P0 composite re-anchor BANKED on F-OP
+
+- **The P0 table exists** (EXP-OP-16; artifacts G:/ballresearch/operator/p0_fop/). All
+  three certification anchors passed on FORTNITE-OP (fixture to the digit; EXP-OP-14
+  cells reproduced exactly; full chain = 6 min wall — F-OP is a certified analysis node,
+  worker Python313 env suffices, no uv needed).
+- **Headline 1 — the fair-far story reverses:** with the remap-recovered AC reference,
+  AutoCam's fair far = 0.857 vs our 0.525 (the 07-19 "0.68 vs 0.05 wind" claim was the
+  timebase bug). W4's beat-far target is fair-far; spc far is par (F ahead).
+- **Headline 2 — F@0.20 promotion (P2) BLOCKED:** F's mid dip goes DECISIVE vs AC on
+  fair (d −0.48, p_mag 0.029), an F-introduced AC loss — pre-registered action fires,
+  P4's mid-path investigation moves ahead of P2. F's far BEAT gains stand on all three.
+- **PIT mgctrl provenance confirmed by reproduction** (0.644 ALL = the banked anchor);
+  #21 gate: spc PASS + PIT re-anchored, fair leg BLOCKED on the offline 4070
+  (mg_ctrl_seed1 ckpt + its fair dump both live only there — relay on its return).
+- **Instrument gap found:** composite MATCH nulls collapse to 1 event (dense frames vs
+  the gap-64 unit) on ALL games incl. EXP-OP-14's banked spc nulls — match-side
+  verdicts unevaluable until a block-based null unit lands (amendment queued,
+  pre-register before the next match-side verdict).
 
 ## 2026-07-27 (overnight) — EXP-OP-15: trim remap verified; legacy jsonls admissible; fair re-run CLOSED
 

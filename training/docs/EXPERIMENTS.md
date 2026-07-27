@@ -4,6 +4,70 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-16 RESULTS: P0 COMPOSITE RE-ANCHOR BANKED — instrument certified on F-OP; the fair-far story REVERSES with the recovered AC reference; F's mid dip goes DECISIVE on fair (P2 blocked); PIT mgctrl provenance confirmed by exact reproduction; MATCH-null unit broken as operationalized (2026-07-27)
+
+**Instrument certification (all three anchors):** PIT --fixture-exp72 reproduces on
+FORTNITE-OP to the digit (A0 0.542/450, AC 0.759/207, n=640); the regenerated spc arms
+reproduce EVERY EXP-OP-14 composite cell exactly (A0 0.535/0.671 · F 0.471/0.582 ·
+mgctrl 0.506/0.651 MATCH; 0.519/0.560/0.583 BEAT); spc classic cells reproduce
+EXP-OP-11/12 (F far 0.669, mgctrl far 0.724, AC far 0.443). Chain @ w2 127b633; full
+P0 chain (7 replays + 3 scoreboards incl. nulls + referee) = **6 min wall on the 5800X**.
+
+**Composite cells (capture@600 / containment; MATCH = dense tier-ac, BEAT = GT-override):**
+| game | arm | MATCH all | BEAT all | far MATCH | far BEAT |
+|---|---|---|---|---|---|
+| spc | A0 | 0.535/0.671 (75k) | 0.519/0.587 (859) | 0.533/0.692 | 0.448/0.498 |
+| spc | F | 0.471/0.582 | 0.560/0.616 | 0.477/0.597 | 0.606/0.647 |
+| spc | mgctrl | 0.506/0.651 | 0.583/0.653 | 0.497/0.678 | 0.560/0.587 |
+| fair | A0 | 0.627/0.711 (89k) | 0.458/0.648 (321) | 0.608/0.699 | 0.447/0.468 |
+| fair | F | 0.565/0.658 | 0.517/0.564 | 0.550/0.648 | 0.617/0.638 |
+| pit | A0 | 0.892/0.867 (102k) | 0.747/0.714 (154) | 0.902/0.881 | 0.500/0.500 (14) |
+| pit | F | 0.818/0.800 | 0.584/0.519 | 0.834/0.824 | 0.929/0.500 |
+| pit | mgctrl | 0.788/0.767 | 0.539/0.500 | 0.797/0.781 | 0.714/0.357 |
+(The composite AC row is a TAUTOLOGY — MATCH 1.000 / BEAT 0.000 by construction — its
+information lives in the referee rows and the classic GT-set cells.)
+
+**1. The fair-far story REVERSES.** fair's classic GT-set AC cells (the EXP-OP-06
+PENDING column, now filled from the remap-verified legacy, r 0.981, n=584/706):
+**ALL 0.676/413 · far 0.857/285 · mid 0.605/500 · near 0.356/618** vs A0 0.449 · far
+0.525 · mid 0.327 · near 0.793. The 07-19 claim "wind breaks AutoCam far harder than us
+(0.683 vs 0.050)" was the TIMEBASE BUG — with the recovered reference AutoCam is
+STRONG on fair far. Far-Reolink is now: **AC-dominant on fair (0.857 vs 0.525), par on
+spc (0.443 vs 0.441; F 0.669 ahead)** — W4's "beat AutoCam far" target is fair-far, and
+the raw A0-vs-AC fair-far gap (−0.33) is not referee-decisive at current event counts
+(the power ceiling; event-spreading queue applies).
+
+**2. F's mid dip goes DECISIVE on fair (the (t)-floor catch): P2 PROMOTION BLOCKED.**
+Referee ALL/mid F-vs-AC on fair GT views: d = −0.480, p_mag 0.0285, DECISIVE for AC —
+the first family where F's known mid raw dip (EXP-OP-11: "never decisive") crosses the
+line, and it is an F-INTRODUCED decisive AC loss (A0-vs-AC mid is not decisive). Per the
+pre-registered action mapping: **F does not ship until the mid dip is understood — P4's
+mid-path investigation is promoted ahead of P2.** F's far BEAT gains stand (spc +0.16,
+fair +0.17, pit 0.929@n14).
+
+**3. PIT mgctrl column BANKED with provenance confirmed by reproduction:** the era
+campath scores ALL 0.644/294 = the CURRENT-STATE anchor ("arm ctrl 0.644") to the
+digit; far 0.680 vs A0 0.481 (the ~+0.19 Dahua-data effect confirmed under the new
+instrument). PIT referee: AC decisive over every arm on ALL and most far cells (10
+rows) — the (t) supplemental floor unchanged. spc referee: ZERO decisive anywhere
+(EXP-OP-06's no-decisive-on-spc holds under the composite standard).
+
+**4. INSTRUMENT GAP — the composite MATCH null is broken as operationalized:** the
+gap-64 cluster-event unit collapses ~80k dense contiguous MATCH frames into ONE event on
+all three games (reps_valid 0, power_floor fires). MATCH-side "within null band"
+verdicts are UNEVALUABLE until the MATCH null gets a block-based unit (fixed-length time
+blocks); BEAT nulls are valid and banked (63/13/10 events; e.g. spc beat-cap600 band
+[−0.407, +0.367]). **Amendment queued: block-unit MATCH nulls, pre-registered before the
+next match-side verdict.** (This also retro-applies to EXP-OP-14's spc nulls — same
+collapsed unit, nobody had read it critically.)
+
+**#21 gate state after this read:** spc leg PASS (EXP-OP-12) · PIT confirmation
+re-anchored (0.644 exact) · fair leg BLOCKED — mg_ctrl_seed1 checkpoint AND its fair
+dump are both only on the offline 4070; the 1060 re-dump path needs that checkpoint.
+Gate paused, not failed.
+**Artifacts:** G:/ballresearch/operator/p0_fop/ (p0_{spc,fair,pit}_fop.json + ladder
+campaths + logs); staging F:/test/opstage; F-OP D:\opstage (disposable).
+
 ## EXP-OP-16 PRE-REGISTRATION (committed before numbers): P0 composite re-anchor — A0 / F@0.20 / mgctrl on spc + PIT + fair under the (w)/(x) standard (2026-07-27)
 
 **Reads (per EXP-OP-14's queue + measured plan v2 P0):** per game x band x arm, the
