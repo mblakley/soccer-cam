@@ -24,9 +24,16 @@
 - **P1 composition read: NEGATIVE, closed** (EXP-OP-17, pre-registered same morning):
   mgF far 0.597 < mgctrl 0.724 / F 0.669 — the far levers don't stack; single arms
   stand. Nugget: the filter fixes mgctrl's near static-park (med 3612->189) — a W3/P4
-  input. **Session's remaining next steps: block-unit MATCH nulls (instrument), P4
-  mid-dip investigation (now the P2 gate), #21 fair leg + fair-mgctrl on the 4070's
-  return, W4 re-target to fair-far.**
+  input.
+- **Fair-mid mechanism FOUND (EXP-OP-18): re-solve commitment, not deletion** (44/46
+  confident-T elsewhere; truth deleted 1/46; survives filtering at 16/46 provable).
+  W3 stage-1 commitment arms = the P2 gate; the fair-mid cell is a new zero-click
+  primary read for them. spc's milder dip is planner-side (different mechanism).
+- **NEXT (in order): (1) W3 stage-1 arms build + the near-scramble LABEL ASK (~100
+  clicks, Mark) — scored on near-scramble + fair-mid + the 4.4s class; (2) #21 fair
+  leg + fair-mgctrl when the 4070 returns (relay ckpt/dump); (3) W4 re-target to
+  fair-far (AC 0.857 vs 0.525 = the real beat-far gap); (4) P5 imitation fit now that
+  the composite + nulls are complete.**
 
 ## 2026-07-27 (overnight) — EXP-OP-15: trim remap verified; legacy jsonls admissible; fair re-run CLOSED
 

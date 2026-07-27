@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-18 RESULTS: fair-mid dip = RE-SOLVE COMMITMENT, not deletion — 44/46 lost views are confident-T on another route; truth deleted at 1/46; W3 stage-1 is the P2 gate (2026-07-27)
+
+**fair (the decisive family): mechanism (b), overwhelmingly.** Of the 46 mid GT views
+where A0 captures and F misses (6 gap-64 events, the two dominant 19- and 16-frame
+clusters late-game at g91.9k / g92.2k): F's trajectory/2 state is **T (confident) at
+44/46** (2 coasts, 0 misses) with the F path 1.4-2.5k px from A0's at event start — the
+filtered lattice re-solves onto a DIFFERENT object/route. **The deletion theory is
+dead:** the fair filter has only 19 static centers, and A0's followed ball sits within a
+filtered radius at just **1/46** lost views; at 16/46 the ball candidate demonstrably
+SURVIVES filtering while the re-solve still commits elsewhere (the remaining 29 are
+undecidable at stride-4/smoothing resolution — A0's point there is not same-frame
+detection-backed; stated, not assumed). **Consequence (pre-registered mapping (b)):
+miss-cost / commitment calibration — W3 stage-1's exact arms — is THE P2-gate work; its
+primary read adds the fair-mid cell** beside the near-scramble cells. The cheap
+conditional-filter fix is NOT indicated.
+**spc (non-decisive family): different mechanism — (c) planner-side at 21/32** (tracker
+near GT, campath not; + 5 coast, 6 re-solve). The spc mid dip is mostly planner
+smoothing over filter-perturbed paths — W5-fit/deadband territory, secondary while
+non-decisive.
+**Artifacts:** analysis inline from p0_fop ladder artifacts + fair_hn4s4 dump (static
+recompute at the promotion params); frames listed above for the future label/vision pass.
+
 ## EXP-OP-18 PRE-REGISTRATION (committed before numbers): fair-mid dip autopsy — WHERE does F lose the mid views it costs vs A0? (2026-07-27)
 
 **Question (the P2 gate):** F's fair-mid loss vs AC is decisive (EXP-OP-16); EXP-OP-11's

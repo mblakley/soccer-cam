@@ -19,7 +19,8 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 - [ ] OOB-DEAD state + exit taxonomy (SS7/SS7.1: windowed exit anchor, bimodal end-line gate, goal-mouth case) + retune default knobs on F stream. Read: composite MATCH discipline + stoppage segments + frantic-phase velocity. The winfar1-class insurance beyond filtering.
 
 ## P4 — W3 loss discipline (now with THREE measured consumers; promoted ahead of P2 2026-07-27)
-- [ ] F's mid path-dip (EXP-OP-11 mechanism: indirect global-path re-solve, not deletions) — now DECISIVE on fair vs AC (EXP-OP-16) and the P2 blocker. First read: does the miss-cost/coast work move the fair-mid cell?
+- [x] 2026-07-27 fair-mid MECHANISM (EXP-OP-18): re-solve COMMITMENT (44/46 confident-T on another route; deletion 1/46 — dead). Stage-1 commitment/miss-cost arms = the P2 gate; fair-mid cell joins the primary reads. spc's milder dip is planner-side (21/32) — W5/deadband, secondary.
+- [ ] Stage-1 arms on the F stream, scored on: near-scramble labels (the ~100-click ASK) + the mgctrl 4.4s near-event class + THE FAIR-MID CELL (new, zero-click).
 - [ ] LABEL ASK (~100 clicks): near-scramble batch — consumers: miss-cost arms AND the mgctrl 4.4s near-event class (EXP-OP-12). Mined from hn4s4/mgctrl dumps.
 - [ ] Stage-1 miss-cost arms on the F stream; competing-cluster switch only if commitment survives filtering (winfar2 says it does for moving clutter); goal-kick launch detector arming the EXP-DIST-31 bridge (winfar2's actual fix).
 
