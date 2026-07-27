@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from video_grouper.inference.ball_tracker import (
     Candidate,
@@ -190,3 +191,135 @@ def test_candidate_dispersion_rms():
     assert disp[0] is None
     assert disp[1] == 0.0
     assert disp[2] == 250.0  # both 250 px from the (150, 200) centroid
+
+
+# ---------------------------------------------------------------------------
+# W3 stage-1 (task #22): state-dependent miss-ENTRY cost arms (EXP-OP-20)
+# ---------------------------------------------------------------------------
+
+
+def _scramble_frames(n=30, window=range(10, 15), y=940.0, drift=0.5):
+    """One slow candidate drifting near the bottom (near band); its emission
+    cost is controlled via priors, so the scramble is a pure cost story."""
+    return [[Candidate(x=500.0 + drift * t, y=y, score=0.5)] for t in range(n)]
+
+
+def _scramble_run(cfg, y=940.0, cand_cost=1.5, window=range(10, 15), n=30):
+    """Track cost 0.3 outside the window, ``cand_cost`` inside (P(ball)
+    collapses); miss floor 0.7 throughout. Returns the window frames the
+    track KEPT (did not enter miss over)."""
+    geom = _geom()
+    frames = _scramble_frames(n=n, y=y)
+    priors = [np.array([cand_cost if t in window else 0.3], float) for t in range(n)]
+    miss_costs = [0.7] * n
+    preds = rerank(frames, geom, priors=priors, miss_costs=miss_costs, config=cfg)
+    return [t for t in window if t in preds]
+
+
+def test_miss_entry_near_arm_holds_the_near_slow_scramble():
+    geom = _geom()
+    diam = float(geom.expected_ball_diameter_px(np.array([[500.0, 940.0]]))[0])
+    base = RerankConfig(alpha=0.0, motion_w=0.0, static_w=0.0)
+    # default: the brief P(ball) collapse makes the miss path cheaper -> the
+    # tracker abandons a candidate that never moved (the near-autopsy class)
+    assert _scramble_run(base) == []
+    # arm N: entering miss over a NEAR+SLOW top candidate is expensive -> held
+    armed = RerankConfig(
+        alpha=0.0,
+        motion_w=0.0,
+        static_w=0.0,
+        miss_entry_near_k=4.0,
+        miss_entry_near_diam_px=diam * 0.9,
+    )
+    assert len(_scramble_run(armed)) == 5
+
+
+def test_miss_entry_near_arm_does_not_fire_far():
+    geom = _geom()
+    diam_near = float(geom.expected_ball_diameter_px(np.array([[500.0, 940.0]]))[0])
+    diam_far = float(geom.expected_ball_diameter_px(np.array([[500.0, 320.0]]))[0])
+    assert diam_far < diam_near  # perspective gradient sanity
+    armed = RerankConfig(
+        alpha=0.0,
+        motion_w=0.0,
+        static_w=0.0,
+        miss_entry_near_k=4.0,
+        miss_entry_near_diam_px=diam_far * 1.5,  # far candidate sits BELOW the gate
+    )
+    # the same scramble at the FAR touchline: the near arm must not rescue it
+    assert _scramble_run(armed, y=320.0) == []
+
+
+def test_miss_entry_multiplier_math():
+    from video_grouper.inference.ball_tracker import miss_entry_multiplier
+
+    both = RerankConfig(
+        miss_entry_near_k=4.0,
+        miss_entry_margin_k=2.0,
+        miss_entry_near_diam_px=15.0,
+        miss_entry_slow_mpf=0.15,
+    )
+    # arm N: near AND slow -> 1 + k_N; unknown step counts as slow
+    assert miss_entry_multiplier(
+        both, diam_px=20.0, step_mpf=0.1, e_top=1.0, e_second=None, floor=0.5
+    ) == pytest.approx(5.0)
+    assert miss_entry_multiplier(
+        both, diam_px=20.0, step_mpf=None, e_top=1.0, e_second=None, floor=0.5
+    ) == pytest.approx(5.0)
+    # near but FAST, or slow but FAR -> arm N silent
+    assert miss_entry_multiplier(
+        both, diam_px=20.0, step_mpf=0.5, e_top=1.0, e_second=None, floor=0.5
+    ) == pytest.approx(1.0)
+    assert miss_entry_multiplier(
+        both, diam_px=8.0, step_mpf=0.1, e_top=1.0, e_second=None, floor=0.5
+    ) == pytest.approx(1.0)
+    # arm M: adv = (floor - e_top)/floor clipped to [0,1]; lone candidate sep=1
+    m = miss_entry_multiplier(
+        both, diam_px=8.0, step_mpf=0.5, e_top=0.35, e_second=None, floor=0.7
+    )
+    assert m == pytest.approx(1.0 + 2.0 * 0.5)
+    # rank-1 NOT beating the floor -> adv 0 -> silent (the near-autopsy class
+    # belongs to arm N, per the design)
+    assert miss_entry_multiplier(
+        both, diam_px=8.0, step_mpf=0.5, e_top=1.2, e_second=None, floor=0.7
+    ) == pytest.approx(1.0)
+    # separation scales the margin: e2 close to e1 -> small sep
+    tight = miss_entry_multiplier(
+        both, diam_px=8.0, step_mpf=0.5, e_top=0.35, e_second=0.36, floor=0.7
+    )
+    wide = miss_entry_multiplier(
+        both, diam_px=8.0, step_mpf=0.5, e_top=0.35, e_second=3.5, floor=0.7
+    )
+    assert 1.0 < tight < wide <= 1.0 + 2.0 * 0.5
+    # anchored/invalid floor disables arm M; both arms can stack
+    assert miss_entry_multiplier(
+        both, diam_px=8.0, step_mpf=0.5, e_top=0.35, e_second=None, floor=float("inf")
+    ) == pytest.approx(1.0)
+    stacked = miss_entry_multiplier(
+        both, diam_px=20.0, step_mpf=0.1, e_top=0.35, e_second=None, floor=0.7
+    )
+    assert stacked == pytest.approx(5.0 * 2.0)
+    # defaults (both k = 0) are exactly 1.0
+    assert (
+        miss_entry_multiplier(
+            RerankConfig(),
+            diam_px=20.0,
+            step_mpf=0.0,
+            e_top=0.1,
+            e_second=None,
+            floor=0.7,
+        )
+        == 1.0
+    )
+
+
+def test_miss_entry_defaults_are_bit_identical():
+    geom = _geom()
+    frames = _moving_vs_static_frames()
+    plain = rerank(frames, geom, config=RerankConfig())
+    with_fields = rerank(
+        frames,
+        geom,
+        config=RerankConfig(miss_entry_near_k=0.0, miss_entry_margin_k=0.0),
+    )
+    assert plain == with_fields

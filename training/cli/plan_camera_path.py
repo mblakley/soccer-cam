@@ -111,6 +111,8 @@ def replay_champion_chain(
     static_filter_radius: float = 60.0,
     static_filter_offfield_only: bool = False,
     static_filter_field_margin_m: float = 2.0,
+    miss_entry_near_k: float = 0.0,
+    miss_entry_margin_k: float = 0.0,
 ) -> dict:
     """The CURRENT champion camera chain, exactly as this CLI runs it: cached
     ``fullgame_candidates/1`` dump -> selector emissions -> rerank (shipped
@@ -175,10 +177,10 @@ def replay_champion_chain(
             )
 
             m = static_filter_field_margin_m
-            w = geom.image_to_world(np.asarray(static_centers, float))
+            wc = geom.image_to_world(np.asarray(static_centers, float))
             off = [
                 c
-                for c, (wx, wy) in zip(static_centers, w, strict=False)
+                for c, (wx, wy) in zip(static_centers, wc, strict=False)
                 if not (
                     -m <= wx <= DEFAULT_FIELD_LENGTH_M + m
                     and -m <= wy <= DEFAULT_FIELD_WIDTH_M + m
@@ -235,6 +237,10 @@ def replay_champion_chain(
         phys_sigma_px=phys_sigma_px,
         bridge_w=bridge_w,
         oob_w=oob_w,
+        # W3 stage-1 (task #22): state-dependent miss-ENTRY cost arms; both
+        # default 0.0 = the shipped chain, bit-identical
+        miss_entry_near_k=miss_entry_near_k,
+        miss_entry_margin_k=miss_entry_margin_k,
     )
     picked, pick_conf = rerank(
         frames,

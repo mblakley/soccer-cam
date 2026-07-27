@@ -91,6 +91,20 @@ class RerankConfig:
     # ball's smooth growth (aerial-safe by construction). 0 = OFF; needs Candidate.size_px set.
     motion_w: float = 0.5  # motion-blob support bonus weight
     miss_cost: float = 0.9  # cost of the occlusion/miss state
+    # W3 STAGE-1 (task #22): state-dependent miss-ENTRY cost. The near autopsy
+    # (EXP-OP-12/18): the tracker enters miss OVER a rank-1 candidate it should
+    # trust — at ball-at-feet scrambles (near + slow) and when rank-1 is clearly
+    # separated from the field. Multiplies ONLY the tracked->miss ENTRY
+    # transition: mult = (1 + near_k * near_slow(t)) * (1 + margin_k * margin(t)).
+    # Both weights 0 = OFF, bit-identical to the shipped chain.
+    miss_entry_near_k: float = 0.0  # arm N weight (near AND slow top candidate)
+    miss_entry_margin_k: float = 0.0  # arm M weight (rank-1 emission margin)
+    miss_entry_near_diam_px: float = (
+        15.0  # near-band edge in EXPECTED diameter px (the scoreboard band convention)
+    )
+    miss_entry_slow_mpf: float = (
+        0.15  # "slow" ceiling, world m per SOURCE frame (~3 m/s at 20 fps)
+    )
     cell_m: float = 2.0  # world-cell size for the persistence map
     motion_radius_m: float = 3.0  # how near a motion blob counts as support
     # AERIAL BRIDGE (EXP-DIST-30/31, v0-v1 of the ball-state machine): the miss state
@@ -217,6 +231,49 @@ _OOB_CAP_M = 20.0  # cone ceiling (p90 measured 15 m)
 # state. Coasting a brief occlusion is cheap but not free; waiting out a pinned
 # out-of-bounds excursion is the correct behavior, not a guilty miss, so cheaper still.
 _MISS_TRANS_COST = 0.6  # to/from the miss state (allow coasting an occlusion)
+
+
+def miss_entry_multiplier(
+    cfg: RerankConfig,
+    *,
+    diam_px: float,
+    step_mpf: float | None,
+    e_top: float,
+    e_second: float | None,
+    floor: float,
+) -> float:
+    """W3 stage-1 (task #22): the miss-ENTRY cost multiplier for one frame's TOP
+    candidate. Pure math, pre-registered in EXP-OP-20.
+
+    Arm N (``miss_entry_near_k``): fires when the candidate is NEAR
+    (``diam_px`` — its EXPECTED diameter from geometry — reaches the near band
+    edge) AND SLOW (world step per source frame under the ceiling; an unknown
+    step — first frame / previous frame empty — counts as slow: a scramble,
+    not a flight). Arm M (``miss_entry_margin_k``): scales with
+    ``adv * sep`` in [0, 1] — ``adv`` = the candidate's cost advantage over
+    the miss ``floor`` (as a fraction of the floor; 0 when it does not beat
+    the floor), ``sep`` = rank-1's separation from rank-2 (fraction of their
+    combined magnitude; 1.0 for a lone candidate). A non-finite or
+    non-positive floor (anchored frames) disables arm M. Both arms at 0 (the
+    default) return exactly 1.0 — bit-identical to the shipped chain."""
+    mult = 1.0
+    if cfg.miss_entry_near_k > 0:
+        slow = step_mpf is None or step_mpf <= cfg.miss_entry_slow_mpf
+        if diam_px >= cfg.miss_entry_near_diam_px and slow:
+            mult *= 1.0 + cfg.miss_entry_near_k
+    if cfg.miss_entry_margin_k > 0 and math.isfinite(floor) and floor > 0:
+        adv = min(max((floor - e_top) / floor, 0.0), 1.0)
+        if e_second is None:
+            sep = 1.0
+        else:
+            sep = min(
+                max((e_second - e_top) / (abs(e_top) + abs(e_second) + 1e-9), 0.0),
+                1.0,
+            )
+        mult *= 1.0 + cfg.miss_entry_margin_k * adv * sep
+    return mult
+
+
 _OOB_COAST_TRANS_COST = 0.1  # holding at a pinned OOB crossing is nearly free
 
 
@@ -746,6 +803,38 @@ def rerank(
             return math.inf  # anchored frame: the path must take an in-radius candidate
         return float(miss_costs[t]) if miss_costs is not None else cfg.miss_cost
 
+    # W3 stage-1 (task #22): per-frame miss-ENTRY multiplier from the TOP candidate,
+    # computed once and applied only on tracked->miss ENTRY transitions. The
+    # multiplier math lives in :func:`miss_entry_multiplier` (pure, unit-tested);
+    # exact definitions pre-registered in EXP-OP-20.
+    entry_mult = np.ones(n)
+    if cfg.miss_entry_near_k > 0 or cfg.miss_entry_margin_k > 0:
+        tops: list[int | None] = []
+        for t in range(n):
+            kt = len(frames[t])
+            if kt == 0:
+                tops.append(None)
+                continue
+            et = [emis(t, j) for j in range(kt)]
+            jt = int(np.argmin(et))
+            tops.append(jt)
+            diam = float(geom.expected_ball_diameter_px(fsrc[t][jt : jt + 1])[0])
+            top_step: float | None = None
+            prev = tops[t - 1] if t > 0 else None
+            if prev is not None and len(fw[t - 1]):
+                top_step = float(np.linalg.norm(fw[t][jt] - fw[t - 1][prev])) / max(
+                    1, gaps[t]
+                )
+            e2 = float(np.partition(np.asarray(et, float), 1)[1]) if kt >= 2 else None
+            entry_mult[t] = miss_entry_multiplier(
+                cfg,
+                diam_px=diam,
+                step_mpf=top_step,
+                e_top=float(et[jt]),
+                e_second=e2,
+                floor=miss(t),
+            )
+
     # Viterbi: state K = miss. cost[t][j], back[t][j]. The miss state additionally
     # carries the world position where its (best-predecessor) path left a candidate
     # plus the source-frames spent missing — a greedy approximation that lets re-entry
@@ -827,6 +916,9 @@ def rerank(
                 if j == k or i == kp:
                     # to/from miss: allow coasting an occlusion
                     trans = _MISS_TRANS_COST
+                    if j == k and i != kp:
+                        # W3 stage-1 (task #22): state-dependent miss-ENTRY cost
+                        trans *= entry_mult[t]
                     if j == k and i == kp and cfg.oob_w > 0 and moob_prev is not None:
                         # pinned OUT-OF-BOUNDS: waiting at the boundary is the correct
                         # behavior, not a guilty miss — coasting is nearly free

@@ -290,6 +290,8 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         static_filter_cell=args.static_filter_cell,
         static_filter_radius=args.static_filter_radius,
         static_filter_offfield_only=args.static_filter_offfield_only,
+        miss_entry_near_k=args.miss_entry_near_k,
+        miss_entry_margin_k=args.miss_entry_margin_k,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -427,7 +429,7 @@ def cmd_run_c(args: argparse.Namespace) -> None:
     outp = outd / f"{base}.freeze.campath.json"
     save_camera_path(
         outp,
-        [tuple(fr) for fr in frozen[g0:]],
+        [(float(fr[0]), float(fr[1]), float(fr[2])) for fr in frozen[g0:]],
         g_start=g0,
         src_w=int(art["src_w"]),
         src_h=int(art["src_h"]),
@@ -544,6 +546,20 @@ def main(argv: list[str] | None = None) -> None:
     )
     a.add_argument("--static-filter-cell", type=float, default=50.0)
     a.add_argument("--static-filter-radius", type=float, default=60.0)
+    a.add_argument(
+        "--miss-entry-near-k",
+        type=float,
+        default=0.0,
+        help="W3 stage-1 arm N (task #22): miss-ENTRY cost multiplier weight for "
+        "a NEAR+SLOW top candidate (0 = off, shipped chain)",
+    )
+    a.add_argument(
+        "--miss-entry-margin-k",
+        type=float,
+        default=0.0,
+        help="W3 stage-1 arm M (task #22): miss-ENTRY cost multiplier weight for "
+        "a clearly-separated rank-1 candidate (0 = off, shipped chain)",
+    )
     a.add_argument(
         "--static-filter-offfield-only",
         action="store_true",
