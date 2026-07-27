@@ -58,10 +58,16 @@ def ensure_share():
         sys.path.insert(0, str(script_dir))
         from map_share import map_share
 
+        password = os.environ.get("SHARE_PASS")
+        if not password:
+            logger.error(
+                "SHARE_PASS env var not set -- credentials are never hardcoded"
+            )
+            return False
         return map_share(
             SHARE_UNC,
             os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training"),
-            os.environ.get("SHARE_PASS", "amy4ever"),
+            password,
         )
     except Exception as e:
         logger.error("Share mapping failed: %s", e)

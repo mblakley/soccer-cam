@@ -37,8 +37,8 @@ logger = logging.getLogger()
 
 # Config
 SERVER = "192.168.86.152"
-SHARE_USER = "DESKTOP-5L867J8\\training"
-SHARE_PASS = "amy4ever"
+SHARE_USER = os.environ.get("SHARE_USER", "DESKTOP-5L867J8\\training")
+SHARE_PASS = os.environ.get("SHARE_PASS")  # required; never hardcoded
 HOSTNAME = socket.gethostname()
 FRAME_INTERVAL = 4
 DIFF_THRESHOLD = 2.0
@@ -50,6 +50,8 @@ TEMP_FRAMES = Path("C:/soccer-cam-label/temp_frames")
 
 def setup_shares():
     """Map network shares using WNet API."""
+    if not SHARE_PASS:
+        sys.exit("SHARE_PASS env var not set -- credentials are never hardcoded")
     map_share(f"\\\\{SERVER}\\training", SHARE_USER, SHARE_PASS)
     logger.info("Training share mapped")
     # Video is served from D: staging, NOT from F: (USB).

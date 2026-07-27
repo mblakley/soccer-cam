@@ -45,10 +45,14 @@ def map_share(remote: str, user: str, password: str, drive_letter: str = None):
 
 
 if __name__ == "__main__":
+    if not os.environ.get("SHARE_PASS"):
+        import sys
+
+        sys.exit("SHARE_PASS env var not set -- credentials are never hardcoded")
     ok = map_share(
         r"\\192.168.86.152\video",
         os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training"),
-        os.environ.get("SHARE_PASS", "amy4ever"),
+        os.environ["SHARE_PASS"],
     )
     print(f"Share mapped: {ok}")
     print(f"Exists: {os.path.exists(r'\\\\192.168.86.152\\video\\training_data')}")

@@ -73,8 +73,14 @@ COLS, ROWS = 7, 3
 QUALITY = 95
 
 # Map share
+if not os.environ.get("SHARE_PASS"):
+    sys.exit("SHARE_PASS env var not set -- credentials are never hardcoded")
 try:
-    map_share(f"\\\\{SERVER}\\training", "DESKTOP-5L867J8\\training", "amy4ever")
+    map_share(
+        f"\\\\{SERVER}\\training",
+        os.environ.get("SHARE_USER", "DESKTOP-5L867J8\\training"),
+        os.environ["SHARE_PASS"],
+    )
     logger.info("Share mapped (worker %d of %d)", WORKER_ID, NUM_WORKERS)
 except Exception as e:
     logger.error("Failed to map share: %s", e)

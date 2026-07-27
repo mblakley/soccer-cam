@@ -28,10 +28,14 @@ def ensure_share():
     try:
         from map_share import map_share
 
+        password = os.environ.get("SHARE_PASS")
+        if not password:
+            print("SHARE_PASS env var not set -- relying on an already-mapped share")
+            return os.path.exists(SHARDS_DIR)
         return map_share(
             SHARE_UNC,
             os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training"),
-            os.environ.get("SHARE_PASS", "amy4ever"),
+            password,
         )
     except Exception:
         return os.path.exists(SHARDS_DIR)

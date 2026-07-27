@@ -10,7 +10,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from map_share import map_share
 
 # Map the TRAINING share (D: internal HDD, fast)
-map_share(r"\\192.168.86.152\training", r"DESKTOP-5L867J8\training", "amy4ever")
+if not os.environ.get("SHARE_PASS"):
+    sys.exit("SHARE_PASS env var not set -- credentials are never hardcoded")
+map_share(
+    r"\\192.168.86.152\training",
+    os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training"),
+    os.environ["SHARE_PASS"],
+)
 print("Training share mapped", flush=True)
 
 local = "C:/soccer-cam-label/dataset_v2"

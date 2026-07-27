@@ -8,7 +8,13 @@ from map_share import map_share  # noqa: E402
 
 # Map the share
 share = r"\\192.168.86.152\video"
-ok = map_share(share, r"DESKTOP-5L867J8\training", "amy4ever")
+if not os.environ.get("SHARE_PASS"):
+    sys.exit("SHARE_PASS env var not set -- credentials are never hardcoded")
+ok = map_share(
+    share,
+    os.environ.get("SHARE_USER", r"DESKTOP-5L867J8\training"),
+    os.environ["SHARE_PASS"],
+)
 print(f"Share mapped: {ok}", flush=True)
 
 # Verify access
