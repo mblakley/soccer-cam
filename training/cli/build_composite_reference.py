@@ -103,6 +103,36 @@ def _quarantine_msg(path: Path, reason: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def pick_ac_source(game_dir: Path) -> Path | None:
+    """The (x) precedence for a game dir's AC reference: a USABLE fresh aim
+    (at least one data row with ``f`` + ``x``/``xy``) > the seg-keyed
+    ``autocam_viewport.jsonl`` > None. Presence alone must not win — fair's
+    aim is a 0-usable-row stub (EXP-OP-15)."""
+    aim = game_dir / "autocam_aim.jsonl"
+    if aim.exists():
+        try:
+            with open(aim, encoding="utf-8-sig", errors="ignore") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln or "_meta" in ln[:12]:
+                        continue
+                    try:
+                        row = json.loads(ln)
+                    except json.JSONDecodeError:
+                        continue
+                    if (
+                        isinstance(row, dict)
+                        and "seg" not in row
+                        and "f" in row
+                        and ("x" in row or "xy" in row)
+                    ):
+                        return aim
+        except OSError:
+            pass
+    vp = game_dir / "autocam_viewport.jsonl"
+    return vp if vp.exists() else None
+
+
 def _load_legacy_remapped(
     path: Path, offs: dict[str, int], gj: dict, game_dir: Path
 ) -> tuple[dict[int, tuple[float, float]], str, dict]:

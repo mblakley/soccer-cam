@@ -42,6 +42,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+from typing import NoReturn
 
 import numpy as np
 
@@ -63,7 +64,7 @@ FIXTURE_EXP72 = {
 }
 
 
-def _fail(msg: str) -> None:
+def _fail(msg: str) -> NoReturn:
     raise SystemExit(f"operator_scoreboard: {msg}")
 
 
@@ -139,6 +140,32 @@ def assign_bands(labels: dict[int, dict], gj: dict) -> tuple[dict[int, str], str
     return {f: om.band_of(d) for f, d in zip(fy_frames, dias, strict=True)}, "geometry"
 
 
+def load_ac_reference(
+    game_dir: Path, gj: dict
+) -> tuple[dict[int, tuple[float, float]], dict]:
+    """The AC arm's viewport ``{g: (x, y)}`` through the (x) source policy.
+
+    Delegates to the composite builder's :func:`load_ac_source`:
+    a USABLE fresh aim wins; a 7680-wide legacy ``autocam_viewport.jsonl`` is
+    QUARANTINED and admitted only through the verified trim-aware remap
+    (EXP-OP-15) — the pre-(x) behavior silently scored the legacy file's
+    broken timeline as the "AC" arm (EXP-OP-14's 0.278-match row). Hard-fails
+    when no source exists or verification fails (rule 8). Returns
+    ``(viewport, meta)`` — meta names the source and carries the remap record."""
+    from training.cli.build_composite_reference import load_ac_source, pick_ac_source
+
+    src = pick_ac_source(game_dir)
+    if src is None:
+        _fail(f"no AC reference source in {game_dir} (no usable aim, no viewport)")
+    offs = dd.seg_offsets(gj["segments"])
+    src_w = int(gj["segments"][0].get("w") or 0)
+    ac, fmt, remap_meta = load_ac_source(src, offs, src_w, gj, game_dir)
+    meta: dict = {"source": src.name, "format": fmt}
+    if remap_meta is not None:
+        meta["legacy_remap"] = remap_meta
+    return ac, meta
+
+
 def load_arms(
     labels: dict[int, dict],
     campaths: list[tuple[str, str]],
@@ -155,11 +182,7 @@ def load_arms(
     if not gj_path.exists():
         _fail(f"missing game.json in {game_dir}")
     gj = json.loads(gj_path.read_text(encoding="utf-8", errors="ignore"))
-    vp_path = game_dir / "autocam_viewport.jsonl"
-    if not vp_path.exists():
-        _fail(f"missing autocam_viewport.jsonl in {game_dir}")
-    offs = dd.seg_offsets(gj["segments"])
-    vps = dd.load_viewport(vp_path, offs)
+    vps, ac_meta = load_ac_reference(game_dir, gj)
 
     max_f = max(labels)
     arms: dict[str, dict[int, float]] = {}
@@ -189,9 +212,9 @@ def load_arms(
         coverage[name] = cov
     ac = {f: float(vps[f][0]) for f in labels if f in vps}
     if not ac:
-        _fail(f"arm AC: autocam_viewport covers 0 of {len(labels)} labeled frames")
+        _fail(f"arm AC: {ac_meta['source']} covers 0 of {len(labels)} labeled frames")
     arms["AC"] = ac
-    coverage["AC"] = {"n_labeled": len(labels), "n_covered": len(ac)}
+    coverage["AC"] = {"n_labeled": len(labels), "n_covered": len(ac), **ac_meta}
     return arms, coverage, gj
 
 
@@ -239,7 +262,7 @@ def build_cells(
                 if bname == "all"
                 else [f for f in sframes if band_by_frame.get(f) == bname]
             )
-            row = {"n_labeled": len(bframes), "arms": {}}
+            row: dict = {"n_labeled": len(bframes), "arms": {}}
             for aname, cx in arms.items():
                 ds = _deltas(cx, labels, bframes)
                 row["arms"][aname] = om.capture_stats(ds, CAPTURE_RADII)
@@ -270,7 +293,7 @@ def build_framing(
     segments = om.segment_series(frames_sorted, gap=GAP)
     fevents = om.framing_events(frames_sorted, gap=GAP)
     hclusters = om.hold_clusters(gt_fx)
-    ctx = {
+    ctx: dict = {
         "segments": segments,
         "framing_events": fevents,
         "hold_clusters": hclusters,
@@ -468,9 +491,7 @@ def load_plan_arms(
             g: (float(cams[g][0]), float(cams[g][1]), float(cams[g][2]))
             for g in range(g0, len(cams))
         }
-    vps = dd.load_viewport(
-        game_dir / "autocam_viewport.jsonl", dd.seg_offsets(gj["segments"])
-    )
+    vps, _ac_meta = load_ac_reference(game_dir, gj)
     plans["AC"] = {g: (float(x), float(y), None) for g, (x, y) in vps.items()}
     return plans, src_w
 
@@ -520,7 +541,7 @@ def build_composite_cells(
         )
         m = [g for g in bframes if tier[g] == "ac"]
         bt = [g for g in bframes if tier[g] != "ac"]
-        row = {"n_match": len(m), "n_beat": len(bt), "arms": {}}
+        row: dict = {"n_match": len(m), "n_beat": len(bt), "arms": {}}
         for aname, aplans in plans.items():
             row["arms"][aname] = {
                 "match": om.capture_contain_stats(refs, aplans, src_w, m),
@@ -729,30 +750,17 @@ def run_null_calibration_composite(comp_ctx: dict, champ: str, seed: int) -> dic
         )
 
     def m_contain(fs: list[int]) -> float | None:
-        elig = [
-            g
-            for g in fs
-            if refs[g][1] is not None
-            and plans[g][1] is not None
-            and plans[g][2] is not None
-        ]
-        if not elig:
-            return None
-        return float(
-            np.mean(
-                [
-                    om.planned_view_contains(
-                        refs[g][0],
-                        refs[g][1],
-                        plans[g][0],
-                        plans[g][1],
-                        plans[g][2],
-                        src_w,
-                    )
-                    for g in elig
-                ]
+        vals = []
+        for g in fs:
+            ry, py, ph = refs[g][1], plans[g][1], plans[g][2]
+            if ry is None or py is None or ph is None:
+                continue
+            vals.append(
+                om.planned_view_contains(refs[g][0], ry, plans[g][0], py, ph, src_w)
             )
-        )
+        if not vals:
+            return None
+        return float(np.mean(vals))
 
     out: dict = {
         "arm": champ,
@@ -909,11 +917,11 @@ def run_fixture(pooled: dict, champ: str) -> None:
         for arm in (champ, "AC"):
             st = cell.get(arm)
             print(f"  {arm}: {json.dumps(_json_safe(st))}")
-        for arm, metric, got, want, tol in bad:
+        for arm, metric, got, expected, tol in bad:
             print(
                 f"  FAIL {arm} {metric}: got "
                 f"{'-' if got is None else format(got, '.4f')} "
-                f"want {want} +/- {tol}"
+                f"want {expected} +/- {tol}"
             )
         raise SystemExit(1)
     ch, ac = cell[champ], cell["AC"]

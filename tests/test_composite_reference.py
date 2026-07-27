@@ -492,6 +492,114 @@ def test_parse_trim_offset_seconds(tmp_path):
     assert dd.parse_trim_offset_seconds(tmp_path / "nope.ini") is None
 
 
+def test_pick_ac_source_precedence(tmp_path):
+    from training.cli.build_composite_reference import pick_ac_source
+
+    gd = tmp_path / "pgame"
+    gd.mkdir()
+    assert pick_ac_source(gd) is None
+    _write_viewport_jsonl(gd / "autocam_viewport.jsonl", [(0, 1.0, 2.0)])
+    assert pick_ac_source(gd).name == "autocam_viewport.jsonl"
+    # a stub aim (console lines, ZERO data rows — fair's case) must NOT win
+    (gd / "autocam_aim.jsonl").write_text('{"lines": ["Once Autocam 3.0.7"]}\n')
+    assert pick_ac_source(gd).name == "autocam_viewport.jsonl"
+    # a usable aim wins ((x) precedence)
+    (gd / "autocam_aim.jsonl").write_text('{"xy": [1, 2], "f": 3, "t": 0.1}\n')
+    assert pick_ac_source(gd).name == "autocam_aim.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Scoreboard AC arm through the (x) source policy
+# ---------------------------------------------------------------------------
+
+
+def _write_label_set(tmp_path, name, frames_fx):
+    sd = tmp_path / name
+    sd.mkdir(exist_ok=True)
+    (sd / "labels.json").write_text(
+        json.dumps(
+            [
+                {"frame_idx": f, "action": "view", "fx": fx, "fy": None}
+                for f, fx in frames_fx
+            ]
+        )
+    )
+    (sd / "manifest.json").write_text(
+        json.dumps(
+            {
+                "set": name,
+                "n_frames": len(frames_fx),
+                "frames": [{"frame_idx": f, "kind": "?"} for f, _ in frames_fx],
+            }
+        )
+    )
+    return sd
+
+
+def _write_campath(tmp_path, src_w=7680, n=1000):
+    cp = tmp_path / "campath.json"
+    cp.write_text(
+        json.dumps(
+            {
+                "schema": "camera_path/1",
+                "g_start": 0,
+                "src_w": src_w,
+                "src_h": 2160,
+                "fps": 30.0,
+                "frames": [[1100.0, 500.0, 42.0]] * n,
+            }
+        )
+    )
+    return cp
+
+
+def test_scoreboard_ac_arm_from_remapped_legacy(tmp_path):
+    # 7680-wide game, verifiable legacy viewport: the AC arm must come from the
+    # verified remap, with the remap record in coverage (EXP-OP-14's note)
+    gd = _write_legacy_game(tmp_path)
+    _write_legacy_viewport(gd, d_true=200)
+    _write_true_anchors(gd)
+    sd = _write_label_set(tmp_path, "lset", [(300, 1000.0), (500, 1050.0)])
+    report = _run_scoreboard(tmp_path, sd, gd, _write_campath(tmp_path))
+    cov = report["sets"]["lset"]["coverage"]["AC"]
+    assert cov["source"] == "autocam_viewport.jsonl"
+    assert cov["format"] == "viewport_trim_remapped"
+    assert cov["legacy_remap"]["d_pred"] == 200
+    assert cov["n_covered"] == 2
+
+
+def test_scoreboard_ac_arm_prefers_usable_aim(tmp_path):
+    gd = _write_legacy_game(tmp_path)
+    _write_legacy_viewport(gd, d_true=200)
+    _write_true_anchors(gd)
+    _write_aim(gd / "autocam_aim.jsonl", [(f, 900.0, 450.0) for f in range(600)])
+    sd = _write_label_set(tmp_path, "aset", [(300, 1000.0), (500, 1050.0)])
+    report = _run_scoreboard(tmp_path, sd, gd, _write_campath(tmp_path))
+    cov = report["sets"]["aset"]["coverage"]["AC"]
+    assert cov["source"] == "autocam_aim.jsonl"
+    assert cov["format"] == "aim"
+    assert "legacy_remap" not in cov
+
+
+def test_scoreboard_ac_arm_unverifiable_legacy_hard_fails(tmp_path):
+    # 7680-wide game, legacy viewport, no match_info/anchors: the scoreboard
+    # must NOT silently score the broken timeline as "AC" (rule 8)
+    gd = tmp_path / "badgame"
+    gd.mkdir()
+    (gd / "game.json").write_text(
+        json.dumps(
+            {"segments": [{"seg": "s0", "global_offset": 0, "w": 7680, "h": 2160}]}
+        )
+    )
+    _write_viewport_jsonl(
+        gd / "autocam_viewport.jsonl", [(f, 1000.0, 500.0) for f in range(600)]
+    )
+    sd = _write_label_set(tmp_path, "bset", [(300, 1000.0), (500, 1050.0)])
+    with pytest.raises(SystemExit) as ei:
+        _run_scoreboard(tmp_path, sd, gd, _write_campath(tmp_path))
+    assert "EXP-OP-05" in str(ei.value)
+
+
 def test_builder_missing_or_bad_ac_source_hard_fails(tmp_path):
     gd = _write_game(tmp_path)
     with pytest.raises(SystemExit) as ei:
