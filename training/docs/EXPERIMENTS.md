@@ -4,6 +4,26 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-18 PRE-REGISTRATION (committed before numbers): fair-mid dip autopsy — WHERE does F lose the mid views it costs vs A0? (2026-07-27)
+
+**Question (the P2 gate):** F's fair-mid loss vs AC is decisive (EXP-OP-16); EXP-OP-11's
+mechanism guess was "indirect global-path re-solve, not deletions" (from F2's keeper
+evidence). Distinguish, ON THE LOST VIEWS THEMSELVES (fair mid GT views where A0
+captures@600 and F does not):
+- **(a) deletion-adjacent:** F's trajectory/2 state at the lost views is C/M
+  (coast/miss) — the filter starved the tracker of the object it was following;
+- **(b) re-solve commitment:** state stays T with the F path confidently elsewhere —
+  the lattice re-solve chose a different object/route;
+- **(c) planner-side:** F's TRACKER point is near GT but its CAMPATH is not —
+  divergence enters between tracker and planner.
+**Reads:** per lost view/event — F traj state composition; |F_traj − GT| vs
+|F_campath − GT|; F-vs-A0 campath divergence span around the event (contiguous cluster
+vs scattered); same for the SPC mid dip (non-decisive there — is it the same mechanism?).
+**Action mapping:** (a) → the filter must protect the actively-tracked candidate (ties
+into W3's coast flags; a cheap conditional-filter fix); (b) → miss-cost / commitment
+calibration territory (W3 stage-1's exact lever, raising its priority); (c) → planner
+knob work (W5 fit or deadband). Mixed → report the split; the dominant mode drives P4.
+
 ## EXP-OP-17 RESULTS: COMPOSITION NEGATIVE — mgF far 0.597 < mgctrl 0.724 AND < F 0.669; the far levers do NOT stack; closed per the pre-registered action (2026-07-27)
 
 spc classic cells (capture@600/med): **far mgF 0.597/251 vs mgctrl 0.724/163 vs F
