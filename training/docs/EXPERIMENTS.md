@@ -46,6 +46,20 @@ Pearson x = 0.28 (spc) / 0.17 (fair), y NEGATIVE, Spearman (any monotonic remap 
 warp space) 0.27 / 0.08, best affine leaves 1,021px median residual, no lag helps, and
 the raw range already spans the full 7,680 frame. Not rescalable — ban stands.
 
+**[BREAKTHROUGH ADDENDUM 07-26, Mark's push: 'does it MOVE like the ball?']** — per-
+SEGMENT wide lag scan (±3000 fr) finds the legacy spc viewport correlates r=0.82/0.81/0.58
+with ball GT at large PER-SEGMENT lags — and seg-1's lag is EXACTLY −1200 fr = the 01:00
+match_info start_time_offset @20fps. **The legacy jsonls were recorded on the TRIMMED
+timeline; load_viewport maps them via untrimmed seg offsets → global decorrelation of
+GENUINE AutoCam tracking.** Not garbage, not scale — a timebase bug in the mapping.
+CONSEQUENCE: the class is likely RECOVERABLE (trim-offset remap + per-segment lag
+verification against ball GT/aim), restoring tier-3 AC references for ALL Reolink games
+without AutoCam re-runs. NEXT SESSION: implement trim-aware remap in load_viewport or the
+composite builder; verify per game (require per-seg r>0.7 vs anchors before admission);
+re-check the fair 'stub' priority (re-run may be unnecessary); the EXP-OP-05 retraction
+still stands until remapped files are validated. Ban CONVERTS from 'condemned' to
+'quarantined pending remap+verification'.
+
 ## EXP-OP-12: #21 GATE, SPC LEG — mg_ctrl PASSES non-regression; far +0.28 raw on the primary family; the one near loss is a single 4.4s event (2026-07-26)
 
 mg_ctrl(seed-1)@s4 dump -> v7 -> shipped chain, vs hn4 champion on spc_viewport_worst:
