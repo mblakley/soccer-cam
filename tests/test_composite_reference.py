@@ -839,11 +839,19 @@ def test_scoreboard_composite_missing_file_hard_fails(tmp_path):
 # MATCH: 3 gap-64 singleton events (0/200/400), champ captures + contains all
 # -> zero-width bands. BEAT: one event (600) -> explicit power floor.
 NULLCAL_ROWS = [
+    # MATCH frames span two 600-frame blocks (0 and 1) — the EXP-OP-16
+    # amendment's block unit; the old gap-64 event unit would also have split
+    # these, but on real dense composites it collapses to ONE event
     {"g": 0, "x": 1100.0, "y": 500.0, "tier": "ac", "src": "aim"},
     {"g": 200, "x": 1100.0, "y": 500.0, "tier": "ac", "src": "aim"},
-    {"g": 400, "x": 1100.0, "y": 500.0, "tier": "ac", "src": "aim"},
-    {"g": 600, "x": 5000.0, "y": 500.0, "tier": "ball", "src": "ball_labels.jsonl"},
+    {"g": 650, "x": 1100.0, "y": 500.0, "tier": "ac", "src": "aim"},
+    {"g": 900, "x": 5000.0, "y": 500.0, "tier": "ball", "src": "ball_labels.jsonl"},
 ]
+
+
+def test_block_events_unit():
+    assert om.block_events([], 600) == []
+    assert om.block_events([1250, 0, 1, 599, 600], 600) == [[0, 1, 599], [600], [1250]]
 
 
 def test_scoreboard_composite_null_calibration(tmp_path):
@@ -853,10 +861,11 @@ def test_scoreboard_composite_null_calibration(tmp_path):
     )
     nc = report["null_calibration_composite"]["cset"]
     assert nc["arm"] == "champ" and nc["reps"] == 300
-    # MATCH column: dense side -> computable, and the constant champ makes
-    # every half-split identical -> the band collapses onto 0
+    assert "block_events(600" in nc["unit"]
+    # MATCH column: dense side, BLOCK unit -> 2 blocks, computable; the
+    # constant champ makes every half-split identical -> band collapses onto 0
     assert nc["match_capture600"]["band"] == [0.0, 0.0]
-    assert nc["match_capture600"]["n_events"] == 3
+    assert nc["match_capture600"]["n_events"] == 2
     assert nc["match_containment"]["band"] == [0.0, 0.0]
     # BEAT column: 1 event -> power floor recorded EXPLICITLY, never silent
     assert nc["beat_capture600"]["band"] is None

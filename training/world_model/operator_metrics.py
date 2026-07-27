@@ -91,6 +91,23 @@ def cluster_events(frames: Iterable[int], gap: int = DEFAULT_GAP) -> list[list[i
     return ev
 
 
+# EXP-OP-16 amendment: the composite MATCH column is DENSE — gap-based event
+# clustering collapses it into ONE event (the power floor fires on every
+# game). Its null unit is a fixed 600-frame (~30 s) global-frame block, an
+# order of magnitude beyond the gap-64 (~3 s) correlation scale the event
+# unit encodes.
+COMPOSITE_MATCH_NULL_BLOCK_FRAMES = 600
+
+
+def block_events(frames: Iterable[int], block_len: int) -> list[list[int]]:
+    """Fixed-length exchangeability blocks for DENSE frame sets: frames grouped
+    by ``g // block_len`` (contiguous global-frame spans, ordered)."""
+    out: dict[int, list[int]] = {}
+    for f in sorted(frames):
+        out.setdefault(f // block_len, []).append(f)
+    return [out[k] for k in sorted(out)]
+
+
 def segment_series(frames: Iterable[int], gap: int = DEFAULT_GAP) -> list[list[int]]:
     """Split labeled frames into contiguous segments — the framing metrics' event
     unit. Same clustering rule as :func:`cluster_events`; named separately because
@@ -576,30 +593,18 @@ def capture_contain_stats(
         if fs
         else None
     )
-    elig = [
-        g
-        for g in fs
-        if refs[g][1] is not None
-        and plans[g][1] is not None
-        and plans[g][2] is not None
-    ]
-    contain = (
-        float(
-            np.mean(
-                [
-                    planned_view_contains(
-                        refs[g][0],
-                        refs[g][1],
-                        plans[g][0],
-                        plans[g][1],
-                        plans[g][2],
-                        src_w,
-                    )
-                    for g in elig
-                ]
-            )
+    contain_vals = []
+    for g in fs:
+        ry, py, ph = refs[g][1], plans[g][1], plans[g][2]
+        if ry is None or py is None or ph is None:
+            continue
+        contain_vals.append(
+            planned_view_contains(refs[g][0], ry, plans[g][0], py, ph, src_w)
         )
-        if elig
-        else None
-    )
-    return {"n": len(fs), "cap600": cap, "n_contain": len(elig), "contain": contain}
+    contain = float(np.mean(contain_vals)) if contain_vals else None
+    return {
+        "n": len(fs),
+        "cap600": cap,
+        "n_contain": len(contain_vals),
+        "contain": contain,
+    }

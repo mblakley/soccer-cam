@@ -766,12 +766,22 @@ def run_null_calibration_composite(comp_ctx: dict, champ: str, seed: int) -> dic
         "arm": champ,
         "reps": 300,
         "seed": seed,
-        "unit": f"cluster_events(gap={GAP}) over composite MATCH / BEAT frames",
+        # EXP-OP-16 amendment: dense MATCH frames use fixed time blocks — the
+        # gap-64 event unit collapses them into ONE event; sparse BEAT frames
+        # keep the event unit.
+        "unit": (
+            f"MATCH: block_events({om.COMPOSITE_MATCH_NULL_BLOCK_FRAMES} fr); "
+            f"BEAT: cluster_events(gap={GAP})"
+        ),
     }
     frames = sorted(refs)
     for col in ("match", "beat"):
         col_frames = [g for g in frames if (tier[g] == "ac") == (col == "match")]
-        events = om.cluster_events(col_frames, gap=GAP)
+        events = (
+            om.block_events(col_frames, om.COMPOSITE_MATCH_NULL_BLOCK_FRAMES)
+            if col == "match"
+            else om.cluster_events(col_frames, gap=GAP)
+        )
         for mname, fn in (
             (f"{col}_capture600", m_cap),
             (f"{col}_containment", m_contain),
