@@ -86,6 +86,14 @@ instrument). PIT referee: AC decisive over every arm on ALL and most far cells (
 rows) — the (t) supplemental floor unchanged. spc referee: ZERO decisive anywhere
 (EXP-OP-06's no-decisive-on-spc holds under the composite standard).
 
+**[AMENDMENT PRE-REGISTRATION 07-27, before the re-calibration run]:** the MATCH-column
+null unit becomes **fixed 600-frame global-frame blocks (~30 s)** — dense contiguous
+frames grouped by ``g // 600`` — chosen to sit an order of magnitude beyond the gap-64
+(~3 s) correlation scale the event unit encodes, yielding ~125-170 blocks per game
+(vs 1 collapsed event). The BEAT column keeps the gap-64 cluster unit (sparse frames,
+valid as-is; its banked bands stand). Re-calibration = same seed 72 / 300 reps on the
+same composites; the amended MATCH bands then gate every later match-side verdict.
+
 **4. INSTRUMENT GAP — the composite MATCH null is broken as operationalized:** the
 gap-64 cluster-event unit collapses ~80k dense contiguous MATCH frames into ONE event on
 all three games (reps_valid 0, power_floor fires). MATCH-side "within null band"
