@@ -94,6 +94,16 @@ frames grouped by ``g // 600`` — chosen to sit an order of magnitude beyond th
 valid as-is; its banked bands stand). Re-calibration = same seed 72 / 300 reps on the
 same composites; the amended MATCH bands then gate every later match-side verdict.
 
+**[AMENDMENT RESULTS 07-27 — MATCH nulls LIVE (code @ w2 ab0a275; artifacts
+p0_fop/*_v2.json):** blocks 128 (spc) / 150 (fair) / 172 (PIT), reps_valid 300/300,
+match-cap600 bands **spc [−0.089, +0.088] · fair [−0.076, +0.091] · PIT [−0.062,
++0.058]**. First match-side verdicts (ALL cell, delta vs A0): **spc F −0.063 and mgctrl
+−0.028 WITHIN band; fair F −0.061 WITHIN band; PIT F −0.075 and mgctrl −0.104 OUTSIDE
+band** — on the primary family the filter's dense-MATCH cost is null-level (its
+promotion blocker remains the GT-set decisive fair-mid row, a different instrument);
+on the Dahua family both arms genuinely diverge from AC's dense signal ((t) floor
+texture). P0 is now COMPLETE: cells + BEAT nulls + MATCH nulls all banked.]
+
 **4. INSTRUMENT GAP — the composite MATCH null is broken as operationalized:** the
 gap-64 cluster-event unit collapses ~80k dense contiguous MATCH frames into ONE event on
 all three games (reps_valid 0, power_floor fires). MATCH-side "within null band"

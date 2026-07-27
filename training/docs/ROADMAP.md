@@ -6,7 +6,7 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 ## P0 — Re-anchor on the composite standard ((w)) — BANKED 2026-07-27 (EXP-OP-16)
 - [x] 2026-07-27: legacy viewport class RECOVERED (EXP-OP-15, (x)) — fair tier-3 = remap-verified legacy (r 0.981); raw CLI aim parses directly; scoreboard AC arm wired through the (x) source policy.
 - [x] 2026-07-27: composites built (fair 92,966 / PIT 128,501 rows + banked spc); A0/F/mgctrl re-read on all three via F-OP (EXP-OP-16; fixture + EXP-OP-14 reproduction certify the node). Fair-far story REVERSED (AC 0.857 vs 0.525); spc referee zero-decisive holds.
-- [ ] REMAINING: block-unit MATCH nulls (the gap-64 event unit collapses on dense frames — match-side verdicts unevaluable until this lands; pre-register before the next match-side read).
+- [x] 2026-07-27: block-unit MATCH nulls landed (w2 ab0a275) + re-calibrated: bands ±0.06-0.09, spc/fair F MATCH costs WITHIN band, PIT arms OUTSIDE ((t) texture). **P0 COMPLETE.**
 
 ## P1 — The composition read + #21 close-out (cheapest big number)
 - [x] 2026-07-27 mg_ctrl x F@0.20 spc leg: **NEGATIVE, closed** (EXP-OP-17 — mgF far 0.597 < both single arms; the filter degrades the mgctrl stream; near static-park nugget -> P4). fair/PIT legs moot unless #21's fair leg shows far regression.

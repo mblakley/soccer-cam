@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-07-27 (morning) — P0 BANKED (EXP-OP-16): fair-far story reverses; F promotion blocked on decisive fair-mid; F-OP certified as analysis node*
+*Last updated: 2026-07-27 (morning) — P0 COMPLETE (EXP-OP-16 + MATCH-null amendment + EXP-OP-17 composition negative); fair-far reversed; F promotion blocked on decisive fair-mid*
 
 ## 2026-07-27 (morning, same session) — EXP-OP-16: P0 composite re-anchor BANKED on F-OP
 
