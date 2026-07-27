@@ -4,6 +4,27 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-19 PRE-REGISTRATION (committed before numbers): #21 gate RE-ANCHOR on the archived mg_ctrl — all legs at ONE checkpoint; the stranded seed-1 leg is superseded (2026-07-27)
+
+**Why (Mark's directive + the 4070 outage):** F-OP is the GPU for ~2 weeks; the 4070 is
+off-LAN and NOT on the tailnet, stranding mg_ctrl seed-1's checkpoint AND its fair dump.
+The gate cannot mix seeds across legs (far-argmax seed variance ±0.04-0.08 is measured).
+**Resolution: re-anchor every leg on the ARCHIVED Phase-2 mg_ctrl** (unseeded, epoch 15,
+index_v1, sha-identical across both archive copies; ckpt metadata verified) — the SAME
+checkpoint behind the banked PIT leg (campath_pit_mg_ctrl, 0.644 reproduced in
+EXP-OP-16). spc + fair dumps at this ckpt run on F-OP's GPU (~1 h/game measured on the
+1060-class chain), then the standard 6-min CPU reads.
+**Reads (per game, same instrument as EXP-OP-16, fps 30):** mgarch vs A0/F/AC on the GT
+sets + composite cells + referee. **Gate criteria (pre-defined in docs):**
+primary-family viewport NON-regression (no decisive mgarch-vs-A0 loss on spc or fair
+GT views) + the banked PIT confirmation (0.644 > 0.542, this ckpt) + the (t) framing
+note (coverage serves cross-camera robustness). The seed-1 spc leg (EXP-OP-12, PASS) is
+SUPERSEDED with provenance noted — its arm was a different training run of the same
+recipe; its result stands as corroborating history, not a gate leg.
+**Action mapping:** all legs clean → the #21 promotion package goes to Mark for the
+promote/hold call (champion shift = re-anchor scoreboards per the no-straddle rule,
+already satisfied — P0 banked). Any decisive regression → #21 held, mechanism entry.
+
 ## EXP-OP-18 RESULTS: fair-mid dip = RE-SOLVE COMMITMENT, not deletion — 44/46 lost views are confident-T on another route; truth deleted at 1/46; W3 stage-1 is the P2 gate (2026-07-27)
 
 **fair (the decisive family): mechanism (b), overwhelmingly.** Of the 46 mid GT views
