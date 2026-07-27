@@ -116,6 +116,17 @@ machines on first contact — this doc describes roles and patterns, not live st
   accordingly.
 - **blakley-laptop approved as a CPU-analysis node** (Mark 07-26) — verify reachability/
   creds on first contact (no credential file yet).
+- **F-OP CERTIFIED as the CPU-analysis node on first contact (2026-07-27, EXP-OP-16):**
+  the EXP-72 fixture reproduced to the digit; the full P0 chain (7 champion-chain
+  replays + 3 scoreboards with nulls + referee) = **6 min wall** on the 5800X. No uv
+  needed — the worker C:\Python313 env (torch/cv2/numpy) imports the whole
+  ladder/scoreboard chain via PYTHONPATH to a git checkout. Staging pattern that works:
+  server copies inputs to F:\test\opstage (F: is the shared drive), F-OP pulls with
+  `net use` + EXPLICIT server credentials inside the session (explicit creds defeat the
+  double-hop), results robocopy back the same way. Candidate DUMPS are ~15-25 MB/game
+  (stride-4) — staging is trivial; the ~12 GB/game figure is CLIP staging only. The
+  idle-Roblox zombie pattern seen again (0.05 cores over 5 s = nobody playing; measure
+  CPU delta, never process presence).
 - **BREADTH LANE APPROVED (Mark 07-26):** idle-GPU week = dump more GT-bearing games
   (benchmark-set games, iron 06.15 holdout) at hn4s4 + mgctrl provenance on F-OP + 1060
   in parallel with the CPU reads — widens composite coverage, W5 fit base, generality
