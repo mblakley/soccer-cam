@@ -11,6 +11,10 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   unnecessary), else PIT-class validated Dahua jsonl. Legacy Reolink jsonls admissible
   ONLY through the verified trim remap ((x)); the scoreboard AC arm is WIRED through
   this policy (w2 127b633).**
+- **TASK #22 ALLOCATED (07-27): W3 stage-1 state-dependent miss-ENTRY cost sweep**
+  (the kickoff brief's informal "#16", corrected per flag 3). Built @ w2 9b40c28;
+  sweep pre-registered as EXP-OP-20. Registry: #19 ray-geometry, #20 stoppage-HOLD,
+  #21 Dahua-refresh (gate re-anchoring at the archived ckpt, EXP-OP-19), #22 this.
 - **P0 ANCHOR (EXP-OP-16, 07-27): the fair-far story REVERSED with the recovered AC
   reference — AutoCam fair far 0.857 vs our 0.525 (the 07-19 wind claim was the
   timebase bug); W4's beat-far target = fair-far. F@0.20 promotion BLOCKED (decisive

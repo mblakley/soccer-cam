@@ -4,6 +4,35 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-20 PRE-REGISTRATION (committed before numbers): W3 stage-1 — three-arm state-dependent miss-ENTRY cost sweep (task #22) (2026-07-27)
+
+**Build (w2 9b40c28, per W3_LOSS_DISCIPLINE_DESIGN.md):** `miss_entry_multiplier` on the
+tracked->miss ENTRY transition only, from the frame's TOP candidate. **Arm N** =
+`1 + k_N` when the candidate is NEAR (EXPECTED diameter >= 15 px, the band convention)
+AND SLOW (world step <= 0.15 m/source-frame ≈ 3 m/s @ 20 fps; unknown step counts as
+slow). **Arm M** = `1 + k_M * adv * sep`: adv = (floor − e_top)/floor clipped [0,1]
+(0 when rank-1 does not beat the miss floor — the near-autopsy class belongs to arm N);
+sep = (e_2nd − e_top)/(|e_top|+|e_2nd|) clipped [0,1], 1 for a lone candidate. Anchored
+frames (floor = inf) disable arm M. Defaults 0 = bit-identical (suite-verified).
+Synthetic validation: arm N holds a 5-frame near-slow scramble the default abandons and
+stays silent at far; k sweep semantics confirmed (an entry cost DEFERS — it cannot and
+must not beat a persistent emission gap).
+**Sweep:** k_N ∈ {0.5, 1, 2, 4} and k_M ∈ {0.5, 1, 2, 4} independently; arm C = the 2x2
+of per-arm winners after the singles read. Games: PIT + spc + fair **hn4@s4 dumps only**
+(dump-provenance rule). F-OP CPU, after the T21 GPU chain drains.
+**Readable cells NOW (labels absent — stated, not silent):** THE FAIR-MID CELL
+(EXP-OP-18's zero-click primary: fair mid GT capture + composite fair-mid MATCH/BEAT
+within the banked block-null bands) · spc near cell (n=42) · PIT |dcx| p90 (tail) ·
+far+mid capture NON-regression on all three GT sets (dual rule vs A0, computed from
+campaths + labels via the referee port). The near-scramble HEADLINE cells defer to the
+~100-click batch. **Pre-registered caveat (design):** stage 1 may read flat alone and is
+NOT judged alone — the joint read with W2's coast-policy voter follows; but a DECISIVE
+regression anywhere kills an arm outright ((j) walk).
+**Action table:** winner = decisive-or-zero improvements on readable cells with ZERO
+decisive regressions; ties break toward the simpler arm (N > M > C). All arms flat on
+readable cells → park stage 1 until the near-scramble labels exist; no re-tuning beyond
+the pre-registered k grid.
+
 ## EXP-OP-19 PRE-REGISTRATION (committed before numbers): #21 gate RE-ANCHOR on the archived mg_ctrl — all legs at ONE checkpoint; the stranded seed-1 leg is superseded (2026-07-27)
 
 **Why (Mark's directive + the 4070 outage):** F-OP is the GPU for ~2 weeks; the 4070 is
