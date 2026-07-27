@@ -4,7 +4,13 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ## CURRENT STATE (maintained in place — the ONE exception to append-only; history below is immutable)
 
-*Last maintained: 2026-07-25, Virtual Operator arc ((t) goal re-anchor). Tomorrow starts HERE, not from (h)–(t).*
+*Last maintained: 2026-07-27, Virtual Operator arc ((x) legacy viewport admission). Tomorrow starts HERE, not from (h)–(t).*
+
+- **AC REFERENCES ((w)/(x), 07-27): tier-3 = fresh aim where one exists (spc), else
+  remap-verified legacy viewport (fair: r 0.981 — the pending fair re-run is CLOSED,
+  unnecessary), else PIT-class validated Dahua jsonl. Legacy Reolink jsonls admissible
+  ONLY through the verified trim remap ((x)); the scoreboard's auto-AC arm still loads
+  naively on Reolink — wire or suppress before its next run.**
 
 - **GOAL RE-ANCHOR ((t), 07-25): Reolink = primary optimization family; Dahua = supplemental
   robustness row; far-Dahua possibly pixel-limited (4096×1800 vs 7680×2160 — ceiling check
@@ -80,6 +86,35 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   one model, no iGPU cost. Joint co-training (λ-sweep) is the FALLBACK only if frozen-head
   person quality is insufficient (EXP-DIST-70: ph1v2's far-ordering damage is the only
   CI-separated harm on record).
+
+---
+
+## 2026-07-27 (x): LEGACY VIEWPORT ADMISSION — quarantined Reolink jsonls are tier-3 admissible ONLY through the verified trim-aware remap; pooled gate, not per-seg (EXP-OP-15)
+
+**Decision:** the (w) ladder's tier-3 source policy is amended. The legacy Reolink
+`autocam_viewport.jsonl` class (EXP-OP-05) is genuine AutoCam tracking recorded on the
+TRIMMED timeline under untrimmed segment labels (EXP-OP-13 breakthrough, EXP-OP-15
+verification). It is ADMISSIBLE as a tier-3 AC reference only via
+`load_viewport_trim_remapped` (w2 3f05c85), which:
+1. **APPLIES the predicted offset** `round(match_info start_time_offset x mean seg fps)`
+   — never a free fit: fitting against sparse ball GT absorbs AutoCam's ~1 s follower lag
+   (measured −32 fr on spc);
+2. **verifies before admission (each hard-fails, rule 8):** >= 100 ball-GT anchors;
+   pooled Pearson r >= 0.70 at the fitted offset; fitted offset within 60 fr of the
+   prediction (alignment must CONFIRM the trim, not discover an unexplained one);
+3. **records the per-seg r table as provenance with NO per-seg floor.** The EXP-OP-13
+   addendum's per-seg r>0.7 gate is rejected WITH MECHANISM: per-seg r against
+   instantaneous ball GT bounds AutoCam's LOCAL tracking quality, not remap alignment —
+   on spc seg9 the VALIDATED fresh aim itself scores r 0.18 (legacy 0.26); locally-bad AC
+   is exactly what the (w) GT-override tier handles. Against dense aim anchors the
+   per-seg gate passes everywhere (0.89–0.997) — it fails only as operationalized on
+   sparse anchors.
+
+**Precedence among AC sources (standing):** fresh validated aim > remap-verified legacy >
+nothing. Games with neither an aim nor >= 100 ball-GT anchors have NO tier-3 — the class
+stays quarantined there (no anchor-free admission without a new pre-registered method).
+Every composite `_meta` carries the full remap verification record (EXP-OP-05
+correction 2: sources are named, always).
 
 ---
 

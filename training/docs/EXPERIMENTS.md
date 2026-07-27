@@ -4,6 +4,66 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-15: LEGACY VIEWPORT CLASS RECOVERED — trim remap verified on spc (vs aim r 0.97, med 27 px) and fair (r 0.98, offset confirmed to 1 fr); fair tier-3 restored WITHOUT a re-run; the per-seg r>0.7 gate amended with mechanism (2026-07-27)
+
+Executes EXP-OP-13's breakthrough addendum (method + per-seg r>0.7 admission gate
+pre-registered there). Measurements first, implementation after, admission last.
+
+**1. The remap is a constant head-trim offset, and it is 60s x ACTUAL fps, not 20 fps
+nominal.** spc per-seg lag scan of the legacy viewport (naive untrimmed mapping) against
+the validated fresh aim: every one of 14 segments peaks at D 1157-1176 with NO drift trend
+— one global offset. Pooled fit: **D* = 1164 = 60s x 19.4** (EXP-OP-13's "exactly -1200"
+was scan-resolution); r@1164 = 0.971 vs r@1200 = ~0.95 — at a +-20 fr ball-gate window the
+36 fr difference matters. **Pooled med |leg - aim| at D* = 27 px over 80,565 frames: the
+legacy file IS the AutoCam signal**, run-to-run identity level. Per-seg r vs aim
+0.887-0.997 (the pre-registered per-seg 0.7 gate PASSES against dense anchors).
+
+**2. Fitting the offset on ball GT alone is follower-lag biased — so the applied offset is
+PREDICTED, the fit only confirms.** spc ball-GT-only argmax lands at 1132 = aim-truth − 32
+fr (AutoCam trails the ball ~1 s; the fit absorbs it). D_pred from match_info
+start_time_offset x mean seg fps: spc 1169 (5 fr from aim-truth — harmless), fair 7130.
+
+**3. The per-seg r>0.7 gate is UNPASSABLE against sparse ball GT — by the validated aim
+itself.** spc per-seg legacy-vs-ballGT at the remap: 0.26-0.98; the failing segs are
+QUALITY, not alignment: seg9 legacy 0.262 vs **validated aim 0.181 on the same GT**; seg8
+0.683 vs aim 0.610. Per-seg r vs instantaneous ball GT bounds AutoCam's LOCAL tracking
+quality — locally-bad AC is exactly what the composite's GT-override tier exists for; the
+aim's own admission (EXP-OP-13) used pooled U-curve evidence, no per-seg floor.
+**Amended gate (pre-registered before the fair admission run): pooled r >= 0.70 at the
+fitted offset over >= 100 anchors, fit within 60 fr of the match_info prediction, per-seg
+r table recorded as provenance with NO floor.** Alignment sharpness holds: spc pooled r
+0.80 at D_pred vs 0.28-0.30 at wrong offsets, falling to 0.41 by +400 fr.
+
+**4. fair: the production case, verified.** fair's aim is a CONFIRMED 0-usable-row stub
+(the 07-11 "fresh run"), so fair had NO tier-3 at all. Legacy remap: **D* = 7130 = D_pred
+EXACTLY (360s x 19.806), pooled r 0.981 on 204 anchors (naive 0.165); seg8 (windy far set,
+n=175) r 0.941.** Row deficit 7,213 ≈ the 7,130 head trim + tail — the truncation
+signature. **The fair AutoCam CLI re-run is UNNECESSARY; the hygiene item closes.**
+
+**5. Implementation + E2E (code @ w2 3f05c85):** `load_viewport_trim_remapped`
+(distill_dataset) + builder admission: the EXP-OP-05 ban converts condemned ->
+**quarantined, admissible ONLY through the verified remap** (unverifiable sources — no
+match_info, no fps, < 100 anchors, failed gates — hard-fail, rule 8); remap meta lands in
+the composite `_meta` (provenance per the EXP-OP-05 correction). The raw Once.Autocam CLI
+aim capture ({xy:[x,y],f} rows amid console lines, BOM) now parses directly. Live E2E:
+**fair composite builds — 92,844 rows (ac 92,834; 198/208 ball anchors corroborate; 10
+override; 7 novis removed)**; spc-from-aim reproduces the banked EXP-OP-14 composite to
+the row (81,444 total / ball 607 / ac 80,837 = 80,585 + the 252 view rows folding back
+without the label sets); spc legacy also ADMITS (r 0.809, drift 37) though the aim stays
+spc's tier-3.
+
+**Consequences:** (1) EXP-OP-05's retraction is RESOLVED for remap-verified files — the
+class is genuine AutoCam tracking behind a timebase bug (load_viewport mapped
+trimmed-timeline recordings via untrimmed seg offsets). (2) Tier-3 AC references are now
+restorable on ANY Reolink game with >= 100 ball-GT anchors, no AutoCam re-runs. Games
+without anchors stay quarantined — OPEN: an anchor-free verification path (e.g. alignment
+vs our own dumps) if coverage ever demands it. (3) The scoreboard's auto-AC arm still
+loads legacy jsonls naively on Reolink games (EXP-OP-14's report note): wire the remap
+loader or suppress that arm before the next scoreboard run. (4) P0 composites for fair
+(and PIT/spc rebuilds with view sets) proceed server-side on the banked instrument.
+**Artifacts:** measurements in this entry (scratch checks not banked; server rebuild with
+view sets = the P0 step); code @ w2 3f05c85.
+
 ## EXP-OP-14: FIRST COMPOSITE-STANDARD READ (spc) — the (w) instrument changes the verdicts: F trades MATCH for BEAT; mgctrl is the balanced arm (2026-07-26)
 
 Composite: 81,444 rows (ball 607 / view 252 / ac 80,585; corroborated 1,187). Cells
@@ -59,6 +119,11 @@ composite builder; verify per game (require per-seg r>0.7 vs anchors before admi
 re-check the fair 'stub' priority (re-run may be unnecessary); the EXP-OP-05 retraction
 still stands until remapped files are validated. Ban CONVERTS from 'condemned' to
 'quarantined pending remap+verification'.
+
+**[RESOLVED 07-27 — EXP-OP-15]:** remap verified on spc (vs aim r 0.971, med 27 px; the
+true offset is 60s x ACTUAL fps = 1164, not 1200) and fair (r 0.981, offset confirmed to
+1 fr; fair's aim confirmed a 0-row stub). Admission implemented behind the amended pooled
+gate ((x)); fair tier-3 restored without a re-run.
 
 ## EXP-OP-12: #21 GATE, SPC LEG — mg_ctrl PASSES non-regression; far +0.28 raw on the primary family; the one near loss is a single 4.4s event (2026-07-26)
 
@@ -351,6 +416,14 @@ primary family, with far dead-even.
    suspect — audit before any read that consumes it.
 **Artifacts:** `G:/ballresearch/operator/spc_v2.json` (corrected), `spc_v1.json` (bad-AC,
 kept for the delta), `ladder/spc_ac_aim.campath.json`.
+
+**[ADDENDUM 07-27 — EXP-OP-15]:** the legacy class is RECOVERED, not garbage: it is
+genuine AutoCam tracking recorded on the TRIMMED timeline and mis-mapped via untrimmed
+seg offsets (EXP-OP-13 breakthrough). The ban converts to quarantine-with-verified-remap:
+correction 1's retraction stands for every read that USED the naive mapping, but
+remap-verified files are admissible tier-3 references ((x)). fair's tier-3 comes from its
+remapped legacy (r 0.981 vs ball GT); the fresh-aim preference in correction 2 stands
+where an aim exists (spc).
 
 ## EXP-OP-04: ORACLE LADDER on PIT — Run A validated to the digit; lookahead prices at ~ZERO; the dump-provenance trap; hn2s8 anomaly adjudicated as selection bias (2026-07-25)
 

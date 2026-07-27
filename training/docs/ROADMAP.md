@@ -5,6 +5,7 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 
 ## P0 — Re-anchor on the composite standard ((w), in build)
 - [ ] Composite builder + zoom-containment scorer land (agent; windowed tier-1 gate per EXP-OP-13) -> split-half nulls -> re-read A0 / F@0.20 / mg_ctrl on spc+PIT+fair. All later gates read MATCH (dense, be-like-AC) + BEAT (GT-certified AC losses) + containment. CPU, 0 clicks.
+  - [x] 2026-07-27: legacy viewport class RECOVERED (EXP-OP-15, (x)) — fair tier-3 = remap-verified legacy (r 0.981; E2E composite 92,844 rows); raw CLI aim parses directly (spc reproduction to the row). Remaining: server-side spc/fair/PIT composites WITH view sets + nulls + the re-reads; scoreboard auto-AC arm remap-or-suppress on Reolink.
 
 ## P1 — The composition read + #21 close-out (cheapest big number)
 - [ ] mg_ctrl x F@0.20 on 3 games (coverage + interpretation attack far independently: 0.724 / 0.669 on spc). CPU replay only.
@@ -24,7 +25,7 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 - [ ] Fit planner knobs to the COMPOSITE (clone AC's discipline densely, corrected at GT divergences) — supervision is now dense; re-runs after every label batch. CPU standing job.
 
 ## Parallel / hygiene
-- [ ] fair AutoCam CLI re-run (console session) -> fair tier-3 + pending EXP-OP-06 cells.
+- [x] ~~fair AutoCam CLI re-run (console session)~~ CLOSED 2026-07-27 without a re-run: fair tier-3 = remap-verified legacy viewport (EXP-OP-15, r 0.981 vs ball GT). The pending EXP-OP-06 fair AC cells fill from it.
 - [ ] Merge operator branches -> main once P0 lands; FLEET.md scar updates (ONCE-task trigger, PS-remoting double-hop, decode-bound dumps, laptop train pace).
 - [ ] Event-spreading queue: BEAT-side enrichment only now (composite killed the match-side power problem).
 

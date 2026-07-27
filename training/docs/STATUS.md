@@ -1,6 +1,29 @@
 # Current Status
 
-*Last updated: 2026-07-26 (morning) — persistence filter PROVEN cross-game (EXP-OP-10/11); F@0.20 = promotion candidate*
+*Last updated: 2026-07-27 (overnight) — legacy viewport class RECOVERED (EXP-OP-15); fair tier-3 restored without a re-run*
+
+## 2026-07-27 (overnight) — EXP-OP-15: trim remap verified; legacy jsonls admissible; fair re-run CLOSED
+
+- **EXP-OP-13's breakthrough executed and banked (EXP-OP-15).** The legacy Reolink
+  viewport jsonls are genuine AutoCam tracking on the TRIMMED timeline: spc remaps onto
+  the validated aim at r 0.971 / med 27 px over 80,565 frames (run-to-run identity
+  level); the true offset is 60s x ACTUAL fps (1164, not the addendum's 1200 — matters
+  at the ±20 fr gate window). fair: offset confirmed to 1 frame, r 0.981 (naive 0.165);
+  fair's fresh aim confirmed a 0-usable-row stub, and the **fair AutoCam re-run is
+  CLOSED as unnecessary** — fair's first-ever tier-3 comes from the remapped legacy
+  (E2E composite banked-able: 92,844 rows).
+- **Admission implemented ((x); code @ w2 3f05c85):** predicted-offset remap (ball-GT
+  fits are follower-lag biased — measured −32 fr on spc), pooled r >= 0.70 on >= 100
+  anchors + 60 fr fit-drift gate, per-seg r recorded as provenance with NO per-seg floor
+  (the pre-registered per-seg 0.7 gate is unpassable BY THE VALIDATED AIM ITSELF on
+  sparse anchors — spc seg9 aim r 0.18; mechanism documented, amendment pre-registered
+  before the fair admission run). Raw CLI aim captures ({xy,f} + console noise) parse
+  directly; spc-from-aim reproduces EXP-OP-14's composite to the row (81,444/607).
+  mypy clean; suite 1836 green; both branches pushed.
+- **Next session:** (1) server-side P0 composites (spc/fair with view sets; PIT) +
+  split-half nulls -> the A0 / F@0.20 / mgctrl re-reads; (2) scoreboard auto-AC arm:
+  wire the remap loader or suppress on Reolink (EXP-OP-14 report note + (x) reminder);
+  (3) then P1 (mgctrl x F composition + #21 fair leg close-out under the composite).
 
 ## 2026-07-25 (night) — W1 TABLE BANKED; W2 built; goal re-anchored Reolink-primary ((t))
 
