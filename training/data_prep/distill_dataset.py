@@ -110,6 +110,161 @@ def load_viewport(
     return out
 
 
+def parse_trim_offset_seconds(match_info_path) -> float | None:
+    """``start_time_offset`` from ``match_info.ini`` (``[MATCH]``, ``mm:ss`` or
+    ``hh:mm:ss``) as seconds, or ``None`` when the file/key is missing/empty.
+    This is the head-trim the processed video applied to the combined timeline —
+    the timebase the legacy AutoCam sidecars were recorded on (EXP-OP-13)."""
+    import configparser
+    from pathlib import Path
+
+    p = Path(match_info_path)
+    if not p.exists():
+        return None
+    cp = configparser.ConfigParser()
+    try:
+        cp.read(p, encoding="utf-8-sig")
+    except configparser.Error:
+        return None
+    raw = cp.get("MATCH", "start_time_offset", fallback="").strip()
+    if not raw:
+        return None
+    parts = raw.split(":")
+    if not all(x.strip().isdigit() for x in parts) or len(parts) not in (2, 3):
+        return None
+    nums = [int(x) for x in parts]
+    if len(nums) == 2:
+        m, s = nums
+        return float(m * 60 + s)
+    h, m, s = nums
+    return float(h * 3600 + m * 60 + s)
+
+
+def load_viewport_trim_remapped(
+    jsonl_path,
+    offsets: dict[str, int],
+    *,
+    trim_seconds: float,
+    fps_mean: float,
+    anchors_x: dict[int, float],
+    min_anchors: int = 100,
+    min_pooled_r: float = 0.70,
+    max_fit_drift: int = 60,
+    fit_window: int = 400,
+) -> tuple[dict[int, tuple[float, float]], dict]:
+    """Load a LEGACY seg-keyed ``autocam_viewport.jsonl`` remapped onto the true
+    (untrimmed) global timeline, verified against ball-GT anchors (EXP-OP-15).
+
+    EXP-OP-13/15: the legacy jsonls were recorded on the TRIMMED timeline but
+    carry untrimmed segment labels, so the naive ``load_viewport`` mapping
+    decorrelates genuine AutoCam tracking. The true frame is
+    ``t + D`` where ``t`` is the naive mapping and ``D = trim_seconds x fps``.
+    The APPLIED offset is the predicted ``D`` — fitting D against sparse ball
+    GT is biased by AutoCam's ~1 s follower lag (measured −32 fr on spc), so
+    the fit only CONFIRMS the prediction.
+
+    Verification gates (all ``ValueError`` — callers hard-fail per rule 8):
+    - at least ``min_anchors`` ball-GT anchors overlap the legacy rows;
+    - pooled Pearson r at the fitted offset ``>= min_pooled_r``
+      (spc 0.81 / fair 0.98 pass; the naive mapping's ~0.2 fails);
+    - the fitted offset (argmax r over ``D_pred +- fit_window``) lies within
+      ``max_fit_drift`` of the prediction — alignment must CONFIRM the trim,
+      not discover an unexplainable one.
+
+    A per-segment r table (segments with >= 30 anchors) is returned in the meta
+    for provenance. There is deliberately NO per-segment r floor: per-seg r
+    against instantaneous ball GT is bounded by AutoCam's LOCAL tracking
+    quality, not remap alignment (on spc seg9 the validated fresh aim itself
+    scores r 0.18) — locally-bad AC is exactly what the composite's GT
+    override tier handles.
+
+    Returns ``({true_global: (x, y)}, meta)``.
+    """
+    naive = load_viewport(jsonl_path, offsets)
+    if not naive:
+        raise ValueError(f"legacy viewport matched no game.json segment: {jsonl_path}")
+    d_pred = round(trim_seconds * fps_mean)
+
+    t_max = max(naive) + 1
+    leg = np.full(t_max, np.nan)
+    for t, (x, _y) in naive.items():
+        leg[t] = x
+    gs = np.array(sorted(anchors_x))
+    bx = np.array([anchors_x[g] for g in gs], dtype=np.float64)
+
+    def pooled_r(d: int) -> tuple[float | None, int]:
+        t = gs - d
+        ok = (t >= 0) & (t < t_max)
+        lx = leg[t[ok]]
+        m = ~np.isnan(lx)
+        n = int(m.sum())
+        if n < min_anchors:
+            return None, n
+        a, b = lx[m], bx[ok][m]
+        if np.std(a) == 0 or np.std(b) == 0:
+            return None, n
+        return float(np.corrcoef(a, b)[0, 1]), n
+
+    r_pred, n_pred = pooled_r(d_pred)
+    if r_pred is None:
+        raise ValueError(
+            f"legacy viewport remap NOT verifiable: {n_pred} usable ball-GT "
+            f"anchors at D_pred={d_pred} (need >= {min_anchors}): {jsonl_path}"
+        )
+    fits: list[tuple[int, float]] = []
+    for d in range(d_pred - fit_window, d_pred + fit_window + 1):
+        r, _n = pooled_r(d)
+        if r is not None:
+            fits.append((d, r))
+    d_fit, r_fit = max(fits, key=lambda x: x[1])
+    if r_fit < min_pooled_r:
+        raise ValueError(
+            f"legacy viewport remap REJECTED: pooled r {r_fit:.3f} at fitted "
+            f"offset {d_fit} < {min_pooled_r} over {n_pred} anchors — not the "
+            f"genuine AutoCam signal on the predicted timeline: {jsonl_path}"
+        )
+    if abs(d_fit - d_pred) > max_fit_drift:
+        raise ValueError(
+            f"legacy viewport remap REJECTED: fitted offset {d_fit} drifts "
+            f"{abs(d_fit - d_pred)} fr from the match_info prediction {d_pred} "
+            f"(> {max_fit_drift}) — the alignment does not confirm the trim: "
+            f"{jsonl_path}"
+        )
+    r_naive, _ = pooled_r(0)
+
+    # per-segment r at the applied offset (provenance; no floor — see above)
+    bounds = sorted(offsets.items(), key=lambda kv: kv[1])
+    per_seg = []
+    for i, (seg, lo) in enumerate(bounds):
+        hi = bounds[i + 1][1] if i + 1 < len(bounds) else int(gs.max()) + 1
+        sel = (gs >= lo) & (gs < hi)
+        if int(sel.sum()) < 30:
+            continue
+        ts = gs[sel] - d_pred
+        ok = (ts >= 0) & (ts < t_max)
+        lx = leg[ts[ok]]
+        m = ~np.isnan(lx)
+        if int(m.sum()) < 30:
+            continue
+        a, b = lx[m], bx[sel][ok][m]
+        r = float(np.corrcoef(a, b)[0, 1]) if np.std(a) > 0 and np.std(b) > 0 else None
+        per_seg.append({"seg": seg, "n": int(m.sum()), "r": r})
+
+    remapped = {t + d_pred: xy for t, xy in naive.items()}
+    meta = {
+        "trim_seconds": trim_seconds,
+        "fps_mean": round(fps_mean, 3),
+        "d_pred": int(d_pred),
+        "d_fit": int(d_fit),
+        "pooled_r": round(r_fit, 3),
+        "pooled_r_at_pred": round(r_pred, 3),
+        "pooled_r_naive": None if r_naive is None else round(r_naive, 3),
+        "n_anchors": n_pred,
+        "per_seg_r": per_seg,
+    }
+    return remapped, meta
+
+
 def load_human_labels(
     jsonl_path, offsets: dict[str, int]
 ) -> tuple[dict[int, tuple[float, float]], set[int]]:
@@ -486,7 +641,8 @@ def build_distill_games(
         offsets = seg_offsets(gc["segments"])
         polygon = gc.get("polygon")
         detections = load_detections(gc["detections"], offsets)
-        human_balls, human_novis = ({}, set())
+        human_balls: dict[int, tuple[float, float]] = {}
+        human_novis: set[int] = set()
         if gc.get("human_labels"):
             human_balls, human_novis = load_human_labels(gc["human_labels"], offsets)
 

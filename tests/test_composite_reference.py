@@ -323,17 +323,21 @@ def test_builder_validated_viewport_jsonl_allowed_on_dahua(tmp_path):
 
 
 def test_builder_legacy_reolink_viewport_hard_fails(tmp_path):
+    # quarantined legacy class with NOTHING to verify a remap against (no
+    # match_info.ini) -> hard-fail, not silent naive admission (EXP-OP-15)
     gd = _write_game(tmp_path, w=7680)
     vp = gd / "autocam_viewport.jsonl"
     _write_viewport_jsonl(vp, [(f, 1000.0, 500.0) for f in range(5)])
     with pytest.raises(SystemExit) as ei:
         _build(tmp_path, gd, vp)
     assert "EXP-OP-05" in str(ei.value)
+    assert "match_info" in str(ei.value)
     assert ei.value.code not in (0, None)
 
 
 def test_builder_legacy_ban_is_format_based_too(tmp_path):
-    # a seg-keyed viewport jsonl under ANY name is banned on a 7680-wide game
+    # a seg-keyed viewport jsonl under ANY name is quarantined on a 7680-wide
+    # game (format-based, not name-based)
     gd = _write_game(tmp_path, w=7680)
     vp = tmp_path / "renamed_viewport.jsonl"
     _write_viewport_jsonl(vp, [(f, 1000.0, 500.0) for f in range(5)])
@@ -345,6 +349,147 @@ def test_builder_legacy_ban_is_format_based_too(tmp_path):
     _write_aim(aim, AIM_10)
     rows, meta = _build(tmp_path, gd, aim, out_name="composite_aim.jsonl")
     assert meta["ac_format"] == "aim" and len(rows) == 10
+
+
+# ---------------------------------------------------------------------------
+# Builder: legacy trim-aware remap admission (EXP-OP-15)
+# ---------------------------------------------------------------------------
+
+
+def _x_true(g):
+    # incommensurate periods: the autocorrelation peaks ONLY at shift 0, so
+    # the offset fit has a single unambiguous argmax
+    import math
+
+    return 1000.0 + 500.0 * math.sin(g / 30.0) + 300.0 * math.sin(g / 7.3)
+
+
+def _write_legacy_game(tmp_path, trim="00:10", frames=2000, fps=20.0):
+    """7680-wide single-segment game with a trim offset (D_pred = 10s x 20fps
+    = 200 fr) and >=100 ball-GT anchors on the TRUE timeline."""
+    gd = tmp_path / "legacy_game"
+    gd.mkdir(exist_ok=True)
+    (gd / "game.json").write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {
+                        "seg": "s0",
+                        "global_offset": 0,
+                        "frames": frames,
+                        "w": 7680,
+                        "h": 2160,
+                        "fps": fps,
+                    }
+                ]
+            }
+        )
+    )
+    (gd / "match_info.ini").write_text(
+        f"[MATCH]\nstart_time_offset = {trim}\ntotal_duration = \n"
+    )
+    return gd
+
+
+def _write_legacy_viewport(gd, d_true, frames=2000, name="autocam_viewport.jsonl"):
+    """Legacy recording: trimmed-timeline content chunked under the untrimmed
+    segment label — row f=t holds the signal of TRUE frame t + d_true."""
+    vp = gd / name
+    _write_viewport_jsonl(
+        vp, [(t, _x_true(t + d_true), 500.0) for t in range(frames - d_true)]
+    )
+    return vp
+
+
+def _write_true_anchors(gd, lo=700, hi=1900, step=8):
+    _write_ball_labels(gd, balls=[(g, _x_true(g), 400.0) for g in range(lo, hi, step)])
+
+
+def test_builder_legacy_remap_admission(tmp_path):
+    gd = _write_legacy_game(tmp_path)
+    vp = _write_legacy_viewport(gd, d_true=200)
+    _write_true_anchors(gd)
+    rows, meta = _build(tmp_path, gd, vp)
+    assert meta["ac_format"] == "viewport_trim_remapped"
+    rm = meta["legacy_remap"]
+    assert rm["d_pred"] == 200 and rm["d_fit"] == 200
+    assert rm["pooled_r"] > 0.99 and rm["n_anchors"] >= 100
+    assert rm["pooled_r_naive"] is None or rm["pooled_r_naive"] < 0.7
+    assert rm["per_seg_r"] and rm["per_seg_r"][0]["seg"] == "s0"
+    assert rm["per_seg_r"][0]["r"] > 0.99
+    # rows live on the TRUE timeline: t + 200 for t in [0, 1800)
+    assert min(rows) == 200 and max(rows) == 1999
+    # exact-agreeing ball anchors corroborate the remapped AC tier
+    assert meta["counts"]["ball"] == 0
+    assert meta["counts"]["corroborated"] >= 100
+
+
+def test_builder_legacy_remap_fit_drift_hard_fails(tmp_path):
+    # recorded at a REAL offset of 500 while match_info predicts 200: the fit
+    # confirms 500 (r ~1) but the drift gate rejects the unexplained trim
+    gd = _write_legacy_game(tmp_path)
+    vp = _write_legacy_viewport(gd, d_true=500)
+    _write_true_anchors(gd)
+    with pytest.raises(SystemExit) as ei:
+        _build(tmp_path, gd, vp)
+    assert "drifts" in str(ei.value) and "EXP-OP-05" in str(ei.value)
+
+
+def test_builder_legacy_remap_low_r_hard_fails(tmp_path):
+    # decorrelated anchors (hash-pattern x): no offset in the window aligns
+    gd = _write_legacy_game(tmp_path)
+    vp = _write_legacy_viewport(gd, d_true=200)
+    _write_ball_labels(
+        gd,
+        balls=[(g, float(200 + (g * 997) % 7000), 400.0) for g in range(700, 1900, 8)],
+    )
+    with pytest.raises(SystemExit) as ei:
+        _build(tmp_path, gd, vp)
+    assert "REJECTED" in str(ei.value)
+
+
+def test_builder_legacy_remap_insufficient_anchors_hard_fails(tmp_path):
+    gd = _write_legacy_game(tmp_path)
+    vp = _write_legacy_viewport(gd, d_true=200)
+    _write_true_anchors(gd, lo=700, hi=1100, step=8)  # 50 anchors < 100
+    with pytest.raises(SystemExit) as ei:
+        _build(tmp_path, gd, vp)
+    assert "anchors" in str(ei.value)
+
+
+def test_builder_raw_cli_aim_xy_rows(tmp_path):
+    # the raw Once.Autocam CLI capture: BOM, console-output dicts and plain
+    # text interleaved with {"xy": [x, y], "f": n, "t": s} data rows
+    gd = _write_game(tmp_path, w=7680)
+    aim = tmp_path / "autocam_aim.jsonl"
+    lines = [
+        '{"lines": ["Once Autocam 3.0.7"]}',
+        '{"cwd": "C:\\\\somewhere"}',
+        "Image for marking the playing field taken from timestamp: 00:4:04.000",
+        '{"Reader": "hevc"}',
+    ] + [
+        json.dumps({"xy": [1000 + f, 500], "f": f, "t": f * 0.05}) for f in range(1, 8)
+    ]
+    # utf-8-sig: the real capture starts with a BOM
+    aim.write_text("\n".join(lines), encoding="utf-8-sig")
+    rows, meta = _build(tmp_path, gd, aim)
+    assert meta["ac_format"] == "aim"
+    assert sorted(rows) == list(range(1, 8))
+    assert rows[3]["x"] == 1003.0 and rows[3]["y"] == 500.0
+
+
+def test_parse_trim_offset_seconds(tmp_path):
+    from training.data_prep import distill_dataset as dd
+
+    p = tmp_path / "match_info.ini"
+    for raw, want in [("01:00", 60.0), ("06:00", 360.0), ("1:02:03", 3723.0)]:
+        p.write_text(f"[MATCH]\nstart_time_offset = {raw}\n")
+        assert dd.parse_trim_offset_seconds(p) == want
+    p.write_text("[MATCH]\nstart_time_offset = \n")
+    assert dd.parse_trim_offset_seconds(p) is None
+    p.write_text("[MATCH]\nstart_time_offset = garbage\n")
+    assert dd.parse_trim_offset_seconds(p) is None
+    assert dd.parse_trim_offset_seconds(tmp_path / "nope.ini") is None
 
 
 def test_builder_missing_or_bad_ac_source_hard_fails(tmp_path):
