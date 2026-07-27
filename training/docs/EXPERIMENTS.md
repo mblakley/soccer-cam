@@ -4,6 +4,33 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-16 PRE-REGISTRATION (committed before numbers): P0 composite re-anchor — A0 / F@0.20 / mgctrl on spc + PIT + fair under the (w)/(x) standard (2026-07-27)
+
+**Reads (per EXP-OP-14's queue + measured plan v2 P0):** per game x band x arm, the
+composite cells — MATCH (tier-ac frames) / BEAT (GT-override frames) / overall, each
+capture@600 + planned-view containment — plus the referee dual-rule per subset x band and
+split-half null calibration banked in the same run. Verdict language follows (u)/(w):
+match = within the cell's null band; beat = decisive under the dual rule.
+**Arms:** A0 (champion hn4s4 chain), F (static filter @ frac 0.20/cell 50/radius 60,
+pixel-space, the EXP-OP-11 promotion candidate), mgctrl where inputs exist (spc: relayed
+dump; PIT: the banked EXP-72-era `campath_pit_mg_ctrl.pkl` — ARM PROVENANCE NOTED, not a
+fresh replay; fair: PENDING — the mg_ctrl checkpoint and its fair dump are stranded on the
+offline 4070; the 1060 re-dump path is also blocked on that checkpoint), AC (via the (x)
+source policy: spc aim / fair remap-verified legacy / PIT validated jsonl).
+**Instruments:** composites = spc (EXP-OP-14 banked, aim-derived) + fair (NEW, 92,966
+rows, remapped-legacy AC + 706-view set) + PIT (NEW, 128,501 rows, validated jsonl +
+650-view set). Campaths regenerated on F-OP from staged dumps through the chain @ w2
+127b633; **PIT runs gated on --fixture-exp72** (A0 + AC must reproduce 0.542/450 and
+0.759/207 to tolerance — the cross-machine env anchor; F-OP is a first-time analysis
+node). fps: spc/fair 30 (matches p0_spc.json), PIT 20 (matches the EXP-72 lineage).
+**Machine:** FORTNITE-OP CPU (FLEET 07-26 amendment; Roblox checked = idle zombie, 0.05
+cores; GPU procs = desktop only). Chain = scheduled ONCE task (far-future /SD + /Run),
+status file D:\opstage\p0.status.
+**Action mapping (pre-stated):** F's promotion read (P2) consumes these cells directly —
+non-regression on MATCH within null bands + BEAT gains; a decisive MATCH loss for F on
+any family = promotion blocked pending the mid-dip investigation (P4). mgctrl cells feed
+the #21 promotion package (P1), which additionally waits on the fair leg.
+
 ## EXP-OP-15: LEGACY VIEWPORT CLASS RECOVERED — trim remap verified on spc (vs aim r 0.97, med 27 px) and fair (r 0.98, offset confirmed to 1 fr); fair tier-3 restored WITHOUT a re-run; the per-seg r>0.7 gate amended with mechanism (2026-07-27)
 
 Executes EXP-OP-13's breakthrough addendum (method + per-seg r>0.7 admission gate
