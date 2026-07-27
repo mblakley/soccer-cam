@@ -9,7 +9,7 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 - [ ] REMAINING: block-unit MATCH nulls (the gap-64 event unit collapses on dense frames — match-side verdicts unevaluable until this lands; pre-register before the next match-side read).
 
 ## P1 — The composition read + #21 close-out (cheapest big number)
-- [ ] mg_ctrl x F@0.20 on 3 games (coverage + interpretation attack far independently: 0.724 / 0.669 on spc). CPU replay only (F-OP; 6-min-class).
+- [x] 2026-07-27 mg_ctrl x F@0.20 spc leg: **NEGATIVE, closed** (EXP-OP-17 — mgF far 0.597 < both single arms; the filter degrades the mgctrl stream; near static-park nugget -> P4). fair/PIT legs moot unless #21's fair leg shows far regression.
 - [ ] #21 fair leg BLOCKED on the 4070's return (mg_ctrl_seed1 ckpt + its fair dump live only there) -> then promotion package under the composite standard. PIT confirmation re-anchored 07-27 (0.644 exact) + spc leg banked.
 
 ## P2 — Ship the filter — BLOCKED 2026-07-27 pending P4 (pre-registered action fired)

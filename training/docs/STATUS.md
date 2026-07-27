@@ -21,6 +21,12 @@
   the gap-64 unit) on ALL games incl. EXP-OP-14's banked spc nulls — match-side
   verdicts unevaluable until a block-based null unit lands (amendment queued,
   pre-register before the next match-side verdict).
+- **P1 composition read: NEGATIVE, closed** (EXP-OP-17, pre-registered same morning):
+  mgF far 0.597 < mgctrl 0.724 / F 0.669 — the far levers don't stack; single arms
+  stand. Nugget: the filter fixes mgctrl's near static-park (med 3612->189) — a W3/P4
+  input. **Session's remaining next steps: block-unit MATCH nulls (instrument), P4
+  mid-dip investigation (now the P2 gate), #21 fair leg + fair-mgctrl on the 4070's
+  return, W4 re-target to fair-far.**
 
 ## 2026-07-27 (overnight) — EXP-OP-15: trim remap verified; legacy jsonls admissible; fair re-run CLOSED
 

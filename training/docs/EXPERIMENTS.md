@@ -4,6 +4,24 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-17 RESULTS: COMPOSITION NEGATIVE — mgF far 0.597 < mgctrl 0.724 AND < F 0.669; the far levers do NOT stack; closed per the pre-registered action (2026-07-27)
+
+spc classic cells (capture@600/med): **far mgF 0.597/251 vs mgctrl 0.724/163 vs F
+0.669/202** — the primary cell FAILS (below both single arms). ALL 0.618 < mgctrl 0.687;
+mid 0.647 < 0.685. Composite far: mgF MATCH 0.406 / BEAT 0.381 — worst arm measured. No
+referee-decisive mgF rows (power), but the raw ordering is uniform. **The filter degrades
+the mgctrl candidate stream** — coverage's far gains ride on detections/paths the
+pixel-persistence suppression disturbs; the EXP-OP-11 mid mechanism (indirect global-path
+re-solve) plausibly compounds on the richer stream. **Mechanism nugget for W3/P4:** the
+filter FIXES mgctrl's near static-park catastrophe (near med 3612 -> 189, cap 0.452 ->
+0.548) — the near failure is static-distractor parking, filterable; the far cost is the
+price. **Action (pre-registered): composition CLOSED on spc; single arms stand — mgctrl =
+best far coverage arm (0.724), F = best filter arm (0.669). The far product stack is NOT
+mgctrl+F as-is;** any revival needs a mechanism-level change (e.g. filter-aware
+re-solve or world-cell static_w), not re-tuning. fair/PIT legs remain unrun (no dumps) —
+if #21 promotes on the fair leg, the composition question is MOOT unless far regresses.
+**Artifacts:** p0_fop/p1_spc_composition.json + spc_mgctrl_s4.F.* campath; F-OP ~24 s.
+
 ## EXP-OP-17 PRE-REGISTRATION (committed before numbers): P1 composition read — mgctrl x F@0.20, spc leg (2026-07-27)
 
 **Hypothesis (EXP-OP-12's open read):** coverage (mgctrl) and interpretation (F) attack
