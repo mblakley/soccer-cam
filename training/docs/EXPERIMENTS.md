@@ -4,6 +4,22 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-17 PRE-REGISTRATION (committed before numbers): P1 composition read — mgctrl x F@0.20, spc leg (2026-07-27)
+
+**Hypothesis (EXP-OP-12's open read):** coverage (mgctrl) and interpretation (F) attack
+far independently (0.724 / 0.669 on spc) — the composition may stack. **Arm mgF** =
+run-a on the spc mg_ctrl dump WITH the F filter (frac 0.20 / cell 50 / radius 60,
+pixel-space), scored beside the banked A0 / F / mgctrl arms on the SAME instrument as
+EXP-OP-16 (spc GT set + composite, referee, fps 30, chain @ w2 127b633, F-OP).
+**Primary cell:** spc far capture@600 (classic GT-set) — does mgF exceed
+max(mgctrl 0.724, F 0.669)? **Guards:** mid/near non-regression vs mgctrl alone (raw,
+with dual-rule check); NO new decisive AC losses (the (t) floor — fair's F-mid lesson).
+**Action mapping:** mgF ≥ best single arm on far with guards clean → mgF becomes the
+far product-stack candidate, pending the fair leg (blocked on the 4070) before any
+promotion; guards dirty or no far gain → the single best arm stands and the composition
+is closed as measured. **Scope:** spc only — fair/PIT mgctrl dumps do not exist
+(4070-blocked / never made); stated up front, not a silent cap.
+
 ## EXP-OP-16 RESULTS: P0 COMPOSITE RE-ANCHOR BANKED — instrument certified on F-OP; the fair-far story REVERSES with the recovered AC reference; F's mid dip goes DECISIVE on fair (P2 blocked); PIT mgctrl provenance confirmed by exact reproduction; MATCH-null unit broken as operationalized (2026-07-27)
 
 **Instrument certification (all three anchors):** PIT --fixture-exp72 reproduces on
