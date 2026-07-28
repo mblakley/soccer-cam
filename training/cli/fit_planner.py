@@ -179,13 +179,16 @@ def score_config(game: dict, cfg: PlannerConfig) -> dict:
     return om.capture_contain_stats(refs, plans, float(game["src_w"]), frames)
 
 
-def _objective(st: dict) -> float:
-    """Scalar to MAXIMISE: capture@600 plus containment when available. Both
-    are 'be inside the reference' proxies; containment folds in the zoom."""
+def _objective(st: dict, mode: str = "composite") -> float:
+    """Scalar to MAXIMISE. ``composite`` = 0.5*(capture@600 + containment) — the
+    'be inside the reference' proxy that folds in zoom. ``capture`` = capture@600
+    ALONE — centering only, NOT rewarding a wider view (EXP-OP-21's referee gate:
+    the containment term is zoom-gameable; capture-only tests whether a real
+    centering win exists)."""
     if st["cap600"] is None:
         return -1.0
     c = st["cap600"]
-    if st["contain"] is not None:
+    if mode == "composite" and st["contain"] is not None:
         c = 0.5 * (c + st["contain"])
     return float(c)
 
@@ -213,6 +216,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--samples", type=int, default=400)
     ap.add_argument("--seed", type=int, default=72)
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--objective",
+        choices=["composite", "capture"],
+        default="composite",
+        help="composite = 0.5*(cap600+containment); capture = cap600 only "
+        "(centering, not zoom-gameable — EXP-OP-21 gate)",
+    )
     args = ap.parse_args(argv)
 
     games = {g["name"]: g for g in (load_game_inputs(s) for s in args.game)}
@@ -228,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
     for n, st in base.items():
         if st["cap600"] is None:
             _fail(f"identity check: game {n} scored no composite frames")
-    base_obj = {n: _objective(base[n]) for n in games}
+    base_obj = {n: _objective(base[n], args.objective) for n in games}
     print(
         "baseline (shipped PlannerConfig): "
         + ", ".join(f"{n} {base_obj[n]:.4f}" for n in games)
@@ -242,7 +252,7 @@ def main(argv: list[str] | None = None) -> None:
     best_sample = -1
     for i in range(args.samples):
         cfg = sample_config(rng)
-        obj = _objective(score_config(fit_game, cfg))
+        obj = _objective(score_config(fit_game, cfg), args.objective)
         if obj > best_obj:
             best_obj, best_cfg, best_sample = obj, cfg, i
 
@@ -250,6 +260,7 @@ def main(argv: list[str] | None = None) -> None:
         "fit_on": args.fit_on,
         "samples": args.samples,
         "seed": args.seed,
+        "objective": args.objective,
         "baseline_obj": base_obj,
         "search_space": SEARCH_SPACE,
     }
@@ -266,7 +277,8 @@ def main(argv: list[str] | None = None) -> None:
             "knobs": knobs,
             "cells": {n: fit_cells[n] for n in games},
             "holdout_gain": {
-                n: round(_objective(fit_cells[n]) - base_obj[n], 5) for n in holdouts
+                n: round(_objective(fit_cells[n], args.objective) - base_obj[n], 5)
+                for n in holdouts
             },
         }
     out = Path(args.out)
