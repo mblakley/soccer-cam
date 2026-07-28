@@ -4,6 +4,31 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-21 PRE-REGISTRATION (committed before numbers): W5/P5 operator-imitation fit — clone the composite's discipline by searching planner knobs (2026-07-27, overnight)
+
+**Build (w2, fit_planner.py):** random-search 10 framing knobs of PlannerConfig
+(pan_smoothing_min/max, pitch_smoothing, velocity_ema, lead_frames,
+max_lead_room_fraction, zoom_base_deg, zoom_scale, zoom_speed_gain_deg,
+zoom_smoothing) — NOT the hold-FSM gate (W2 owns it), NOT fps. Each sample re-plans
+a game's cached trajectory/2 (no re-track) and scores capture@600 + containment vs
+that game's composite, via the scoreboard's own capture_contain_stats. Identity gate
+(rule 8): re-planning at the shipped config reproduces the banked A0 campath within
+the 5 px trajectory-save rounding floor (verified: spc 1.9 / fair 0.44 / pit 2.9 px;
+baselines spc 0.602 / fair 0.669 / pit 0.880 = the banked composite cells).
+**Design:** three fits — fit-on-spc, fit-on-fair, fit-on-pit — 500 samples, seed 72,
+each reporting the winner's gain on its fit game AND its transfer to the two HELD-OUT
+games (DECISIONS (k): never fit and score the same game).
+**Reads:** per fit, fit-game gain + holdout gains. **The generality question:** does a
+Reolink fit transfer spc↔fair (a better GLOBAL follow tuning) and to Dahua pit
+(cross-camera)? **Gate (pre-stated):** a fitted config is a CANDIDATE only if it
+IMPROVES its fit game AND does not regress EITHER holdout beyond the composite's block
+null band (spc/fair ~±0.09, pit ~±0.06 from EXP-OP-16); positive holdout transfer on
+both Reolink games = a promotable global tuning (then the standard scoreboard+referee
+gate, not shipped from here). No per-game memory — one global config or nothing (the
+binding no-venue-memory rule). A 20-sample harness-verify peeked spc +0.016 / fair
++0.011 / pit −0.006 — a hint the fit transfers; the registered 500-sample run decides.
+**Machine:** F-OP CPU alongside the breadth GPU dump.
+
 ## EXP-OP-20 RESULTS: arm N (near-entry) is the WRONG LEVER — the near failure is a SUSTAINED emission gap an entry cost cannot touch (0.452 flat to k=4); arm M (margin) shows a raw fair-far gain (+0.11) but nothing referee-decisive (2026-07-27)
 
 Full k-sweep on hn4@s4 (spc/fair/PIT) + an arm-N follow-up on the mgarch dumps (the
