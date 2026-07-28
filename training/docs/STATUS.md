@@ -11,9 +11,11 @@
   confirmed, no venue memory. **Referee gate (07-28): SAFE (zero decisive regression on
   all 3, both instruments) but NOT a win — the composite gain was containment (wider
   zoom) and does NOT translate to human-GT capture (spc centering slightly down). The
-  gate caught composite-containment gaming. W5 needs a re-posed objective (capture-
-  weighted / width-penalized / fit-to-human-GT) + the breadth power; config kept as a
-  safe fallback, not promoted.**
+  gate caught composite-containment gaming. Capture-only re-fit (07-28) CLOSES it:
+  the shipped CENTERING tuning is already near-optimal (capture-only gains ≤+0.02, no
+  transfer) — the composite "global win" was widening. P5 base-follow fit = NEGATIVE.
+  W5 re-scopes to re-fitting after tracker/champion changes + the W2 FSM knobs, not the
+  base follow.**
 - **Breadth GPU dumps RUNNING** (Chili + PitMustangs hn4@s4, ~14h, ETA ~midday 07-28) —
   doubles the far-event pool so this session's raw-but-not-decisive far results
   (arm M, mgarch far, the P5 fit) can be re-read to decisive. First chunk was slow

@@ -69,6 +69,27 @@ objective (and after the breadth games add power). This SUPERSEDES the "promotab
 candidate" framing above: safe, yes; a win, no.
 **Gate artifacts:** p0_fop/fitgate_{spc,fair,pit}.json.
 
+**[CAPTURE-ONLY RE-FIT 07-28 — the close-out: the shipped CENTERING tuning is already
+near-optimal; the composite "global win" was containment]:** re-ran all three fits with
+``--objective capture`` (capture@600 alone, no containment — not zoom-gameable).
+cap600 baselines spc 0.534 / fair 0.626 / pit 0.892. Winners:
+- fit-on-spc: spc **+0.020**, fair −0.006, pit −0.023 (spc-specific, NO transfer)
+- fit-on-fair: fair +0.006, spc +0.006, pit −0.030 (barely moves; hurts Dahua)
+- fit-on-pit: pit +0.003, spc +0.005, fair +0.001 (FLAT everywhere)
+Removing the containment reward SHRINKS every gain (spc 0.028→0.020, fair 0.015→0.006,
+pit 0.010→0.003) AND kills the universal transfer — the "global" pit-fit is now flat
+(all ≤ +0.005, within noise). **Conclusion: the composite objective's apparent global
+improvement was almost entirely the containment (widening) term; the shipped
+PlannerConfig CENTERING (pan/velocity/lead) tuning is already near-optimal — capture-only
+fits find only tiny, non-generalizing gains.** P5 planner-centering-fit is CLOSED
+NEGATIVE: there is no real centering headroom in the base follow tuning on these three
+games. **W5 re-scopes:** future fit value is (a) RE-fitting after the tracker/champion
+changes (mgarch, W3 — the fit clones where the tracker puts the ball, so it moves when
+the tracker does) and (b) fitting the W2 HOLD-FSM / deadband knobs (a different lever) —
+NOT the base follow knobs, which are done. The breadth games will confirm at power but
+are unlikely to overturn a clean cross-game null.
+**Artifacts:** p0_fop/fitcap_{spc,fair,pit}.json; --objective flag @ w2.
+
 ## EXP-OP-21 PRE-REGISTRATION (committed before numbers): W5/P5 operator-imitation fit — clone the composite's discipline by searching planner knobs (2026-07-27, overnight)
 
 **Build (w2, fit_planner.py):** random-search 10 framing knobs of PlannerConfig
