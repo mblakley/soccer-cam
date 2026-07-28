@@ -20,7 +20,9 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 
 ## P4 — W3 loss discipline (now with THREE measured consumers; promoted ahead of P2 2026-07-27)
 - [x] 2026-07-27 fair-mid MECHANISM (EXP-OP-18): re-solve COMMITMENT (44/46 confident-T on another route; deletion 1/46 — dead). Stage-1 commitment/miss-cost arms = the P2 gate; fair-mid cell joins the primary reads. spc's milder dip is planner-side (21/32) — W5/deadband, secondary.
-- [ ] Stage-1 arms on the F stream, scored on: near-scramble labels (the ~100-click ASK) + the mgctrl 4.4s near-event class + THE FAIR-MID CELL (new, zero-click).
+- [x] 2026-07-27 stage-1 miss-ENTRY sweep (EXP-OP-20): arm N (near-entry) CLOSED — the near failure is a SUSTAINED emission gap (0.452 flat to k=4 on the mgarch stream), which entry cost cannot touch. Arm M (margin) raw fair-far +0.11 (M@0.5), no decisive, overcorrects at k>=2 — carried as a far candidate, not shipped on raw.
+- [ ] NEAR FIX RE-POINTED: per-frame miss-EMISSION (raise the floor while a confident near candidate persists) OR coast-policy (W2 HOLD FSM, already built — enable its coast voter and read jointly). This is the real owner of the mgarch 4.4s near cell, not entry cost.
+- [ ] Arm M follow-ups (deferred): M on the mgarch stream; M x coast-policy joint read. Near-scramble ~100-click ASK still enriches the near band but is NOT the entry-arm's fix.
 - [ ] LABEL ASK (~100 clicks): near-scramble batch — consumers: miss-cost arms AND the mgctrl 4.4s near-event class (EXP-OP-12). Mined from hn4s4/mgctrl dumps.
 - [ ] Stage-1 miss-cost arms on the F stream; competing-cluster switch only if commitment survives filtering (winfar2 says it does for moving clutter); goal-kick launch detector arming the EXP-DIST-31 bridge (winfar2's actual fix).
 

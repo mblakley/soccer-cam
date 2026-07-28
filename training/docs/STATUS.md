@@ -10,8 +10,16 @@
   0.441->0.707, fair 0.525->0.751), fair near/mid up too; PIT confirmation banked (0.644).
   The one soft cell (spc near, one 4.4s event, not decisive) is W3 stage-1's target.
   Nothing auto-promoted — awaiting Mark's promote/hold call.
-- **W3 stage-1 BUILT + pre-registered** (task #22, EXP-OP-20; miss-entry cost arms N/M @
-  w2 9b40c28) — sweep fires next on F-OP's now-free CPU (GPU chain drained 21:24).
+- **W3 stage-1 sweep DONE (EXP-OP-20):** arm N (near-entry) CLOSED — the mgarch 4.4s
+  near failure is a SUSTAINED emission gap (0.452 unchanged to k=4), which entry cost
+  cannot touch; the near fix re-points to miss-EMISSION or W2's coast-policy (already
+  built). Arm M (margin) shows a raw fair-far gain (+0.11 @ k=0.5, toward AutoCam's
+  0.857) with no decisive regression but overcorrects at k>=2 — carried as a far
+  candidate, not shipped on raw. No arm referee-decisive (power).
+- **NEXT (in order): (1) enable W2's coast voter + read jointly (the real near-cell
+  owner) — arm M @ 0.5 folds in as a far candidate; (2) surface the #21 promotion to
+  Mark [DONE, awaiting his call]; (3) W4 fair-far still the beat-target (arm M is a
+  down payment); (4) P5 imitation fit (composite + nulls complete).**
 - **Fortnite-OP is the GPU + CPU workhorse for ~2 weeks** (Mark): overnight dumps ran
   ~7 h/game decode-bound; CPU reads 6 min. The 4070 stays off the tailnet (its seed-1
   ckpt stranded — archived ckpt used instead, one checkpoint for all legs).

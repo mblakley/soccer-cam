@@ -4,6 +4,47 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-20 RESULTS: arm N (near-entry) is the WRONG LEVER — the near failure is a SUSTAINED emission gap an entry cost cannot touch (0.452 flat to k=4); arm M (margin) shows a raw fair-far gain (+0.11) but nothing referee-decisive (2026-07-27)
+
+Full k-sweep on hn4@s4 (spc/fair/PIT) + an arm-N follow-up on the mgarch dumps (the
+stream whose near band actually fails). F-OP CPU, ~40 min; ZERO referee-decisive rows vs
+A0 for ANY arm on ANY game (the known far/near power ceiling — few events).
+
+**Arm N (near+slow entry cost) — CLOSED, mechanism found.** On hn4 it is near-inert
+because hn4's near band is not failing (spc near already 0.762); the only motion is spc
+mid 0.719→0.751 at k≥2 (a side effect, not the target). **On the mgarch dump — the
+promotion candidate WITH the 0.452 near failure — arm N moves the near cell by exactly
+ZERO at k=1/2/4** (0.452/med 3612 unchanged even at 5× entry cost). Mechanism (confirmed
+synthetically + here): the entry multiplier only DEFERS miss by a frame or two; the near
+event is a SUSTAINED window where the ball candidate's emission stays costlier than the
+miss floor for the whole ~4.4 s (the EXP near-autopsy: P(ball) 0.07–0.21 < P(none)), so
+entry pricing cannot hold the track. **The near fix must be per-frame miss-EMISSION (raise
+the miss floor while a confident near candidate PERSISTS) or coast-policy (stop the
+planner following the coast — W2's HOLD FSM, already built), NOT entry cost.** This
+retires arm N and re-points the near lever at W2/W3-stage-2.
+
+**Arm M (rank-1 margin entry cost) — raw-promising on fair far, overcorrects hot.**
+capture@600 by band, A0 → best M:
+| game | cell | A0 | M@0.5 | M@1 | M@2 | M@4 |
+|---|---|---|---|---|---|---|
+| fair | far (217) | 0.525 | **0.636** | **0.636** | 0.641 | 0.641 |
+| fair | ALL | 0.449 | 0.483 | 0.483 | 0.482 | 0.477 |
+| pit | far (397) | 0.481 | 0.491 | 0.491 | 0.489 | 0.481 |
+| spc | far (290) | 0.441 | 0.441 | 0.441 | **0.400** | 0.400 |
+| spc | ALL | 0.598 | 0.596 | 0.598 | 0.573 | 0.576 |
+fair far +0.11 raw (closes ~⅓ of the gap to AutoCam's 0.857 on the W4 target cell) with
+NO decisive regression; but k≥2 OVERCORRECTS — it starts pricing legitimate entries and
+spc far drops 0.441→0.400. **Not decisive anywhere (power); not shippable on raw alone.**
+The fair-mid cell (EXP-OP-18's P2 gate) is UNMOVED by either arm (0.327) — as expected:
+that dip is the static FILTER's re-solve, a different lever than miss-entry.
+
+**Action (pre-registered):** arm N retired (wrong lever, mechanism logged); arm M @ k=0.5
+carried as a raw fair-far candidate — NOT promoted on raw alone; next reads (deferred,
+not blocking): M on the mgarch stream, and the JOINT read with W2 coast-policy (stage 1
+was never to be judged alone). Arm C (the N×M combine) is MOOT — N contributes nothing.
+The near failure's real owner is coast-policy/emission, now explicit in the roadmap.
+**Artifacts:** p0_fop/op20_{spc,fair,pit}.json + op20b_{spc,fair}.json + campaths.
+
 ## EXP-OP-20 PRE-REGISTRATION (committed before numbers): W3 stage-1 — three-arm state-dependent miss-ENTRY cost sweep (task #22) (2026-07-27)
 
 **Build (w2 9b40c28, per W3_LOSS_DISCIPLINE_DESIGN.md):** `miss_entry_multiplier` on the
