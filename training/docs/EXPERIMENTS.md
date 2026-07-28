@@ -48,6 +48,27 @@ the breadth games land (more data, decisive power) and after any champion shift 
 GT sets; visual comparison video; fold into the post-breadth re-read.
 **Artifacts:** p0_fop/fit_{spc,fair,pit}.json (winner knobs + cells).
 
+**[REFEREE GATE 07-28 — the composite gain does NOT survive on human GT; SAFE but not a
+win]:** re-planned the fit-on-pit campath and scored it vs A0 on the HUMAN-GT viewport
+cells (capture@600 — a different instrument than the AutoCam-dense composite the fit
+maximized). **Referee fitpit-vs-A0: ZERO decisive on all three games — SAFE, no
+regression anywhere.** But the composite gain does NOT translate to human-GT capture:
+spc all 0.598→0.589 / far 0.441→0.434 / mid 0.719→0.707 (slightly DOWN — centering a
+touch worse), fair ~flat (near 0.793→0.815 up), pit all 0.542→0.547 / mid 0.640→0.653
+(slight up). **Mechanism: the fit's gain was the containment term, and containment
+rewards a WIDER view — the fit widened (zoom_scale 0.90→0.99) to contain the reference
+more often WITHOUT improving where a human says to point.** The gate did its job: a
+composite win that is containment-gaming, not operator improvement.
+**CONSEQUENCES:** (1) the P5 objective as posed (maximize composite cap600 + containment)
+is exploitable by widening — **re-pose it: capture-weighted, or penalize over-widening,
+or fit to human-GT capture directly where sets exist.** (2) A composite-standard
+subtlety worth a DECISIONS note: the containment term can be gamed by zoom; consumers
+that fit/optimize against it must guard the width. (3) The fit-on-pit config is SAFE to
+keep as a fallback but is NOT promoted — no human-GT win. W5 re-runs with the re-posed
+objective (and after the breadth games add power). This SUPERSEDES the "promotable
+candidate" framing above: safe, yes; a win, no.
+**Gate artifacts:** p0_fop/fitgate_{spc,fair,pit}.json.
+
 ## EXP-OP-21 PRE-REGISTRATION (committed before numbers): W5/P5 operator-imitation fit — clone the composite's discipline by searching planner knobs (2026-07-27, overnight)
 
 **Build (w2, fit_planner.py):** random-search 10 framing knobs of PlannerConfig

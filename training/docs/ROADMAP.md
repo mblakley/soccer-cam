@@ -28,7 +28,8 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 
 ## P5 — W5 imitation fit, reframed by (w)
 - [x] 2026-07-28 fit harness (fit_planner.py) + first fit BANKED (EXP-OP-21): a single GLOBAL config (fit-on-pit) improves ALL THREE families (spc +0.016, fair +0.011, pit +0.010) — modest composite headroom, direction = calmer + slightly wider. Generality confirmed, no venue memory.
-- [ ] Gate the fit-on-pit config via scoreboard+referee + a visual comparison (gains are containment-leaning — confirm broadcast-real before shipping). Re-fit after breadth games + any champion shift. CPU standing job.
+- [x] 2026-07-28 referee gate: SAFE (zero decisive regression) but NOT a win — composite gain was containment (wider zoom), does not translate to human-GT capture. The gate caught containment-gaming.
+- [ ] RE-POSE the P5 objective (capture-weighted / penalize over-widening / fit to human-GT capture where sets exist) — the composite cap600+containment target is exploitable by widening. Re-run after breadth games (power) + any champion shift. Config kept as a safe fallback.
 
 ## Parallel / hygiene
 - [x] ~~fair AutoCam CLI re-run (console session)~~ CLOSED 2026-07-27 without a re-run: fair tier-3 = remap-verified legacy viewport (EXP-OP-15, r 0.981 vs ball GT). The pending EXP-OP-06 fair AC cells fill from it.

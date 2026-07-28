@@ -8,8 +8,12 @@
   F-OP CPU. A single GLOBAL planner config (found by fit-on-pit) improves ALL THREE
   families (spc +0.016, fair +0.011, pit +0.010) — the shipped planner has modest
   composite headroom; direction = calmer pan + slightly wider zoom. Generality
-  confirmed, no venue memory. CANDIDATE only — gains are containment-leaning, so
-  referee + a visual comparison gate it before shipping; not promoted here.
+  confirmed, no venue memory. **Referee gate (07-28): SAFE (zero decisive regression on
+  all 3, both instruments) but NOT a win — the composite gain was containment (wider
+  zoom) and does NOT translate to human-GT capture (spc centering slightly down). The
+  gate caught composite-containment gaming. W5 needs a re-posed objective (capture-
+  weighted / width-penalized / fit-to-human-GT) + the breadth power; config kept as a
+  safe fallback, not promoted.**
 - **Breadth GPU dumps RUNNING** (Chili + PitMustangs hn4@s4, ~14h, ETA ~midday 07-28) —
   doubles the far-event pool so this session's raw-but-not-decisive far results
   (arm M, mgarch far, the P5 fit) can be re-read to decisive. First chunk was slow
