@@ -31,8 +31,14 @@ more speed-responsive), zoom_smoothing 0.03→0.013. Coherent (steadier + wider 
 the play framed), NOT a dramatic re-tune. The spc-fit's more aggressive widening
 (zoom_base 47→52) is what broke Dahua — the gentle version generalizes.
 
-**Gate + caveats (pre-registered):** the fit-on-pit config PASSES — improves all three,
-regresses none beyond the null band. It is a promotable CANDIDATE, **not shipped from
+**Calibration (do not overstate):** every per-game gain (~+0.01 to +0.03) is COMPARABLE
+TO / within the composite capture null bands (±0.06–0.09, EXP-OP-16), so NO single game's
+gain is decisive on its own. The evidence is CROSS-GAME CONSISTENCY — all three positive
+under one config, and fair up in every fit — not per-game significance. This is a
+suggestive modest global gain, not a decisive win.
+
+**Gate + caveats (pre-registered):** the fit-on-pit config PASSES the pre-stated gate —
+improves all three, regresses none beyond the null band. It is a promotable CANDIDATE, **not shipped from
 here.** Two honest caveats before it becomes real: (1) the gains are containment-leaning
 (the composite objective weights containment = capture equally; a gentle widen buys
 containment cheaply) — the referee dual-rule on capture cells + a side-by-side visual
