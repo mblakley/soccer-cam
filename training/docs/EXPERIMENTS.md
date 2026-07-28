@@ -33,6 +33,39 @@ decisive regressions; ties break toward the simpler arm (N > M > C). All arms fl
 readable cells → park stage 1 until the near-scramble labels exist; no re-tuning beyond
 the pre-registered k grid.
 
+## EXP-OP-19 RESULTS: #21 GATE PASSES on the archived mg_ctrl — primary-family viewport NON-regression (zero decisive vs A0 on spc+fair), far substantially UP; the one near cost is the known 4.4s W3 event; promotion package READY for Mark (2026-07-27)
+
+Both primary-family legs at the archived unseeded mg_ctrl ckpt (F-OP, dumps ~7 h/game
+decode-bound at stride 4; the chain ran clean overnight). mgarch vs A0 (current champion
+hn4) on the GT sets (capture@600/med):
+| game | band | A0 | mgarch | AC |
+|---|---|---|---|---|
+| spc | ALL | 0.598/232 | **0.695/223** | 0.640/453 |
+| spc | far | 0.441/1625 | **0.707/184** | 0.443/752 |
+| spc | mid | 0.719/82 | 0.716/235 | 0.804/354 |
+| spc | near (42) | 0.762/25 | 0.452/3612 | 1.000/47 |
+| fair | ALL | 0.449/754 | **0.593/363** | 0.676/413 |
+| fair | far | 0.525/360 | **0.751/121** | 0.857/285 |
+| fair | mid | 0.327/960 | **0.426/859** | 0.605/500 |
+| fair | near (92) | 0.793/281 | **0.946/206** | 0.356/618 |
+
+**GATE = PASS.** Dual-rule referee mgarch-vs-A0: **ZERO decisive rows on either game, any
+band** — primary-family viewport non-regression is met with room (far is a large raw
+gain: spc +0.27, fair +0.23; fair near +0.15). The PIT confirmation is already banked
+(EXP-OP-16, this same ckpt: 0.644 vs 0.542). The (t) coverage-serves-robustness note
+holds (fair far/near both up — the Dahua-data effect transfers to the Reolink primary).
+**The one soft cell** — spc near 0.762→0.452 (med 3612) — is NOT decisive (n=42, power)
+and is the SAME single contiguous ~4.4 s near event EXP-OP-12's seed-1 leg found: the
+tracker-dynamics near-autopsy class, i.e. **exactly what W3 stage-1 (EXP-OP-20, built @
+w2 9b40c28) targets.** The archived ckpt reproducing seed-1's near behavior to the digit
+also RE-VALIDATES the supersession (EXP-OP-19 prereg): same recipe, same result, one
+checkpoint for all legs.
+**#21 status: PROMOTION PACKAGE READY — decision is Mark's** (pre-registered action). All
+gate legs clean; no-straddle satisfied (P0 banked). Promoting = champion shift to mgarch
++ scoreboard re-anchor (cheap, CPU) + the standard config swap. HELD pending Mark's
+promote/hold call; nothing auto-promoted.
+**Artifacts:** p0_fop/t21_{spc,fair}_mgarch.json + *_mgarch_s4.campath ladder.
+
 ## EXP-OP-19 PRE-REGISTRATION (committed before numbers): #21 gate RE-ANCHOR on the archived mg_ctrl — all legs at ONE checkpoint; the stranded seed-1 leg is superseded (2026-07-27)
 
 **Why (Mark's directive + the 4070 outage):** F-OP is the GPU for ~2 weeks; the 4070 is

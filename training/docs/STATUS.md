@@ -1,6 +1,20 @@
 # Current Status
 
-*Last updated: 2026-07-27 (morning) — P0 COMPLETE (EXP-OP-16 + MATCH-null amendment + EXP-OP-17 composition negative); fair-far reversed; F promotion blocked on decisive fair-mid*
+*Last updated: 2026-07-27 (night) — #21 gate PASSES (EXP-OP-19, mgarch promotion package READY for Mark); W3 stage-1 built (EXP-OP-20); P0 complete*
+
+## 2026-07-27 (night, same session) — #21 gate PASSES; mgarch promotion package awaits Mark
+
+- **DECISION FOR MARK: promote mg_ctrl (mgarch) to champion?** The #21 gate re-anchored
+  on the archived unseeded ckpt (EXP-OP-19) PASSES both primary-family legs: zero
+  decisive regression vs the current champion on spc+fair, far substantially up (spc
+  0.441->0.707, fair 0.525->0.751), fair near/mid up too; PIT confirmation banked (0.644).
+  The one soft cell (spc near, one 4.4s event, not decisive) is W3 stage-1's target.
+  Nothing auto-promoted — awaiting Mark's promote/hold call.
+- **W3 stage-1 BUILT + pre-registered** (task #22, EXP-OP-20; miss-entry cost arms N/M @
+  w2 9b40c28) — sweep fires next on F-OP's now-free CPU (GPU chain drained 21:24).
+- **Fortnite-OP is the GPU + CPU workhorse for ~2 weeks** (Mark): overnight dumps ran
+  ~7 h/game decode-bound; CPU reads 6 min. The 4070 stays off the tailnet (its seed-1
+  ckpt stranded — archived ckpt used instead, one checkpoint for all legs).
 
 ## 2026-07-27 (morning, same session) — EXP-OP-16: P0 composite re-anchor BANKED on F-OP
 
