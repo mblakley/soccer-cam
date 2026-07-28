@@ -99,7 +99,7 @@ def load_game_inputs(spec: str) -> dict:
     return {
         "name": name,
         "points": art["points"],
-        "states": art["states"],
+        "states": art["state"],
         "disp": art["disp"],
         "g_start": int(art["g_start"]),
         "src_w": src_w,
