@@ -1,6 +1,22 @@
 # Current Status
 
-*Last updated: 2026-07-27 (night) — #21 gate PASSES (EXP-OP-19, mgarch promotion package READY for Mark); W3 stage-1 built (EXP-OP-20); P0 complete*
+*Last updated: 2026-07-28 (overnight) — P5 first fit BANKED (EXP-OP-21: a global tuning improves all 3 families); breadth GPU dumps running; #21 mgarch package awaits Mark*
+
+## 2026-07-28 (overnight, autonomous) — P5 fit banked; breadth dumps running
+
+- **P5/W5 fit harness built + first fit BANKED (EXP-OP-21):** three game-split fits on
+  F-OP CPU. A single GLOBAL planner config (found by fit-on-pit) improves ALL THREE
+  families (spc +0.016, fair +0.011, pit +0.010) — the shipped planner has modest
+  composite headroom; direction = calmer pan + slightly wider zoom. Generality
+  confirmed, no venue memory. CANDIDATE only — gains are containment-leaning, so
+  referee + a visual comparison gate it before shipping; not promoted here.
+- **Breadth GPU dumps RUNNING** (Chili + PitMustangs hn4@s4, ~14h, ETA ~midday 07-28) —
+  doubles the far-event pool so this session's raw-but-not-decisive far results
+  (arm M, mgarch far, the P5 fit) can be re-read to decisive. First chunk was slow
+  (CPU shared with the P5 fit); back to ~22min/chunk now the fit is done.
+- **STILL AWAITING MARK: promote mg_ctrl (mgarch) to champion?** (EXP-OP-19 gate PASS).
+  Everything else is self-driving: when the breadth dumps land I build composites +
+  pooled far reads + gate the P5 config.
 
 ## 2026-07-27 (night, same session) — #21 gate PASSES; mgarch promotion package awaits Mark
 

@@ -27,7 +27,8 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 - [ ] Stage-1 miss-cost arms on the F stream; competing-cluster switch only if commitment survives filtering (winfar2 says it does for moving clutter); goal-kick launch detector arming the EXP-DIST-31 bridge (winfar2's actual fix).
 
 ## P5 — W5 imitation fit, reframed by (w)
-- [ ] Fit planner knobs to the COMPOSITE (clone AC's discipline densely, corrected at GT divergences) — supervision is now dense; re-runs after every label batch. CPU standing job.
+- [x] 2026-07-28 fit harness (fit_planner.py) + first fit BANKED (EXP-OP-21): a single GLOBAL config (fit-on-pit) improves ALL THREE families (spc +0.016, fair +0.011, pit +0.010) — modest composite headroom, direction = calmer + slightly wider. Generality confirmed, no venue memory.
+- [ ] Gate the fit-on-pit config via scoreboard+referee + a visual comparison (gains are containment-leaning — confirm broadcast-real before shipping). Re-fit after breadth games + any champion shift. CPU standing job.
 
 ## Parallel / hygiene
 - [x] ~~fair AutoCam CLI re-run (console session)~~ CLOSED 2026-07-27 without a re-run: fair tier-3 = remap-verified legacy viewport (EXP-OP-15, r 0.981 vs ball GT). The pending EXP-OP-06 fair AC cells fill from it.

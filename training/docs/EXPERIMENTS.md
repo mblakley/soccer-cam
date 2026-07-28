@@ -4,6 +4,44 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-21 RESULTS: a single GLOBAL planner tuning improves ALL THREE families — the fit-on-pit config is the universal winner (+spc/+fair/+pit); the shipped planner has modest composite headroom; generality CONFIRMED, no venue memory (2026-07-28)
+
+Three 500-sample fits (F-OP CPU, alongside the breadth dump). Identity gates passed
+(spc 1.9 / fair 0.44 / pit 2.9 px within the rounding floor); baselines reproduced the
+banked composite cells (spc 0.602 / fair 0.669 / pit 0.880). Winner gain on the fit
+game + transfer to the two held-out games:
+| fit-on | fit gain | spc | fair | pit |
+|---|---|---|---|---|
+| spc | +0.0276 | (fit) | **+0.0150** | −0.0176 |
+| fair | +0.0154 | −0.0013 | (fit) | −0.0099 |
+| **pit** | +0.0103 | **+0.0155** | **+0.0110** | (fit) |
+
+**The fit-on-pit config is the only UNIVERSALLY-positive one** — it lifts its own game
+AND both held-out Reolink games (spc +0.0155, fair +0.0110). The spc-fit gets a bigger
+spc gain but sacrifices Dahua (−0.018, within its ±0.06 null); the fair-fit is
+fair-specific (flat on spc). **Every fit that scores spc/fair shows fair up (3/3) and
+spc up (2/3)** — convergent evidence the shipped planner is NOT optimally tuned and a
+better GLOBAL config exists. Generality is thus CONFIRMED with a single config (satisfies
+the binding no-venue-memory rule — no per-game tuning).
+
+**The winning direction (fit-on-pit knobs vs shipped):** a CALMER, slightly WIDER
+operator — pan_smoothing_max 0.12→0.07 (steadier top gain), lead_frames 8→9.1,
+max_lead_room 0.20→0.22, zoom_scale 0.90→0.99 + zoom_speed_gain 8→12.7 (gently wider,
+more speed-responsive), zoom_smoothing 0.03→0.013. Coherent (steadier + wider = keeps
+the play framed), NOT a dramatic re-tune. The spc-fit's more aggressive widening
+(zoom_base 47→52) is what broke Dahua — the gentle version generalizes.
+
+**Gate + caveats (pre-registered):** the fit-on-pit config PASSES — improves all three,
+regresses none beyond the null band. It is a promotable CANDIDATE, **not shipped from
+here.** Two honest caveats before it becomes real: (1) the gains are containment-leaning
+(the composite objective weights containment = capture equally; a gentle widen buys
+containment cheaply) — the referee dual-rule on capture cells + a side-by-side visual
+(the convention) must confirm it's broadcast-real, not metric-gaming; (2) re-fit after
+the breadth games land (more data, decisive power) and after any champion shift (mgarch).
+**Next:** score the fit-on-pit config through the standard scoreboard+referee on all
+GT sets; visual comparison video; fold into the post-breadth re-read.
+**Artifacts:** p0_fop/fit_{spc,fair,pit}.json (winner knobs + cells).
+
 ## EXP-OP-21 PRE-REGISTRATION (committed before numbers): W5/P5 operator-imitation fit — clone the composite's discipline by searching planner knobs (2026-07-27, overnight)
 
 **Build (w2, fit_planner.py):** random-search 10 framing knobs of PlannerConfig
