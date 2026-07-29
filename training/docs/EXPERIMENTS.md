@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-26 RESULTS (PDCA cycle 2): DEPTH-GATED far-hold = the first DECISIVE far win of the session (+0.031 containment, p=0.008 at fn20); near cost is a far→near boundary effect, non-significant at fn20 (2026-07-28)
+
+Depth-gated miss-cost (--pnone-far-scale, boost only when top candidate <8px far). Plan
+pre-stated in EXP-OP-25's ACT. Containment vs A0 (pooled events):
+| band | fn20 (2x) | fn30 (3x) | fn50 (5x) |
+|---|---|---|---|
+| far (331) | **+0.031 (p=0.008)** ✓ | +0.036 (p=0.013) ✓ | +0.031 (p=0.044) ✓ |
+| mid (247) | −0.005 (ns) | −0.008 (ns) | −0.019 (ns) |
+| near (181) | −0.033 (p=0.11, ns) | −0.056 (p=0.001) ✗ | −0.049 (p=0.035) ✗ |
+**Depth-gating BEAT cycle 1: far gain rose +0.021→+0.031 AND became DECISIVE (p 0.10→
+0.008).** This is the FIRST decisive far-containment improvement of the whole arc, on the
+honest metric, from a config knob (no retrain, no labels) — grounded in the EXP-OP-24
+diagnostic. **The near cost did NOT vanish as predicted** — depth-gating the FRAME didn't
+stop the boundary effect: over-holding the far track through the far→near transition
+strands the near ball just after (near decisively worse at fn30/fn50). **fn20 = the
+winner: decisive far (+0.031), near cost NON-significant (−0.033, p=0.11), mid clean.**
+**ACT → cycle 3:** (1) GATE fn20 on the FULL scoreboard (human-viewport GT + composite +
+referee, spc/fair) — confirm the ball-GT far win doesn't hide a human-GT near/mid
+regression before calling it shippable. (2) If the near boundary cost matters, the next
+lever is a faster near-RELEASE (drop the hold the instant a confident near candidate
+appears) — cycle 4. fn20 is the standing far-lever candidate.
+
 ## EXP-OP-25 RESULTS (PDCA cycle 1): hold-far-ball VALIDATED — pnone-scale recovers far containment (+0.021 at pn15) with a small near-band cost; the first honest far lever this session (2026-07-28)
 
 Containment vs A0 (pooled events, honest metric):
