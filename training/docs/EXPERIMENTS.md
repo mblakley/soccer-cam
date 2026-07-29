@@ -29,14 +29,32 @@ ties), but where the filter acts it drops a real far-ball candidate more often t
 saves a distractor-park. The full-distribution ball-GT read is the more fundamental "do we
 keep the ball in frame," and at 4-game power it decisively says F costs far.
 
-**DECISION IMPACT — F@0.20 should NOT ship as-is.** This is the power the breadth dumps
-were for, and it lands against F, joining: EXP-OP-16 (F's mid dip decisive-worse vs AC on
-fair), EXP-OP-20 (composition with mgctrl negative), and now this (F decisive-worse on
-pooled far ball-GT). The EXP-OP-11 "F@0.20 is the promotion candidate" is RETRACTED at
-power: F is a worst-case insurance that costs the average. If revived it needs to fire
-ONLY on detected distractor-parks (a gated filter), not blanket every frame. The far
-product win must come from the DETECTOR (mgarch, which genuinely lifts far — EXP-OP-19)
-and W4 framing, not this filter.
+**DECISION IMPACT — F@0.20 is not a general far WIN, but "decisively worse" was a
+CENTERING-PROXY artifact (corrected below).**
+
+**[CORRECTION 07-28, Mark's catch — capture@600 is x-centering, not "ball in viewport";
+re-run with CONTAINMENT (ball inside the planned 16:9 view rect, folding in zoom+y)]:**
+| metric | A0 | F | ΔF | sign test | verdict |
+|---|---|---|---|---|---|
+| capture@600 (x-centering PROXY) | 0.769 | 0.712 | −0.057 | F<A0 52/25, p=0.003 | decisive F worse |
+| CONTAINMENT (ball actually in frame) | 0.809 | 0.779 | −0.029 | F<A0 44/29, p=0.10 | **NOT decisive** |
+Per-game containment ΔF: spc −0.088, fair +0.022, chili **+0.017** (flips positive),
+pitmust −0.005. So on the PRODUCT-relevant "is the real ball in the rendered view" metric,
+F is roughly NEUTRAL on far, not decisively worse — the wider zoom contains the ball even
+when centering drifts. **My "decisive F worse on far" was the centering proxy; the strict
+metric retracts it.** (Mark's principle: a model can center worse yet keep the ball framed
+— containment, not centering, is the viewport truth. capture@600 stays useful as a
+tighter-framing proxy but is NOT "ball in viewport".)
+
+**Corrected F verdict:** F is NOT a general far win (containment neutral, not positive —
+its far benefit is confined to the EXP-OP-11 adversarial viewport-worst subset, not the
+full far distribution) AND not a decisive far loss. The case against shipping F blanket now
+rests on EXP-OP-16 (F's mid dip decisive-worse vs AC on fair, composite) + EXP-OP-20
+(composition negative) + F not delivering the far win it was proposed for — NOT on a
+decisive far regression. If revived: gate it to fire only on detected distractor-parks.
+The far product win still comes from the DETECTOR (mgarch, EXP-OP-19) + W4 framing — but
+that mgarch far claim should ALSO be re-checked on containment, not just capture@600
+(next).
 **Method note:** pit (2024 Dahua) EXCLUDED — no ball GT (viewport-GT only); the pool is
 the 4 Reolink ball-GT games. Artifacts: breadth_ladder campaths; analysis inline. **Input
 integrity VERIFIED (07-28):** the ball_labels.jsonl the read consumed on F-OP is MD5-
