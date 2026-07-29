@@ -4,6 +4,45 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-24: FAR-LOSS ANATOMY (the keystone diagnostic) — far loss is 100% TRACKING, 0% framing; split ~54% selection (ball detected, tracker didn't hold) / ~46% detector (ball not detected, worst on windy fair) (2026-07-28)
+
+For every far ball-GT frame where the ball is NOT contained in our viewport (champion
+hn4 chain, 4 Reolink games), partition the cause. Two diagnostics:
+**(1) framing vs tracking** — is the tracker's trajectory near the ball (planner failed to
+frame) or off it (tracker lost it)? **505 uncontained far frames: 0 framing, 505 tracking
+(100%).** When the tracker has the ball, the planner frames it (P5 confirmed centering is
+near-optimal); a far loss is ALWAYS the tracker not being on the ball. **This kills W4
+(wider/smarter far framing) as a far lever — a wider view over a lost track just shows
+empty field.**
+**(2) of the tracking misses, detector vs selection** — was a candidate present near the
+true ball in the raw dump (detected, tracker didn't hold → SELECTION lever) or absent
+(→ DETECTOR lever)?
+| game | trk-miss | detected-but-lost | not-detected |
+|---|---|---|---|
+| spc | 260 | 169 (65%) | 91 |
+| fair | 132 | 41 | **91 (69%)** |
+| chili | 94 | 47 | 47 |
+| pitmust | 19 | 15 | 4 |
+| **pooled** | **505** | **272 (54%)** | **233 (46%)** |
+**Two roughly-equal levers, and they differ BY GAME:** spc far loss is mostly SELECTION
+(65% detected-but-lost — the detector finds the faint ball, the tracker drops it); windy
+fair far loss is mostly DETECTOR (69% never detected — the ball is too faint in wind).
+
+**STRATEGIC CONSEQUENCE — the far roadmap is now data-grounded:**
+- **W4 (far framing): DEAD** (0% framing misses).
+- **Selection/tracker lever (272 frames, the larger half):** hold a DETECTED far ball
+  through the tracker — miss-state cost / emission weighting when a far candidate exists.
+  This is W3's real target (NOT the arm-N entry cost, closed EXP-OP-20; the lever is
+  holding, not entry-pricing). Tractable, CPU-only, no labels.
+- **Detector lever (233 frames):** detect the faint far ball, especially in wind — the
+  detector arc was "closed" but far detection is still ~half the far loss. Harder (GPU
+  training, windy-far is fundamentally hard); the mgarch modest far gain (EXP-OP-23) is
+  in this half.
+**Next (overnight PDCA): attack the SELECTION half first** — sweep the hold levers
+(miss-cost / pnone-scale / arm M) for recovery of the 272 detected-but-lost far frames on
+the honest CONTAINMENT metric, mid/near non-regressing. Artifacts: far_diag inline;
+campaths + dumps on F-OP.
+
 ## EXP-OP-23: mgarch's FAR WIN re-checked on the honest metric — a small frame-wise containment gain (+0.03), NOT the headline "0.44→0.71"; that number was capture@600 on the adversarial viewport-worst subset (2026-07-28, Mark's containment principle)
 
 Applying the EXP-OP-22 correction to the PROMOTION case: mgarch (candidate) vs hn4
