@@ -20,6 +20,12 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 ## P3 — W2 HOLD revival (on the CLEAN stream only — H-on-dirty measured harmful)
 - [ ] OOB-DEAD state + exit taxonomy (SS7/SS7.1: windowed exit anchor, bimodal end-line gate, goal-mouth case) + retune default knobs on F stream. Read: composite MATCH discipline + stoppage segments + frantic-phase velocity. The winfar1-class insurance beyond filtering.
 
+## P3.5 — DEPTH-GATED FAR-HOLD (fn20) — DECISIVE far win, SHIPPABLE (2026-07-28, PDCA cycles 1-3)
+- [x] EXP-OP-24 diagnosed far loss = tracker dropping DETECTED far balls (54%) → EXP-OP-25/26/27: --pnone-far-scale 2.0 (depth-gated miss-cost hold) gives a DECISIVE far-containment win (+0.031, p=0.008), human-GT far +0.30 on spc worst-cases, composite BEAT +0.20, ZERO referee regressions. A config knob, no retrain.
+- [ ] SHIP: surface pnone_far_scale in the ball_select/chain config for Mark's call + side-by-side comparison video. Watch-item: small non-decisive spc near dip (boundary effect).
+- [ ] COMPOUND: fn20 + mgarch (detector + hold); fn20 + near-RELEASE (erase the near dip).
+- [ ] DETECTOR half (46% undetected far, EXP-OP-24) = the larger untapped far lever (GPU training; windy-far hardest).
+
 ## P4 — W3 loss discipline (now with THREE measured consumers; promoted ahead of P2 2026-07-27)
 - [x] 2026-07-27 fair-mid MECHANISM (EXP-OP-18): re-solve COMMITMENT (44/46 confident-T on another route; deletion 1/46 — dead). Stage-1 commitment/miss-cost arms = the P2 gate; fair-mid cell joins the primary reads. spc's milder dip is planner-side (21/32) — W5/deadband, secondary.
 - [x] 2026-07-27 stage-1 miss-ENTRY sweep (EXP-OP-20): arm N (near-entry) CLOSED — the near failure is a SUSTAINED emission gap (0.452 flat to k=4 on the mgarch stream), which entry cost cannot touch. Arm M (margin) raw fair-far +0.11 (M@0.5), no decisive, overcorrects at k>=2 — carried as a far candidate, not shipped on raw.

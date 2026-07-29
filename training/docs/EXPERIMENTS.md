@@ -4,6 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-27 RESULTS (PDCA cycle 3, the GATE): fn20 PASSES the full scoreboard — decisive far win, ZERO referee regressions; human-GT far +0.30 on spc worst-cases; SHIPPABLE far lever (a config knob) (2026-07-28)
+
+fn20 (--pnone-far-scale 2.0) vs A0 on the FULL instrument suite (human-viewport GT +
+composite + referee), spc + fair. Human-GT capture@600 / median:
+| | spc all | spc far | spc mid | spc near | fair far | fair mid | fair near |
+|---|---|---|---|---|---|---|---|
+| A0 | 0.598 | 0.441 | 0.719 | 0.762 | 0.525 | 0.327 | 0.793 |
+| fn20 | **0.715** | **0.738** | 0.697 | 0.690 | **0.581** | **0.358** | 0.793 |
+| Δ | +0.117 | **+0.297** | −0.022 | −0.072 | +0.056 | +0.031 | 0.000 |
+Composite BEAT (the GT-override far-failure frames): spc A0 0.519 → fn20 **0.719 (+0.20)**;
+fair 0.458 → 0.502. MATCH ~flat both. **Referee fn20-vs-A0: ZERO decisive rows on BOTH
+games — no regression anywhere under the dual rule.**
+
+**VERDICT: fn20 PASSES — a decisive, SAFE far win.** On the full ball-GT distribution
+(EXP-OP-26) it's +0.031 decisive; on the human-viewport worst-cases it recovers far
+dramatically (spc +0.30, the camera finds the far ball a human wanted); the composite
+far-failure column jumps +0.20. The ONLY cost is a small non-decisive near dip on spc
+(−0.072, referee-clean, and near is our strength) — fair has no near cost. **This is the
+arc's FIRST decisive, gated far improvement, and it is a CONFIG KNOB (pnone_far_scale=2.0)
+— shippable without a retrain or labels, like the ball_select step config.**
+
+**The PDCA arc worked:** EXP-OP-24 diagnosed far loss = tracker dropping detected balls →
+cycle 1 (global hold, +0.021 ns) → cycle 2 (depth-gated, +0.031 DECISIVE) → cycle 3 (full
+gate, PASS, human-GT far +0.30, zero regressions). The far number climbed every cycle on
+the honest metric.
+**ACT → next:** (1) fn20 is the recommended far config — surface behind the ball-select
+config for Mark's ship call (side-by-side comparison video per convention). (2) Compound
+levers: fn20 + mgarch (detector + hold), and fn20 + the near-RELEASE refinement to erase
+the spc near dip. (3) The DETECTOR half (46% undetected far, EXP-OP-24) remains the larger
+untapped lever (GPU). Artifacts: gate3_{spc,fair}.json; pdca2 fn20 campaths.
+
 ## EXP-OP-26 RESULTS (PDCA cycle 2): DEPTH-GATED far-hold = the first DECISIVE far win of the session (+0.031 containment, p=0.008 at fn20); near cost is a far→near boundary effect, non-significant at fn20 (2026-07-28)
 
 Depth-gated miss-cost (--pnone-far-scale, boost only when top candidate <8px far). Plan
