@@ -292,6 +292,8 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         static_filter_offfield_only=args.static_filter_offfield_only,
         miss_entry_near_k=args.miss_entry_near_k,
         miss_entry_margin_k=args.miss_entry_margin_k,
+        emission_weight=args.emission_weight,
+        pnone_scale=args.pnone_scale,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -559,6 +561,21 @@ def main(argv: list[str] | None = None) -> None:
         default=0.0,
         help="W3 stage-1 arm M (task #22): miss-ENTRY cost multiplier weight for "
         "a clearly-separated rank-1 candidate (0 = off, shipped chain)",
+    )
+    a.add_argument(
+        "--pnone-scale",
+        type=float,
+        default=1.0,
+        help="EXP-OP-25: scale the LEARNED miss cost (-log p_none). >1 makes the "
+        "miss state more expensive -> the tracker HOLDS a detected candidate "
+        "longer (the far detected-but-lost lever, EXP-OP-24). 1.0 = shipped.",
+    )
+    a.add_argument(
+        "--emission-weight",
+        type=float,
+        default=1.0,
+        help="scale the selector emission prior AND the miss cost together "
+        "(1.0 = shipped)",
     )
     a.add_argument(
         "--static-filter-offfield-only",
