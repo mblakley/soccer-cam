@@ -102,6 +102,7 @@ def replay_champion_chain(
     pnone_scale: float = 1.0,
     pnone_far_scale: float = 1.0,
     pnone_far_diam: float = 8.0,
+    pnone_far_near_diam: float = 0.0,
     phys_sigma_px: float = 5.0,
     bridge_w: float = 2.0,
     oob_w: float = 2.0,
@@ -227,12 +228,19 @@ def replay_champion_chain(
         w * -np.log(np.maximum(probs[i, : len(fr)], 1e-6)) if fr else np.zeros(0)
         for i, fr in enumerate(frames)
     ]
-    # miss cost = pnone_scale * -log(p_none). EXP-OP-25/26: pnone_far_scale
-    # DEPTH-GATES the hold — when the top selector candidate is FAR (expected
-    # ball diameter < pnone_far_diam px), use pnone_far_scale instead of
-    # pnone_scale, so a detected far ball is held WITHOUT over-holding near
-    # clutter. EXP-OP-29: pnone_far_diam tightens the gate (8→6) to trim the
-    # far→near boundary over-hold (the fn20 near dip).
+    # miss cost = pnone_scale * -log(p_none). The hold on a detected far ball is
+    # DEPTH-CONDITIONED via the per-game homography (expected ball diameter).
+    # - BINARY gate (fd6, EXP-OP-25/29): full pnone_far_scale when diam <
+    #   pnone_far_diam, else pnone_scale. A global switch — good far, small near
+    #   cost at the far→near boundary.
+    # - CONTINUOUS ramp (EXP-OP-30, the geometry-conditioned successor, Mark
+    #   2026-07-29): when pnone_far_near_diam > pnone_far_diam, the strength
+    #   ramps SMOOTHLY from pnone_scale at near_diam to pnone_far_scale at
+    #   far_diam — a function of depth, not a switch, to dissolve the near/far
+    #   tension. (Leans harder on the homography, the ONE BUG CLASS ruler — see
+    #   DECISIONS (y); prototype on current geometry, durable form gated on #19.)
+    ramp = pnone_far_near_diam > pnone_far_diam
+    span = max(pnone_far_near_diam - pnone_far_diam, 1e-6)
     mc = []
     for i in range(len(frames)):
         base = w * -np.log(max(float(probs[i, -1]), 1e-6))
@@ -243,7 +251,10 @@ def replay_champion_chain(
             diam = float(
                 geom.expected_ball_diameter_px(np.asarray([[top.x, top.y]], float))[0]
             )
-            if diam < pnone_far_diam:
+            if ramp:
+                wf = min(max((pnone_far_near_diam - diam) / span, 0.0), 1.0)
+                scale = pnone_scale + (pnone_far_scale - pnone_scale) * wf
+            elif diam < pnone_far_diam:
                 scale = pnone_far_scale
         mc.append(float(scale * base))
     cfg = replace(

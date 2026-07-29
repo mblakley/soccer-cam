@@ -296,6 +296,7 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         pnone_scale=args.pnone_scale,
         pnone_far_scale=args.pnone_far_scale,
         pnone_far_diam=args.pnone_far_diam,
+        pnone_far_near_diam=args.pnone_far_near_diam,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -595,6 +596,15 @@ def main(argv: list[str] | None = None) -> None:
         help="EXP-OP-29: expected-diameter px threshold for the far-hold gate "
         "(default 8 = the far band). Tighten (e.g. 6) to hold only VERY far "
         "candidates and trim the far->near boundary near-dip.",
+    )
+    a.add_argument(
+        "--pnone-far-near-diam",
+        type=float,
+        default=0.0,
+        help="EXP-OP-30 (geometry-conditioned, Mark): when > --pnone-far-diam, "
+        "the hold strength RAMPS smoothly with depth from 1x at this diameter "
+        "(near) to --pnone-far-scale at --pnone-far-diam (far), instead of a "
+        "binary switch. Dissolves the near/far tension. 0 = binary (fd6).",
     )
     a.add_argument(
         "--static-filter-offfield-only",
