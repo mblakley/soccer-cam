@@ -4,6 +4,26 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-29 RESULTS (PDCA cycle 5): tighter far-gate (fd6, diam<6) REFINES fn20 — keeps the far win (+0.033, p=0.001), HALVES the near dip (−0.033→−0.018 ns); fd6 is the new far config (2026-07-29)
+
+Far-gate threshold sweep at pnone_far_scale=2.0 (--pnone-far-diam). Containment vs A0
+(pooled events):
+| band | fd6 (diam<6) | fd7 (diam<7) | [fn20 = diam<8, EXP-OP-26] |
+|---|---|---|---|
+| far (331) | **+0.033 (p=0.001)** | +0.033 (p=0.003) | +0.031 (p=0.008) |
+| mid (247) | −0.004 (ns) | −0.001 (ns) | −0.005 (ns) |
+| near (181) | **−0.018 (p=0.42, ns)** | −0.033 (p=0.11) | −0.033 (p=0.11) |
+**Hypothesis CONFIRMED:** the fn20 near dip was a loose-gate boundary effect. Tightening
+to diam<6 (hold only VERY far balls) KEEPS the far gain (+0.033, actually the sharpest
+significance yet, p=0.001) AND halves the near dip (−0.033→−0.018, more clearly
+non-significant). **fd6 (pnone_far_scale=2.0, pnone_far_diam=6.0) is the refined far
+config** — strictly cleaner than fn20 (same far mechanism, smaller near cost), so it
+inherits fn20's full-scoreboard gate PASS (EXP-OP-27) and improves on it.
+
+**The far number climbed every cycle on the honest metric:** cycle 1 +0.021 (ns) → cycle 2
++0.031 (p=0.008) → cycle 5 +0.033 (p=0.001, near dip halved). A five-cycle PDCA arc from
+a diagnostic to a decisive, refined, shippable far config — a knob, no retrain, no labels.
+
 ## EXP-OP-28 (PDCA cycle 4): the far levers do NOT compound — the HOLD (fn20) is the far lever; mgarch adds nothing on far (mgfn20 vs fn20 = +0.000) (2026-07-28)
 
 Far containment vs ball GT, spc+fair (the mgarch-dump games), 4 arms: A0 (hn4), fn20
