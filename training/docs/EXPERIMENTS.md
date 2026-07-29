@@ -4,6 +4,24 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-30 PRE-REGISTRATION (geometry-conditioning investigation, before numbers): CONTINUOUS depth-conditioned hold vs fd6's binary switch (Mark's direction, DECISIONS (y)) (2026-07-29)
+
+**PLAN (Mark 07-29):** fd6's "helps far / costs near" tension is the signature of a GLOBAL
+BINARY switch on a position-dependent quantity. Test the first geometry-conditioned step:
+make the hold strength a SMOOTH function of the ball's geometry-derived depth (expected
+diameter) — full pnone_far_scale=2.0 at very-far (diam=6), ramping to 1.0 (no hold) at the
+near-band edge (diam=near_diam), instead of the binary cliff at 6px (--pnone-far-near-diam,
+w2). **DO:** cont15 (ramp 15→6) and cont10 (ramp 10→6) vs fd6 (binary) vs A0, 4 games.
+**CHECK (honest containment vs ball GT, pooled events):** does the ramp KEEP the far gain
+(~+0.033) while REDUCING the near cost (fd6's −0.018)? A mid lift would be a bonus
+(mid-depth balls get a mild hold). **ACT/reads:** (a) cont keeps far + zeros near → the
+continuous conditioning wins → it becomes the far lever and motivates the fuller
+version (add frame-boundary distance; do #19 for a trustworthy ruler). (b) cont ≈ fd6 →
+the binary was already near the geometry ceiling on these games; the win must come from
+frame-boundary conditioning or #19. (c) cont loses far → the very-far full hold was
+load-bearing; conditioning must keep the far end strong. This is a PROTOTYPE on the
+current (wavy-ruler) homography — sizes the effect; the durable version is gated on #19.
+
 ## EXP-OP-29 RESULTS (PDCA cycle 5): tighter far-gate (fd6, diam<6) REFINES fn20 — keeps the far win (+0.033, p=0.001), HALVES the near dip (−0.033→−0.018 ns); fd6 is the new far config (2026-07-29)
 
 Far-gate threshold sweep at pnone_far_scale=2.0 (--pnone-far-diam). Containment vs A0
