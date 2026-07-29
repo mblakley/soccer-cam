@@ -12,8 +12,9 @@ Everything below is priced by banked reads (EXP-OP-01..13). Order = decisive-fir
 - [x] 2026-07-27 mg_ctrl x F@0.20 spc leg: **NEGATIVE, closed** (EXP-OP-17 — mgF far 0.597 < both single arms; the filter degrades the mgctrl stream; near static-park nugget -> P4). fair/PIT legs moot unless #21's fair leg shows far regression.
 - [ ] #21 fair leg BLOCKED on the 4070's return (mg_ctrl_seed1 ckpt + its fair dump live only there) -> then promotion package under the composite standard. PIT confirmation re-anchored 07-27 (0.644 exact) + spc leg banked.
 
-## P2 — Ship the filter — BLOCKED 2026-07-27 pending P4 (pre-registered action fired)
-- [ ] EXP-OP-16: F's mid dip is DECISIVE vs AC on fair (d −0.48, an F-introduced AC loss) — the mid-path investigation (P4) must resolve it BEFORE F ships. Then: F@0.20 into ball_select behind config; promotion read on composite; side-by-side comparison video (convention).
+## P2 — Ship the filter — RETRACTED 2026-07-28 (F does not ship as-is)
+- [x] 2026-07-28 EXP-OP-22: pooled over 4 Reolink games vs BALL GT, F is DECISIVELY WORSE on far (−0.057, p=0.003). Its far "win" was the adversarial viewport-worst subset only. Joined with EXP-OP-16 (decisive mid loss on fair) + EXP-OP-20 (composition negative): **F@0.20 does NOT ship blanket.**
+- [ ] If revived: GATE the filter to fire only on detected distractor-parks (not every frame). The far product win comes from the DETECTOR (mgarch) + W4 framing, not this filter.
 
 ## P3 — W2 HOLD revival (on the CLEAN stream only — H-on-dirty measured harmful)
 - [ ] OOB-DEAD state + exit taxonomy (SS7/SS7.1: windowed exit anchor, bimodal end-line gate, goal-mouth case) + retune default knobs on F stream. Read: composite MATCH discipline + stoppage segments + frantic-phase velocity. The winfar1-class insurance beyond filtering.

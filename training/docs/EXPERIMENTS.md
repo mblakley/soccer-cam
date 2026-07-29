@@ -4,6 +4,42 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-22 RESULTS: POWER REVERSES THE FILTER'S FAR STORY — pooled over 4 Reolink games vs BALL GT, F is DECISIVELY WORSE on far (−0.057, p=0.003); its earlier far "win" was specific to the adversarial viewport-worst subset (2026-07-28)
+
+The breadth dumps (chili + pitmust, hn4@s4) finished 13:39; A0 + F campaths generated
+for both; pooled the FAR-band (expected diam < 8px) capture@600 vs BALL GT across the
+FOUR Reolink ball-GT games. Per-game far capture (A0 champion vs F filter):
+| game | n_far | A0 | F | ΔF |
+|---|---|---|---|---|
+| spc | 1052 | 0.683 | 0.609 | **−0.074** |
+| fair | 178 | 0.236 | 0.275 | +0.039 |
+| chili | 413 | 0.697 | 0.680 | −0.017 |
+| pitmust | 398 | 0.937 | 0.915 | −0.023 |
+**Pooled (331 far events): A0 0.769 vs F 0.712, ΔF −0.057.** Event sign test: F beats A0
+in 25 events, LOSES in 52 (254 ties) → **two-sided p=0.0028 — DECISIVE that F is WORSE**
+on far ball-capture. F helps only fair (smallest n); it hurts on the three larger games.
+
+**Reconciliation with EXP-OP-10/11 (F far "win" 0.441→0.669 on spc):** NOT a contradiction
+— different instrument + frame set. Those measured F vs HUMAN VIEWPORT GT on the
+DIV-SAMPLED viewport-worst subset (curated AutoCam/champion FAILURE moments), where F
+rescues the camera off a static distractor toward the ball. THIS measures F vs BALL GT
+over the FULL far distribution. Both are true: **F improves the worst curated far cases
+but is net-negative on average far ball-capture** — most far events are unchanged (254/331
+ties), but where the filter acts it drops a real far-ball candidate more often than it
+saves a distractor-park. The full-distribution ball-GT read is the more fundamental "do we
+keep the ball in frame," and at 4-game power it decisively says F costs far.
+
+**DECISION IMPACT — F@0.20 should NOT ship as-is.** This is the power the breadth dumps
+were for, and it lands against F, joining: EXP-OP-16 (F's mid dip decisive-worse vs AC on
+fair), EXP-OP-20 (composition with mgctrl negative), and now this (F decisive-worse on
+pooled far ball-GT). The EXP-OP-11 "F@0.20 is the promotion candidate" is RETRACTED at
+power: F is a worst-case insurance that costs the average. If revived it needs to fire
+ONLY on detected distractor-parks (a gated filter), not blanket every frame. The far
+product win must come from the DETECTOR (mgarch, which genuinely lifts far — EXP-OP-19)
+and W4 framing, not this filter.
+**Method note:** pit (2024 Dahua) EXCLUDED — no ball GT (viewport-GT only); the pool is
+the 4 Reolink ball-GT games. Artifacts: breadth_ladder campaths; analysis inline.
+
 ## EXP-OP-21 RESULTS: a single GLOBAL planner tuning improves ALL THREE families — the fit-on-pit config is the universal winner (+spc/+fair/+pit); the shipped planner has modest composite headroom; generality CONFIRMED, no venue memory (2026-07-28)
 
 Three 500-sample fits (F-OP CPU, alongside the breadth dump). Identity gates passed
