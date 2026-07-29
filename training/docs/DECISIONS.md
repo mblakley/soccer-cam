@@ -154,6 +154,20 @@ ruler; the durable geometry-conditioned hold is gated on #19. **fd6 ships as a
 conservative, reversible interim (config knob + visual check) for the current champion;
 the geometry-conditioned hold is the real target.** Investigation opened as EXP-OP-30.
 
+**PDCA CONVERGENCE (07-29, EXP-OP-30 = decisive NO-GO on the bent ruler):** continuous
+conditioning is WORSE than fd6's binary on the current ruler (near −0.051 decisive) —
+the ramp operates in the mid-depth range where the planar homography is most distorted.
+Go/no-go answer: do NOT invest further in conditioning until #19. **#19 is now the SHARED
+LINCHPIN for the whole far arc, not just the detector:** the SAME bent ruler (ONE BUG
+CLASS, ±35% bow per (p)) that corrupts the detector's size expectation ALSO blocks the
+geometry-conditioned operator (hold + framing) — fixing it once improves BOTH. **#19 is a
+FOUNDATIONAL BUILD, not an overnight sweep:** ingredients exist (the cylindrical render
+model already computes elevation-per-pixel; world_geometry confirms the current ruler is a
+zero-calibration planar homography), but calibrating camera pose from the polygon is a CV
+task where Mark's rig knowledge is load-bearing (as for the yaw attribution, (o)/(p)). The
+quick-cycle far-lever loop DID ITS JOB: fd6 banked, far problem mapped (EXP-OP-24: 54%
+selection / 46% detector), arc converged on #19.
+
 ---
 
 ## 2026-07-27 (x): LEGACY VIEWPORT ADMISSION — quarantined Reolink jsonls are tier-3 admissible ONLY through the verified trim-aware remap; pooled gate, not per-seg (EXP-OP-15)
