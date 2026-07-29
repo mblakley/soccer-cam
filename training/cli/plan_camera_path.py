@@ -101,6 +101,7 @@ def replay_champion_chain(
     emission_weight: float = 1.0,
     pnone_scale: float = 1.0,
     pnone_far_scale: float = 1.0,
+    pnone_far_diam: float = 8.0,
     phys_sigma_px: float = 5.0,
     bridge_w: float = 2.0,
     oob_w: float = 2.0,
@@ -228,10 +229,10 @@ def replay_champion_chain(
     ]
     # miss cost = pnone_scale * -log(p_none). EXP-OP-25/26: pnone_far_scale
     # DEPTH-GATES the hold — when the top selector candidate is FAR (expected
-    # ball diameter < 8px, the far band), use pnone_far_scale instead of
+    # ball diameter < pnone_far_diam px), use pnone_far_scale instead of
     # pnone_scale, so a detected far ball is held WITHOUT over-holding near
-    # clutter (the near-band cost of a global pnone boost, EXP-OP-25).
-    _FAR_DIAM_PX = 8.0
+    # clutter. EXP-OP-29: pnone_far_diam tightens the gate (8→6) to trim the
+    # far→near boundary over-hold (the fn20 near dip).
     mc = []
     for i in range(len(frames)):
         base = w * -np.log(max(float(probs[i, -1]), 1e-6))
@@ -242,7 +243,7 @@ def replay_champion_chain(
             diam = float(
                 geom.expected_ball_diameter_px(np.asarray([[top.x, top.y]], float))[0]
             )
-            if diam < _FAR_DIAM_PX:
+            if diam < pnone_far_diam:
                 scale = pnone_far_scale
         mc.append(float(scale * base))
     cfg = replace(

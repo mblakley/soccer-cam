@@ -295,6 +295,7 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         emission_weight=args.emission_weight,
         pnone_scale=args.pnone_scale,
         pnone_far_scale=args.pnone_far_scale,
+        pnone_far_diam=args.pnone_far_diam,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -586,6 +587,14 @@ def main(argv: list[str] | None = None) -> None:
         "candidate is FAR (diam < 8px). Holds detected far balls WITHOUT "
         "over-holding near clutter (the near cost of global --pnone-scale). "
         "1.0 = off; overrides pnone-scale on far frames only.",
+    )
+    a.add_argument(
+        "--pnone-far-diam",
+        type=float,
+        default=8.0,
+        help="EXP-OP-29: expected-diameter px threshold for the far-hold gate "
+        "(default 8 = the far band). Tighten (e.g. 6) to hold only VERY far "
+        "candidates and trim the far->near boundary near-dip.",
     )
     a.add_argument(
         "--static-filter-offfield-only",
