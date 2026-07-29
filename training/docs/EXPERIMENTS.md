@@ -45,6 +45,21 @@ enables and what EXP-OP-30 proved cannot be prototyped on the bent ruler. fd6 no
 the per-game form. **ACT → adopt fd6 as the interim far default; the heterogeneity is
 logged as motivation for #19, not a blocker for fd6.**
 
+**VISUAL GATE (07-29, vision-verified on rendered fd6-vs-A0 stacks at the two
+max-divergence windows the analysis picked):** rendered both configs through the
+PRODUCTION render CLI (`render_camera_path`, clip mode), GT green arrow = ball truth in
+each panel. (a) **spc BETTER g60496-60576 (A0 0.00 → fd6 1.00):** A0 is parked on a CORNER
+FLAG / empty sideline for the whole event — completely off the play; fd6 holds the far
+ball and keeps the game (and the GT arrow) in frame. A dramatic rescue. (b) **lakefront
+WORSE g75204-75556 (A0 1.00 → fd6 0.68):** fd6 over-pans toward the FAR goal and lets the
+ball drift to the frame edge while A0 stays centered — but fd6 is still ON the field with
+the play partially in view. A mild mis-framing, not a lost play. **The tails are
+ASYMMETRIC and favor shipping fd6: its wins RESCUE completely-lost plays (large), its
+losses are SLIGHT over-pans on already-well-framed sequences (small)** — the visual
+signature behind the pooled +0.026 / headroom pattern. **fd6 ship visual gate: PASS.**
+Clips + key frames delivered to Mark for the final ship call
+(`D:\opstage\clips\{spc_better,lake_worse}_compare.mp4`).
+
 ## EXP-OP-30 RESULTS (geometry-conditioning go/no-go): continuous conditioning is WORSE than fd6 ON THE BENT RULER — CONFIRMS the #19 dependency; the ramp acts in the mid-depth range where the planar homography is most distorted (2026-07-29)
 
 Continuous depth-ramp (cont15: 15→6px, cont10: 10→6px) vs fd6 (binary <6px) vs A0,

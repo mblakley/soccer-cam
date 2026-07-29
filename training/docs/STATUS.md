@@ -19,9 +19,15 @@
   as the SHARED LINCHPIN for detector + operator** — a foundational build where Mark's
   camera-rig knowledge is load-bearing (see DECISIONS (y)). NOT an autonomous overnight
   sweep; awaiting Mark's rig params or a scoped pose-from-polygon prototype gate.
-- **STILL AWAITING MARK:** (1) fd6 ship go + visual check; (2) #19 approach — rig params
-  vs. prototype pose calibration; (3) promote mg_ctrl (mgarch) to champion (EXP-OP-19
-  gate PASS, now a clean Dahua-robustness-only call, separate from far).
+- **fd6 VISUAL GATE PASS (EXP-OP-31, vision-verified):** rendered fd6-vs-A0 stacks on the
+  two max-divergence windows. spc "better": A0 parked on a corner flag off the play, fd6
+  holds the game in frame (dramatic rescue). lakefront "worse": fd6 over-pans toward the
+  far goal, ball drifts to the edge, but still on the field (mild). Tails are asymmetric —
+  big wins, small losses — favoring ship. Clips: `D:\opstage\clips\*_compare.mp4`.
+- **STILL AWAITING MARK:** (1) fd6 final ship go (visual gate passed — clips sent); (2)
+  #19 approach — rig params vs. prototype pose calibration; (3) promote mg_ctrl (mgarch)
+  to champion (EXP-OP-19 gate PASS, now a clean Dahua-robustness-only call, separate from
+  far).
 
 ## 2026-07-28 (overnight, autonomous) — P5 fit banked; breadth dumps running
 
