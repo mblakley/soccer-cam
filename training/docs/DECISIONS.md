@@ -4,7 +4,22 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ## CURRENT STATE (maintained in place — the ONE exception to append-only; history below is immutable)
 
-*Last maintained: 2026-07-27, Virtual Operator arc ((x) legacy viewport admission). Tomorrow starts HERE, not from (h)–(t).*
+*Last maintained: 2026-07-29, Virtual Operator arc ((y) far-hold: fd6 banked, geometry-conditioning is the successor). Tomorrow starts HERE.*
+
+- **FAR LEVER ((y), 07-29): fd6 = the BANKED interim far-hold config** (pnone_far_scale=2.0,
+  pnone_far_diam=6.0 on the hn4 champion): decisive far-containment +0.033 (p=0.001),
+  human-GT far up, ZERO referee regressions (EXP-OP-24→29). **But it is a GLOBAL SCALAR
+  stopgap** — the "helps far / costs near" tension is the signature of one constant applied
+  to a POSITION-DEPENDENT quantity (Mark 07-29). **The successor is a
+  GEOMETRY/POSITION-CONDITIONED continuous hold** (strength a smooth function of the ball's
+  depth + distance-to-frame-boundary, not a far/near switch): dissolves the tension and
+  generalizes because it is parameterized by each game's geometry, not by fit constants.
+  **COUPLED TO #19 (ray-geometry):** conditioning leans on the homography (the ONE BUG
+  CLASS wavy ruler); fd6 leans lightly, the conditioned version leans hard — do #19 first
+  or the conditioning imports the ruler error. **Generalization caveat:** fd6 is validated
+  ONLY on similar-geometry Reolink games; cross-geometry (Dahua) untested (no ball GT) —
+  "better for fields like these," not proven general. Detector half (46% undetected far,
+  EXP-OP-24) is the other untapped far lever (GPU training).
 
 - **AC REFERENCES ((w)/(x), 07-27): tier-3 = fresh aim where one exists (spc), else
   remap-verified legacy viewport (fair: r 0.981 — the pending fair re-run is CLOSED,
@@ -96,6 +111,38 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   one model, no iGPU cost. Joint co-training (λ-sweep) is the FALLBACK only if frozen-head
   person quality is insufficient (EXP-DIST-70: ph1v2's far-ordering damage is the only
   CI-separated harm on record).
+
+---
+
+## 2026-07-29 (y): FAR-HOLD — fd6 BANKED as the interim; the PRINCIPLED lever is geometry/position-CONDITIONING, not a global scalar (Mark)
+
+**Banked (keep, don't lose):** the 5-cycle PDCA arc (EXP-OP-24→29) produced **fd6** —
+`pnone_far_scale=2.0` + `pnone_far_diam=6.0` in the miss-cost chain: when the top
+candidate is very far (expected diameter < 6px, geometry-derived per game), the tracker
+holds it 2x longer before taking a miss. Result: far containment +0.033 (p=0.001,
+decisive on the honest metric), human-GT far +0.31 on spc worst-cases, ZERO referee
+regressions, a config knob (no retrain/labels). Validated on 4 Reolink ball-GT games.
+
+**Mark's structural critique (07-29, correct):** the "helps far, costs a little near"
+tension is the tell that a GLOBAL SCALAR is being used for a POSITION-DEPENDENT quantity.
+Near vs far is inherently geometric — it depends on the ball's field depth and its
+position relative to the frame boundaries. A single hold strength can only buy the best
+compromise, optimal nowhere. fd6 already classifies "far" per-game via the homography
+(that part generalizes), but the STRENGTH (2.0) and THRESHOLD (6px) and the BINARY form
+are constants fit to specific field geometries — so fd6 "generalizes as far as the field
+geometry is similar," and is unfalsified as geometry diverges (all ball-GT games are one
+camera family).
+
+**Decision — the successor lever:** replace the binary far/near switch + global strength
+with a CONTINUOUS function of geometry: hold strength ramps smoothly with the ball's
+expected size (depth) AND its distance to the current frame boundary (a ball drifting
+toward the edge is about to be lost). This dissolves the tension by construction and
+generalizes because it consumes each game's geometry rather than fit constants.
+**DEPENDENCY:** this leans harder on the homography — the ONE BUG CLASS "wavy ruler" — so
+it is coupled to the ray-geometry fix (task #19). Prototype may test on the current
+geometry to size the effect, but the durable version is gated on #19. **fd6 ships as a
+conservative, reversible interim (config knob + visual check) for the current champion;
+the geometry-conditioned hold is the real target.** Investigation opened as EXP-OP-30.
 
 ---
 
