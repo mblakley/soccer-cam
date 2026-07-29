@@ -4,6 +4,42 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-23: mgarch's FAR WIN re-checked on the honest metric — a small frame-wise containment gain (+0.03), NOT the headline "0.44→0.71"; that number was capture@600 on the adversarial viewport-worst subset (2026-07-28, Mark's containment principle)
+
+Applying the EXP-OP-22 correction to the PROMOTION case: mgarch (candidate) vs hn4
+(champion), far ball-GT frames, spc+fair (the games with mgarch dumps), capture@600 AND
+containment:
+| game | n_far | cap hn4→mg | contain hn4→mg |
+|---|---|---|---|
+| spc | 1052 | 0.683→0.702 (+0.018) | 0.753→0.781 (+0.029) |
+| fair | 178 | 0.236→0.253 (+0.017) | 0.258→0.292 (+0.034) |
+**Per-frame: mgarch is better on far on BOTH games and BOTH metrics — but the gain is
+SMALL (+0.018 cap, +0.03 containment), not a landslide.** Pooled event-level (104 events):
+containment TIED (0.691/0.691, p=0.87); capture mgarch decisively WORSE (−0.072, p=0.03 —
+mg wins 12 events, loses 26). So mgarch's per-frame far gains come from a few big events
+while it centers slightly worse across many small ones; containment forgives the centering
+(zoom contains the ball) → event-wise tied.
+
+**RECONCILIATION with EXP-OP-19's "spc far 0.44→0.71":** same pattern as the filter — that
+headline was capture@600 vs the HUMAN VIEWPORT-GT on the DIV-SAMPLED viewport-worst subset
+(curated AutoCam-failure moments). Against BALL GT on the FULL far distribution with
+CONTAINMENT, mgarch's far edge is a real but modest **+0.03 frame-wise, not decisive
+event-wise.** The visible far saves (the promotion win clip) are real — they're the big
+adversarial moments — but they're a minority of far frames; the average far frame is only
+slightly better.
+
+**PROMOTION IMPACT (honest):** mgarch's far advantage is genuine but SMALL on the
+product-relevant full-distribution containment metric — NOT the crushing win the
+capture@600-on-worst-subset numbers implied. **mgarch's core case is NOT far; it is
+CROSS-CAMERA (Dahua) robustness + non-regression** (its Dahua-refresh design purpose,
+EXP-OP-19: PIT 0.54→0.64) AND it does not make far worse. The far headline across the arc
+has been inflated by (a) adversarial subsets and (b) the capture@600 centering proxy;
+corrected, the far story is "modestly better, not decisive." **Standing method fix: all
+"far win" claims report containment vs ball GT on the full distribution, not capture@600
+on curated viewport subsets.**
+**Artifacts:** analysis inline; spc/fair hn4+mgarch campaths in ladder; ball GT MD5-verified
+(EXP-OP-22).
+
 ## EXP-OP-22 RESULTS: POWER REVERSES THE FILTER'S FAR STORY — pooled over 4 Reolink games vs BALL GT, F is DECISIVELY WORSE on far (−0.057, p=0.003); its earlier far "win" was specific to the adversarial viewport-worst subset (2026-07-28)
 
 The breadth dumps (chili + pitmust, hn4@s4) finished 13:39; A0 + F campaths generated
