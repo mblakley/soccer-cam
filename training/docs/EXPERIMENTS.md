@@ -4,6 +4,25 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-28 (PDCA cycle 4): the far levers do NOT compound — the HOLD (fn20) is the far lever; mgarch adds nothing on far (mgfn20 vs fn20 = +0.000) (2026-07-28)
+
+Far containment vs ball GT, spc+fair (the mgarch-dump games), 4 arms: A0 (hn4), fn20
+(hn4+hold), mg (mgarch), mgfn20 (mgarch+hold). Pooled far events (n=104):
+- fn20 vs A0: **+0.056** (p=0.052) — the hold helps.
+- mg vs A0: **+0.000** (p=0.875) — mgarch alone does NOT help far event-wise (confirms
+  EXP-OP-23).
+- mgfn20 vs fn20 (does the DETECTOR add on top of the hold?): **+0.000** (p=0.57) — NO.
+- mgfn20 vs mg (does the HOLD add on top of the detector?): +0.056 (p=0.21) — yes, the
+  hold is the whole effect.
+**The two levers do NOT compound: the hold owns the far win; the detector contributes ~0
+on far.** So the far product win is fn20 (the hold) INDEPENDENT of the detector choice —
+shipping fn20 helps far whether or not mgarch is promoted, and mgarch's case stays
+cross-camera (Dahua), not far. **Watch-item:** mgarch+hold dropped spc's per-game
+frame-mean far to 0.633 (vs fn20 0.793) — the hold may over-hold on mgarch's differing
+candidate stream on spc; event-weighting washes it out but flag before combining in
+production. **ACT:** compound closed; fn20 stands alone. Cycle 5 chases the fn20 near dip
+(the far-gate threshold).
+
 ## EXP-OP-27 RESULTS (PDCA cycle 3, the GATE): fn20 PASSES the full scoreboard — decisive far win, ZERO referee regressions; human-GT far +0.30 on spc worst-cases; SHIPPABLE far lever (a config knob) (2026-07-28)
 
 fn20 (--pnone-far-scale 2.0) vs A0 on the FULL instrument suite (human-viewport GT +
