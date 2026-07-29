@@ -4,6 +4,47 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-32 (#19 Phase A+B): ray-geometry ruler VALIDATED — polygon-derived tilt matches Mark's 22° rig, and the planar homography's bow is confirmed real + structured (edge-corr +0.67, under-sizes near −28% / over-sizes far +42%) (2026-07-29)
+
+**Context:** Mark supplied the rig (camera height 10–15 ft, tilt ~22°) and said "figure
+it out by field geometry." Reading `cylindrical_view.py` revealed the render ALREADY
+recovers camera orientation from the polygon (`field_world_up` via touchline/goal-line
+vanishing points → `mount_tilt_from_up`). So #19's orientation is calibration-free; only
+HEIGHT (scale) was missing. Source confirmed: 180° equirectangular panorama (7680×2160,
+`render_src_hfov_deg=180`, vfov 50.6°) — a flat pinhole homography of THAT is the bow.
+
+**Phase A — validate orientation + scale (6 games):** polygon-derived mount tilt =
+spc 25.5°, fair 21.5°, chili 16.9°, pitmust 22.3°, fair0530 25.3°, lakefront 27.3°
+(mean ~23°, most within ±3° of Mark's 22°; chili the low outlier). At H=3.81 m (12.5 ft)
+the implied field dims are realistic youth-soccer sizes (W 39–46 m, L 74–98 m) — Mark's
+independent height estimate and real field sizes are mutually consistent. far/near range
+ratio ~7–8× (near touchline ~6 m, far ~44–52 m). **Orientation + scale VALIDATED.** Tilt
+VARIES per game (16.9–27.3°) — the mount isn't identical each game, confirming per-game
+conditioning must consume each game's own geometry (not a global constant).
+
+**Phase B — does the ray ruler remove the bow? (3611 real GT ball positions):** compared
+`FieldGeometry.expected_ball_diameter_px` (planar, current) vs ray-geometry
+`D·src_w/(range·rad(180))` where `range = H/ray_world[down]`. Fit ONE global scale (log
+space) so absolute scale can't confound; residual = planar's SHAPE error vs correct
+geometry. **The bow is real and STRUCTURED:**
+- edge: corr(residual, |yaw|) = **+0.67** pooled (per-game 0.56–0.83, all strong) — error
+  grows toward frame edges, exactly DECISIONS (p)'s claim.
+- depth: corr(residual, range) = +0.31; by tertile the planar ruler **under-sizes near
+  balls −28%, is ~correct at mid (−2%), and over-sizes far balls +42%** — the homography
+  is too flat (insufficient foreshortening). The ~70% near→far swing IS the "±35% wavy
+  ruler," now measured against correct geometry.
+
+**Key refinement for Phase C:** raw `range` explodes near the horizon (H/sin(depression)→∞;
+saw a 20 km outlier), so the CONDITIONING variable should be the **depression angle below
+the leveled horizon** — bounded (0–90°), stable, monotonic with nearness, and H-INDEPENDENT
+(pure orientation + pixel row). Height is only needed for the detector's absolute size
+prior, NOT for the operator's far/near conditioning. **CONCLUSION: #19's premise is
+confirmed — the planar ruler is systematically wrong in exactly the far/edge regime where
+far balls live, and the ray model corrects it. Phase C: re-run EXP-OP-30's geometry-
+conditioned hold on the depression-angle axis and test whether it now BEATS binary fd6.**
+
+---
+
 ## EXP-OP-31 RESULTS (fd6 6-game verification): the far win HOLDS at full power (+0.026, p=0.0025) — but it is NOT uniform; it concentrates in games with far-containment HEADROOM and slightly REGRESSES near-ceiling games — the direct fingerprint of "should be set per-game" (2026-07-29)
 
 fd6 (pnone_far_scale=2.0, pnone_far_diam=6.0) vs A0, containment vs ball GT, pooled
