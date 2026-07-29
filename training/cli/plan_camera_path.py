@@ -103,6 +103,8 @@ def replay_champion_chain(
     pnone_far_scale: float = 1.0,
     pnone_far_diam: float = 8.0,
     pnone_far_near_diam: float = 0.0,
+    pnone_depr_far_deg: float = 0.0,
+    pnone_depr_near_deg: float = 0.0,
     phys_sigma_px: float = 5.0,
     bridge_w: float = 2.0,
     oob_w: float = 2.0,
@@ -239,6 +241,30 @@ def replay_champion_chain(
     #   far_diam — a function of depth, not a switch, to dissolve the near/far
     #   tension. (Leans harder on the homography, the ONE BUG CLASS ruler — see
     #   DECISIONS (y); prototype on current geometry, durable form gated on #19.)
+    # - DEPRESSION-CONDITIONED (#19, EXP-OP-33, Mark's lens-compensated axis):
+    #   condition on the ray-geometry DEPRESSION ANGLE below the leveled horizon
+    #   (from the polygon-derived world-up, cylindrical_view.field_world_up)
+    #   instead of the planar expected diameter. Depression is the lens-CORRECT
+    #   farness measure — the planar ruler bows ±35%, worst at edges/far
+    #   (EXP-OP-32) — and unlike range it stays bounded at the horizon. Full
+    #   pnone_far_scale at depr<=pnone_depr_far_deg (far), ramping to pnone_scale
+    #   at depr>=pnone_depr_near_deg (near). Active when near_deg>far_deg;
+    #   supersedes the diam path. This is the durable form (y) was gated on.
+    depr_cond = pnone_depr_near_deg > pnone_depr_far_deg
+    r_cw = None
+    if depr_cond:
+        from video_grouper.inference.cylindrical_view import (
+            _cam_from_world,
+            _vec,
+            field_world_up,
+            pixel_to_yaw_pitch,
+        )
+
+        _up = field_world_up(polygon, src_w, src_h, 180.0)
+        if _up is not None:
+            r_cw = _cam_from_world(_up)
+    depr_span = max(pnone_depr_near_deg - pnone_depr_far_deg, 1e-6)
+
     ramp = pnone_far_near_diam > pnone_far_diam
     span = max(pnone_far_near_diam - pnone_far_diam, 1e-6)
     mc = []
@@ -248,14 +274,23 @@ def replay_champion_chain(
         if pnone_far_scale != pnone_scale and frames[i]:
             jt = int(np.argmax(probs[i, : len(frames[i])]))
             top = frames[i][jt]
-            diam = float(
-                geom.expected_ball_diameter_px(np.asarray([[top.x, top.y]], float))[0]
-            )
-            if ramp:
-                wf = min(max((pnone_far_near_diam - diam) / span, 0.0), 1.0)
+            if r_cw is not None:
+                yaw, pitch = pixel_to_yaw_pitch(top.x, top.y, src_w, src_h, 180.0)
+                dw = r_cw.T @ np.asarray(_vec(np.deg2rad(yaw), np.deg2rad(pitch)))
+                depr = np.degrees(np.arcsin(min(max(float(dw[1]), -1.0), 1.0)))
+                wf = min(max((pnone_depr_near_deg - depr) / depr_span, 0.0), 1.0)
                 scale = pnone_scale + (pnone_far_scale - pnone_scale) * wf
-            elif diam < pnone_far_diam:
-                scale = pnone_far_scale
+            else:
+                diam = float(
+                    geom.expected_ball_diameter_px(np.asarray([[top.x, top.y]], float))[
+                        0
+                    ]
+                )
+                if ramp:
+                    wf = min(max((pnone_far_near_diam - diam) / span, 0.0), 1.0)
+                    scale = pnone_scale + (pnone_far_scale - pnone_scale) * wf
+                elif diam < pnone_far_diam:
+                    scale = pnone_far_scale
         mc.append(float(scale * base))
     cfg = replace(
         RerankConfig(),

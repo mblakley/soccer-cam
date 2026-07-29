@@ -297,6 +297,8 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         pnone_far_scale=args.pnone_far_scale,
         pnone_far_diam=args.pnone_far_diam,
         pnone_far_near_diam=args.pnone_far_near_diam,
+        pnone_depr_far_deg=args.pnone_depr_far_deg,
+        pnone_depr_near_deg=args.pnone_depr_near_deg,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -605,6 +607,22 @@ def main(argv: list[str] | None = None) -> None:
         "the hold strength RAMPS smoothly with depth from 1x at this diameter "
         "(near) to --pnone-far-scale at --pnone-far-diam (far), instead of a "
         "binary switch. Dissolves the near/far tension. 0 = binary (fd6).",
+    )
+    a.add_argument(
+        "--pnone-depr-far-deg",
+        type=float,
+        default=0.0,
+        help="EXP-OP-33 (#19, lens-compensated axis): full --pnone-far-scale hold "
+        "at ray-geometry DEPRESSION angle <= this (far field). Ramps to 1x at "
+        "--pnone-depr-near-deg. Active when near_deg>far_deg; supersedes the "
+        "diam path with the geometry-correct farness axis (EXP-OP-32).",
+    )
+    a.add_argument(
+        "--pnone-depr-near-deg",
+        type=float,
+        default=0.0,
+        help="Depression angle (deg) at/above which no hold (near field). "
+        "See --pnone-depr-far-deg.",
     )
     a.add_argument(
         "--static-filter-offfield-only",
