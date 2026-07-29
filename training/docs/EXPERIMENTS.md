@@ -4,6 +4,31 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-30 RESULTS (geometry-conditioning go/no-go): continuous conditioning is WORSE than fd6 ON THE BENT RULER — CONFIRMS the #19 dependency; the ramp acts in the mid-depth range where the planar homography is most distorted (2026-07-29)
+
+Continuous depth-ramp (cont15: 15→6px, cont10: 10→6px) vs fd6 (binary <6px) vs A0,
+containment vs ball GT (spc/fair/chili, pitmust pending — signal robust). Δ vs A0:
+| band | fd6 (binary) | cont15 (ramp) | cont10 (ramp) |
+|---|---|---|---|
+| far (242) | **+0.047 (p=0.001)** | +0.035 (p=0.017) | +0.045 (p=0.032) |
+| mid (126) | −0.002 | +0.009 | −0.004 |
+| near (126) | −0.044 (p=0.11, ns) | **−0.051 (p=0.039, WORSE)** | −0.050 (p=0.070) |
+**The continuous ramp is WORSE than the binary fd6:** less far gain AND a decisively worse
+near cost (cont15 near p=0.039 vs fd6's non-significant −0.044). **This is the predicted
+go/no-go answer (DECISIONS (y)) and it is NO-GO on the bent ruler.** Mechanism = exactly
+Mark's distortion point: the ramp applies a graded hold across the mid-depth range
+(6–15px expected diameter), which is where the PLANAR homography is MOST distorted, so it
+holds based on an unreliable distance and over-holds MORE balls into the far→near
+transition. The binary fd6 survives only because it acts on the EXTREME far (<6px), where
+even the bent ruler is unambiguous (a far ball is tiny regardless of distortion).
+**CONCLUSION — the geometry-conditioning direction is RIGHT but cannot be prototyped on
+the current ruler; it is GATED on a lens-compensated distance (#19).** The cheap prototype
+did its job: don't invest in continuous conditioning until #19 lands. **fd6 (binary,
+robust to the ruler in its extreme-far operating range) stands as the interim far lever.**
+**ACT → the loop's next real lever is #19:** a lens-compensated distance-from-camera
+model. Next cycle investigates whether a better distance can be prototyped from existing
+code (the render's cylindrical model) or needs the full ray-geometry build.
+
 ## EXP-OP-30 PRE-REGISTRATION (geometry-conditioning investigation, before numbers): CONTINUOUS depth-conditioned hold vs fd6's binary switch (Mark's direction, DECISIONS (y)) (2026-07-29)
 
 **PLAN (Mark 07-29):** fd6's "helps far / costs near" tension is the signature of a GLOBAL
