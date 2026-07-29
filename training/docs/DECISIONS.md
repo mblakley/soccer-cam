@@ -12,11 +12,15 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
   stopgap** — the "helps far / costs near" tension is the signature of one constant applied
   to a POSITION-DEPENDENT quantity (Mark 07-29). **The successor is a
   GEOMETRY/POSITION-CONDITIONED continuous hold** (strength a smooth function of the ball's
-  depth + distance-to-frame-boundary, not a far/near switch): dissolves the tension and
-  generalizes because it is parameterized by each game's geometry, not by fit constants.
-  **COUPLED TO #19 (ray-geometry):** conditioning leans on the homography (the ONE BUG
-  CLASS wavy ruler); fd6 leans lightly, the conditioned version leans hard — do #19 first
-  or the conditioning imports the ruler error. **Generalization caveat:** fd6 is validated
+  LENS-COMPENSATED DISTANCE FROM CAMERA + distance-to-frame-boundary, not a far/near
+  switch): dissolves the tension and generalizes because it is parameterized by each
+  game's geometry, not by fit constants. **The conditioning variable is 3D
+  distance-from-camera, NOT "field depth" (Mark 07-29):** VERIFIED today's
+  expected_ball_diameter_px is a PLANAR homography with NO lens model (the ONE BUG CLASS
+  wavy ruler, most distorted at edges/far where far balls are), so fd6's far/near
+  classification is itself distortion-corrupted. **#19 (ray-geometry) IS the dependency —
+  it produces the correct axis to condition on; fd6 + the EXP-OP-30 prototype run on the
+  bent ruler and only size the effect.** **Generalization caveat:** fd6 is validated
   ONLY on similar-geometry Reolink games; cross-geometry (Dahua) untested (no ball GT) —
   "better for fields like these," not proven general. Detector half (46% undetected far,
   EXP-OP-24) is the other untapped far lever (GPU training).
@@ -135,12 +139,18 @@ camera family).
 
 **Decision — the successor lever:** replace the binary far/near switch + global strength
 with a CONTINUOUS function of geometry: hold strength ramps smoothly with the ball's
-expected size (depth) AND its distance to the current frame boundary (a ball drifting
+DISTANCE FROM CAMERA AND its distance to the current frame boundary (a ball drifting
 toward the edge is about to be lost). This dissolves the tension by construction and
 generalizes because it consumes each game's geometry rather than fit constants.
-**DEPENDENCY:** this leans harder on the homography — the ONE BUG CLASS "wavy ruler" — so
-it is coupled to the ray-geometry fix (task #19). Prototype may test on the current
-geometry to size the effect, but the durable version is gated on #19. **fd6 ships as a
+**THE CONDITIONING VARIABLE IS LENS-COMPENSATED 3D DISTANCE FROM CAMERA — not "field
+depth" (Mark 07-29).** VERIFIED: today's `expected_ball_diameter_px` (what fd6 + the
+EXP-OP-30 prototype use) is a PLANAR ground-plane homography with NO lens model — the
+ONE BUG CLASS "wavy ruler," most distorted at the frame edges / far field, exactly where
+far balls are. So fd6's own far/near classification is distortion-corrupted (coarse
+binary hides it); the continuous prototype conditions on the same bent ruler.
+**#19 (ray-geometry) IS the dependency, not merely coupled: it produces the correct axis
+(lens-compensated distance) to condition on.** The prototype sizes the effect on the bent
+ruler; the durable geometry-conditioned hold is gated on #19. **fd6 ships as a
 conservative, reversible interim (config knob + visual check) for the current champion;
 the geometry-conditioned hold is the real target.** Investigation opened as EXP-OP-30.
 
