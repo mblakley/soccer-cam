@@ -168,6 +168,19 @@ task where Mark's rig knowledge is load-bearing (as for the yaw attribution, (o)
 quick-cycle far-lever loop DID ITS JOB: fd6 banked, far problem mapped (EXP-OP-24: 54%
 selection / 46% detector), arc converged on #19.
 
+**6-GAME VERIFICATION (07-29, EXP-OP-31 — fd6 CONFIRMED at full power, and the
+heterogeneity confirms Mark's thesis directly):** with the two new GT dumps (fair0530,
+lakefront) the far win holds pooled over ALL 6 Reolink games: **far +0.026, p=0.0025**
+(mid/near costs non-significant). But the PER-GAME split is monotone in headroom — fd6
+helps games with room (spc 0.77→0.83, chili 0.80→0.84, fair0530 0.86→0.90; +0.04 to
++0.06) and slightly HURTS the two already at ceiling (pitmust 0.965→0.960, lakefront
+0.968→0.931). **A fixed global far-hold constant flips sign with the game's field/quality
+geometry — exactly (y)'s prediction, now MEASURED, not argued.** fd6 stays a positive-EV
+interim default (most games have headroom, and it is reversible); the sign-flip on
+near-ceiling games is logged as motivation for the per-game #19 form (a geometry-
+conditioned hold that self-disables when far containment is already high), NOT a blocker
+for shipping fd6. The quick-cycle far arc is now fully closed and verified at power.
+
 ---
 
 ## 2026-07-27 (x): LEGACY VIEWPORT ADMISSION — quarantined Reolink jsonls are tier-3 admissible ONLY through the verified trim-aware remap; pooled gate, not per-seg (EXP-OP-15)

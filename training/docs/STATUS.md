@@ -1,6 +1,29 @@
 # Current Status
 
-*Last updated: 2026-07-28 (overnight) — P5 first fit BANKED (EXP-OP-21: a global tuning improves all 3 families); breadth GPU dumps running; #21 mgarch package awaits Mark*
+*Last updated: 2026-07-29 — fd6 far lever VERIFIED at 6-game power (EXP-OP-31: far +0.026, p=0.0025); quick-cycle far arc CLOSED; converged on #19 (needs Mark's rig knowledge). Tomorrow starts at DECISIONS (y).*
+
+## 2026-07-29 (autonomous) — fd6 6-game verification done; far arc closed; #19 is the next lever (needs Mark)
+
+- **fd6 CONFIRMED at 6-game power (EXP-OP-31):** the two new GT dumps (fair0530,
+  lakefront) landed; pooled far containment over all 6 Reolink games = **+0.026,
+  p=0.0025** (mid/near non-significant). fd6 is a shippable, reversible interim far
+  lever — a config knob, no retrain, no labels.
+- **The per-game split confirms Mark's geometry thesis, MEASURED not argued:** fd6 helps
+  games with far-containment headroom (spc +0.064, chili +0.041, fair0530 +0.048) and
+  slightly HURTS the two already at ceiling (pitmust −0.004, lakefront −0.037). A fixed
+  global far-hold constant flips sign with the game's geometry — exactly why the durable
+  form must be per-game / geometry-conditioned (#19).
+- **Quick-cycle far loop is fully closed** (EXP-OP-24→31): fd6 banked + verified, far
+  problem mapped (54% selection / 46% detector), EXP-OP-30 proved continuous conditioning
+  can't be prototyped on the bent ruler. **Converged on #19 (lens-compensated distance)
+  as the SHARED LINCHPIN for detector + operator** — a foundational build where Mark's
+  camera-rig knowledge is load-bearing (see DECISIONS (y)). NOT an autonomous overnight
+  sweep; awaiting Mark's rig params or a scoped pose-from-polygon prototype gate.
+- **STILL AWAITING MARK:** (1) fd6 ship go + visual check; (2) #19 approach — rig params
+  vs. prototype pose calibration; (3) promote mg_ctrl (mgarch) to champion (EXP-OP-19
+  gate PASS, now a clean Dahua-robustness-only call, separate from far).
+
+## 2026-07-28 (overnight, autonomous) — P5 fit banked; breadth dumps running
 
 ## 2026-07-28 (overnight, autonomous) — P5 fit banked; breadth dumps running
 

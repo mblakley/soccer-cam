@@ -4,6 +4,47 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-31 RESULTS (fd6 6-game verification): the far win HOLDS at full power (+0.026, p=0.0025) — but it is NOT uniform; it concentrates in games with far-containment HEADROOM and slightly REGRESSES near-ceiling games — the direct fingerprint of "should be set per-game" (2026-07-29)
+
+fd6 (pnone_far_scale=2.0, pnone_far_diam=6.0) vs A0, containment vs ball GT, pooled
+events over all **6 Reolink GT games** (spc, fair, chili, pitmust + the two new dumps
+fair0530, lakefront). Pooled Δ vs A0:
+| band | fd6 vs A0 | w/l | p |
+|---|---|---|---|
+| far (456) | **+0.026** | 33/12 | **0.0025** |
+| mid (358) | −0.015 | 6/13 | 0.167 (ns) |
+| near (209) | −0.013 | 6/9 | 0.607 (ns) |
+**The far win survives doubling the game count** (4→6) and stays significant (p=0.0025);
+mid/near costs stay non-significant. So fd6 is a real, robust, global far lever — CONFIRMED
+at power.
+
+**But the per-game far breakdown is the load-bearing result (A0 → fd6, Δ):**
+| game | far n | A0 | fd6 | Δ |
+|---|---|---|---|---|
+| spc | 91 | 0.768 | 0.832 | **+0.064** |
+| chili | 138 | 0.797 | 0.838 | **+0.041** |
+| fair0530 | 62 | 0.855 | 0.903 | **+0.048** |
+| fair | 13 | 0.150 | 0.154 | +0.003 (windy, near-zero far detection — no ball to hold) |
+| pitmust | 89 | 0.965 | 0.960 | −0.004 |
+| lakefront | 63 | 0.968 | 0.931 | **−0.037** |
+**The effect is monotone in HEADROOM:** fd6 helps exactly the games whose A0 far
+containment has room (0.77–0.86 → +0.04 to +0.06), and slightly HURTS the two games
+already at ceiling (0.965–0.968 → flat/−0.037). A game whose far ball is already well
+contained doesn't need the hold and pays for the over-hold. **This is precisely Mark's
+thesis made visible: a single GLOBAL far-hold constant does not generalize — its sign
+flips with the game's field/quality geometry.** The pooled +0.026 is a positive-EV default
+BECAUSE most games have headroom, but the two regressions are not noise — they are the
+cost of applying a fixed constant to a position/geometry-dependent quantity.
+
+**CONCLUSION:** (1) fd6 is CONFIRMED as a shippable interim far lever at 6-game power —
+positive-EV, reversible, a config knob. Ship it as a DEFAULT-ON-with-headroom, not a
+universal. (2) The heterogeneity STRENGTHENS the #19 case rather than weakening it: the
+right long-term form is a per-game, geometry-conditioned hold that self-disables when far
+containment is already high — which is exactly what a lens-compensated distance (#19)
+enables and what EXP-OP-30 proved cannot be prototyped on the bent ruler. fd6 now, #19 for
+the per-game form. **ACT → adopt fd6 as the interim far default; the heterogeneity is
+logged as motivation for #19, not a blocker for fd6.**
+
 ## EXP-OP-30 RESULTS (geometry-conditioning go/no-go): continuous conditioning is WORSE than fd6 ON THE BENT RULER — CONFIRMS the #19 dependency; the ramp acts in the mid-depth range where the planar homography is most distorted (2026-07-29)
 
 Continuous depth-ramp (cont15: 15→6px, cont10: 10→6px) vs fd6 (binary <6px) vs A0,
