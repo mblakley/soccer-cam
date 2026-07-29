@@ -294,6 +294,7 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         miss_entry_margin_k=args.miss_entry_margin_k,
         emission_weight=args.emission_weight,
         pnone_scale=args.pnone_scale,
+        pnone_far_scale=args.pnone_far_scale,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -576,6 +577,15 @@ def main(argv: list[str] | None = None) -> None:
         default=1.0,
         help="scale the selector emission prior AND the miss cost together "
         "(1.0 = shipped)",
+    )
+    a.add_argument(
+        "--pnone-far-scale",
+        type=float,
+        default=1.0,
+        help="EXP-OP-26: DEPTH-GATED miss-cost hold — applied only when the top "
+        "candidate is FAR (diam < 8px). Holds detected far balls WITHOUT "
+        "over-holding near clutter (the near cost of global --pnone-scale). "
+        "1.0 = off; overrides pnone-scale on far frames only.",
     )
     a.add_argument(
         "--static-filter-offfield-only",
