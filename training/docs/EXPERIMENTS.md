@@ -4,6 +4,27 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-25 RESULTS (PDCA cycle 1): hold-far-ball VALIDATED — pnone-scale recovers far containment (+0.021 at pn15) with a small near-band cost; the first honest far lever this session (2026-07-28)
+
+Containment vs A0 (pooled events, honest metric):
+| band | pn15 | pn20 | pn30 |
+|---|---|---|---|
+| far (n=331) | **+0.021** (p=0.096) | +0.018 (p=0.065) | +0.010 |
+| mid (247) | +0.010 | +0.020 | +0.002 |
+| near (181) | −0.012 (ns) | −0.027 (p=0.077) | −0.032 |
+**Hypothesis CONFIRMED (EXP-OP-24 selection half):** raising the miss cost so the tracker
+HOLDS a detected candidate recovers far containment (+0.02, same magnitude as mgarch's
+whole far gain, but from a config knob, no retrain). NOT yet decisive (p~0.07-0.10) but
+consistent (28-32 event-wins vs 16-18 losses on far). **The cost is near-band:** a higher
+global miss cost over-holds near clutter (near −0.01→−0.03 as pnone rises; small,
+mostly non-significant at pn15). Mid is clean. **pn15 = the sweet spot** (far gain,
+minimal near cost). This is the first far improvement this session that survives the
+honest containment metric AND is grounded in the diagnostic, not an adversarial subset.
+**ACT → cycle 2:** the near cost is because pnone-scale is GLOBAL — it holds candidates
+everywhere. The fix is DEPTH-GATING: raise the miss cost only when the top candidate is
+FAR (where detected-but-lost happens), leave near untouched (where holding hurts). Should
+keep far +0.02 and zero the near drag → a clean far win. Building --pnone-far-only next.
+
 ## EXP-OP-25 PRE-REGISTRATION (PDCA cycle 1, before numbers): hold-detected-far-ball — pnone-scale sweep to recover the 272 detected-but-lost far frames (2026-07-28, overnight)
 
 **PLAN (from EXP-OP-24):** 54% of far loss is the tracker dropping a DETECTED far ball.
