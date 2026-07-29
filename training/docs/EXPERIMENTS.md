@@ -4,6 +4,21 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-25 PRE-REGISTRATION (PDCA cycle 1, before numbers): hold-detected-far-ball — pnone-scale sweep to recover the 272 detected-but-lost far frames (2026-07-28, overnight)
+
+**PLAN (from EXP-OP-24):** 54% of far loss is the tracker dropping a DETECTED far ball.
+Hypothesis: the miss-state (−log p_none) outweighs the faint far candidate's emission, so
+the tracker takes a miss over a real ball. **Lever: raise the miss cost (--pnone-scale,
+w2 56be52b) so the tracker HOLDS a detected candidate longer.**
+**DO:** run-a with pnone-scale ∈ {1.5, 2.0, 3.0} vs A0 (1.0) on the 4 Reolink ball-GT
+games (F-OP CPU). **CHECK (honest metrics per Mark, EXP-OP-22):** far CONTAINMENT vs ball
+GT, pooled event-level sign test vs A0; AND mid + near containment non-regression (a
+higher miss cost could over-hold onto distractors near-band). **ACT/gate:** a pnone value
+that IMPROVES far containment (decisive or clean positive) with NO decisive mid/near
+regression advances to cycle 2 (tune / combine with arm M); if all hurt near/mid or
+don't move far, pnone is closed and cycle 2 tries the emission side (boost far candidates
+directly) or the detector half. No labels; CPU-only.
+
 ## EXP-OP-24: FAR-LOSS ANATOMY (the keystone diagnostic) — far loss is 100% TRACKING, 0% framing; split ~54% selection (ball detected, tracker didn't hold) / ~46% detector (ball not detected, worst on windy fair) (2026-07-28)
 
 For every far ball-GT frame where the ball is NOT contained in our viewport (champion
