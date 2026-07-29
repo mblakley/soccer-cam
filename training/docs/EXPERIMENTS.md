@@ -38,7 +38,12 @@ ONLY on detected distractor-parks (a gated filter), not blanket every frame. The
 product win must come from the DETECTOR (mgarch, which genuinely lifts far — EXP-OP-19)
 and W4 framing, not this filter.
 **Method note:** pit (2024 Dahua) EXCLUDED — no ball GT (viewport-GT only); the pool is
-the 4 Reolink ball-GT games. Artifacts: breadth_ladder campaths; analysis inline.
+the 4 Reolink ball-GT games. Artifacts: breadth_ladder campaths; analysis inline. **Input
+integrity VERIFIED (07-28):** the ball_labels.jsonl the read consumed on F-OP is MD5-
+identical to the server originals for all four games (spc DD55FF…/1785, fair E544B3…/216,
+chili 41332F…/845, pitmust 22889B…/811) — the analysis ran on staged copies but they are
+byte-exact to the authoritative F:\Heat_2012s data (F-OP's local F: ≠ the server F:, which
+it reaches via the video share; the path fell back to staged copies, same bytes).
 
 ## EXP-OP-21 RESULTS: a single GLOBAL planner tuning improves ALL THREE families — the fit-on-pit config is the universal winner (+spc/+fair/+pit); the shipped planner has modest composite headroom; generality CONFIRMED, no venue memory (2026-07-28)
 
