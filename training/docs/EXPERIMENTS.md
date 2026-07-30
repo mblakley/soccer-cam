@@ -65,6 +65,49 @@ share. Method: rebuild selector labels/features with ray expected-size, retrain,
 compare vs the incumbent on the 6 GT games. Detector-side candidate gate follows with
 EXP-OP-36's retrain if this is positive.
 
+**EXP-OP-35 CLOSED (2026-07-30 10:33): NO-GO — the METRIC-CONSISTENT joint swap ALSO
+loses, decisively, and WORSE than EXP-OP-34's piecemeal swap. The planar metric is
+load-bearing across the WHOLE selection stack, not merely mis-calibrated under one
+component.** Build: v8 selector retrained end-to-end on ray meters — teacher tracker,
+snap/jump gates, features at BOTH train and eval, tracker world model (w2 b4dc883:
+`--world-model` in build_selector_labels + kill_test_selector with a labels-metric
+consistency hard-fail, `--feature-world-model` in the replay chain; recipe
+`overnight_selector_v8.py`). 14 games, ~60.4k ray-metric labels (Upper_90 05.10 DROPPED
+from training — it is EXP-OP-37's held-out game, now guarded in code via
+HELD_OUT_TOKENS; note v7 HAD trained on it, so this is also a small training-set delta
+between arms). Arms on the 6 GT games, both under dcB flags: dcB2 = v7 net re-run at
+b4dc883 (refactor identity canary) vs v8ray = v8 net + `--world-model ray
+--feature-world-model ray`. **Canary PASS: dcB2 ≡ dcB exactly (d+0.0000, w0/l0, every
+band) — the comparison is clean.** Pooled containment vs ball GT:
+| band | dcB2 vs A0 | v8ray vs A0 | **v8ray vs dcB2 (head-to-head)** |
+|---|---|---|---|
+| far (456) | +0.023 (p=.049) | −0.056 (p=.0001) | **−0.079 (w15/l73, p<1e-4)** |
+| mid (358) | +0.005 (ns) | −0.046 (p=.002) | **−0.051 (w5/l28, p=.0001)** |
+| near (209) | −0.015 (ns) | −0.043 (p=.043) | −0.028 (w9/l18, ns) |
+Per-game far: v8ray loses EVERYWHERE — the headroom games (spc .800→.757, chili
+.848→.731, fair0530 .903→.774), the ceiling games (pitmust .960→.945, lakefront
+.934→.845), and windy fair (.154→.080). Broad-based, not one game.
+**Reading (sharpened by 34+35 together):** this was the STRONGEST feasible form of the
+swap — labels, features and tracker jointly on the correct metric, net fully retrained —
+and it is ~1.7x worse on far than swapping the tracker alone. So the failure is NOT
+"the net needed joint recalibration": retraining the net did not help because every
+FIXED METER CONSTANT in the stack (snap_m 2 m, teacher jump 12 m/f, continuity caps
+6 m/f, 5 m density, 2 m persistence cells, vmax, phys-sigma) keeps its planar-tuned
+numeric value while the ray metric EXPANDS far distances — and, per EXP-OP-32, raw ray
+range AMPLIFIES pixel noise near the horizon exactly where far balls live. EXP-OP-34's
+alternative read is now CONFIRMED at full strength: **the planar homography's compressed
+far meters are accidental variance regularization, and the ray model's value is as an
+ORIENTATION/CONDITIONING axis (depression — bounded at the horizon; dcB's measured win),
+NOT as a distance metric for tracking/selection.** A constant-by-constant re-tune of the
+whole stack on ray meters remains conceivable but two decisive negatives + the variance
+mechanism price it low-EV; not scheduled. **dcB + selector_v7 stand as champion. The
+live far lever is EXP-OP-36 (venue diversity, the measured detector-side bottleneck).**
+Artifacts: F-OP `D:\opstage\out\exp35\*.{dcB2,v8ray}.campath.json` + `check_exp35.py`;
+net `G:\ballresearch\selector\selector_v8.{pt,npz}` (staged `F:\test\staging\exp35`,
+training log `overnight_v8.log`). Guard yield kept: upper90 can never enter selector
+training (code-level hard-fail), and eval replays must pass matching
+`--feature-world-model`/net metrics.
+
 **EXP-OP-36 — detector v4: venue diversity + far emphasis (GPU, slowest).**
 Hypothesis (from the documented distill finding: the bottleneck is VENUE DIVERSITY, not
 capacity): distilling new-venue 2026 games + weighting the far band recovers part of the

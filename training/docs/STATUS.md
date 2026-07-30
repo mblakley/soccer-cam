@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-07-30 (midday) — EXP-OP-36 v4 store build RUNNING on the server (ETA ~18:00), F-OP two-arm retrain queued behind it; pre-registration data premise CORRECTED (6/7 "new-venue" games were already in hn4's store — see EXPERIMENTS EXP-OP-36 PROGRESS).*
+*Last updated: 2026-07-30 (midday) — EXP-OP-36 v4 store build RUNNING on the server (ETA ~18:00), F-OP two-arm retrain queued behind it; pre-registration data premise CORRECTED (6/7 "new-venue" games were already in hn4's store — see EXPERIMENTS EXP-OP-36 PROGRESS). Separately: EXP-OP-35 CLOSED (NO-GO, decisive — see the 07-30 morning block below); champion unchanged (selector_v7 + dcB).*
 
 ## 2026-07-30 (midday) — EXP-OP-36 v4 dataset build LAUNCHED (+ corrected data premise)
 
@@ -27,6 +27,34 @@
   1864 unit tests green). Eval protocol + arms pre-registered in EXPERIMENTS EXP-OP-36
   PROGRESS; verdicts on held-out spc ceiling/argmax + operator far containment, upper90
   reserved (EXP-OP-37), never val-crop recall.
+
+## 2026-07-30 (morning) — EXP-OP-35 executed and CLOSED (NO-GO, high-yield negative)
+
+- **v8 metric-consistent retrain DONE + evaluated the same morning.** Code (w2 b4dc883):
+  `--world-model {homography,ray}` threaded through build_selector_labels +
+  kill_test_selector (labels-metric consistency hard-fail, `--src-dims` for pkl dumps,
+  ray `is_in_support`), `--feature-world-model` through replay_champion_chain / run-a;
+  **upper90/Upper_90 added to HELD_OUT_TOKENS** (EXP-OP-37 game — note v7 HAD trained on
+  Upper_90 05.10; v8 correctly drops it, 14 games / ~60.4k ray labels). Recipe
+  `training/docs/selector_recipes/overnight_selector_v8.py`; server run 10:03→10:17
+  (task EXP35_V8), export parity 8.3e-07.
+- **RESULT (6 GT games, pooled events, dcB flags on both arms): v8ray vs the dcB2
+  incumbent = far −0.079 (w15/l73, p<1e-4), mid −0.051 (w5/l28, p=1e-4), near −0.028
+  (ns); worse than A0 in every band. Refactor canary dcB2 ≡ dcB EXACT (every band) —
+  comparison clean.** Full entry: EXPERIMENTS.md "EXP-OP-35 CLOSED".
+- **Conclusion (34+35 jointly):** correct meters lose BOTH piecemeal (34: far −0.046)
+  and jointly retrained (35: far −0.079) — the planar metric's compressed far distances
+  act as accidental variance regularization (raw ray range amplifies pixel noise near
+  the horizon, EXP-OP-32); the ray model's value is the bounded DEPRESSION axis (dcB,
+  shipped), not a tracking/selection distance metric. Full-stack constant re-tune on ray
+  meters = low-EV, not scheduled.
+- **State:** champion unchanged (selector_v7 + dcB). v8 artifacts banked
+  (`G:\ballresearch\selector\selector_v8.{pt,npz}`, staged `F:\test\staging\exp35`; F-OP
+  `D:\opstage\out\exp35\*` + `check_exp35.py`, net at `D:\opstage\ckpt\selector_v8.pt`).
+  Server selector repo `G:\ballresearch\selector\repo` left on
+  feat/operator-w2-stoppage-hold @ b4dc883 (prior feat/ball-selector WIP preserved in
+  git stash "pre-EXP-OP-35"); F-OP `D:\opstage\repo` ff'd to b4dc883. NEXT: EXP-OP-36
+  (running, above); EXP-OP-37 awaits Mark's upper90 labeling (guard live in code).
 
 ## 2026-07-29 (night) — four-lever arc launched (Mark: "do all 4, fastest to slowest")
 
