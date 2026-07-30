@@ -40,6 +40,22 @@ correct-meters tracker is viable and the bent-meters tuning debt is measured; if
 homography's compressed-far metric is (accidentally) load-bearing regularization and we
 bank that.
 
+**EXP-OP-34 CLOSED (2026-07-29 23:07): NO-GO — and the refit REFUTES the vmax hypothesis,
+sharpening the conclusion.** vmax scale sweep under ray (×1.25/1.5/2.0, 6 games): loosening
+the speed gates makes it MONOTONICALLY WORSE (far vs dcB: −0.046 → −0.045 → −0.050 →
+−0.052; mid: −0.038 → −0.045 → −0.047 → −0.051; all p<1e-4). If the gate were rejecting
+true far motion, loosening would recover; it degrades — so the binding failure is NOT the
+speed gate. **Real mechanism: the tracker's ENTIRE cost stack is CO-TUNED to the planar
+metric** — selector emission weights vs transition costs, phys-sigma Jacobian noise,
+static-persistence 2 m cells, restart radii — and swapping the metric under ONE component
+breaks the calibration everywhere (more permissive gates just admit more far distractors).
+The bent ruler is, in effect, part of the tuned system. **CONCLUSION: correct meters
+cannot be introduced piecemeal in the tracker; they require a JOINTLY re-tuned stack.
+This is EXP-OP-35's design constraint: the v8 retrain must be METRIC-CONSISTENT end-to-end
+(ray features AND ray tracker world model together), not features-only.** dcB stands as
+the far config; EXP-OP-34's world-model swap is banked as a measured no-go with the
+co-tuning insight as its yield.
+
 **EXP-OP-35 — ray ruler in the SELECTION stack (selector features + retrain).**
 Hypothesis: the selector's geometry features (expected size at candidate location) are
 trained on the bent ruler (−28% near / +42% far, EXP-OP-32), so it systematically
