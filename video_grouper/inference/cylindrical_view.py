@@ -385,6 +385,41 @@ def mount_tilt_from_up(up) -> float:
     return float(np.degrees(np.arctan2(-up[2], -up[1])))
 
 
+def polygon_leveling_rotation(
+    polygon, src_w: int, src_h: int, src_hfov_deg: float
+) -> np.ndarray | None:
+    """World->camera rotation (cols = world axes in camera coords) leveled to the
+    field plane, derived from the field polygon — or ``None`` for a degenerate
+    polygon. Convenience composition of :func:`field_world_up` +
+    :func:`_cam_from_world` for callers that need per-pixel world-frame rays
+    (e.g. :func:`pixel_depression_deg`)."""
+    up = field_world_up(polygon, src_w, src_h, src_hfov_deg)
+    return None if up is None else _cam_from_world(up)
+
+
+def pixel_depression_deg(
+    px: float,
+    py: float,
+    r_cw: np.ndarray,
+    src_w: int,
+    src_h: int,
+    src_hfov_deg: float,
+    src_vfov_deg: float = -1.0,
+) -> float:
+    """Depression angle (deg, positive below the leveled horizon) of the view ray
+    through source pixel ``(px, py)``, given the polygon-derived leveling rotation
+    ``r_cw`` (:func:`polygon_leveling_rotation`).
+
+    This is the lens-correct "farness" axis (EXP-OP-32/33): monotonic with
+    ground distance from the camera, bounded at the horizon (unlike ground
+    range, which diverges), and independent of camera height. The planar
+    ground-plane homography's expected-size ruler bows ±35% (worst at the frame
+    edges / far field); depression does not."""
+    yaw, pitch = pixel_to_yaw_pitch(px, py, src_w, src_h, src_hfov_deg, src_vfov_deg)
+    d = r_cw.T @ np.asarray(_vec(math.radians(yaw), math.radians(pitch)))
+    return math.degrees(math.asin(min(max(float(d[1]), -1.0), 1.0)))
+
+
 def leveling_roll(
     view_yaw_deg: float,
     view_pitch_deg: float,

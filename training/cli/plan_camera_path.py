@@ -254,15 +254,11 @@ def replay_champion_chain(
     r_cw = None
     if depr_cond:
         from video_grouper.inference.cylindrical_view import (
-            _cam_from_world,
-            _vec,
-            field_world_up,
-            pixel_to_yaw_pitch,
+            pixel_depression_deg,
+            polygon_leveling_rotation,
         )
 
-        _up = field_world_up(polygon, src_w, src_h, 180.0)
-        if _up is not None:
-            r_cw = _cam_from_world(_up)
+        r_cw = polygon_leveling_rotation(polygon, src_w, src_h, 180.0)
     depr_span = max(pnone_depr_near_deg - pnone_depr_far_deg, 1e-6)
 
     ramp = pnone_far_near_diam > pnone_far_diam
@@ -275,9 +271,7 @@ def replay_champion_chain(
             jt = int(np.argmax(probs[i, : len(frames[i])]))
             top = frames[i][jt]
             if r_cw is not None:
-                yaw, pitch = pixel_to_yaw_pitch(top.x, top.y, src_w, src_h, 180.0)
-                dw = r_cw.T @ np.asarray(_vec(np.deg2rad(yaw), np.deg2rad(pitch)))
-                depr = np.degrees(np.arcsin(min(max(float(dw[1]), -1.0), 1.0)))
+                depr = pixel_depression_deg(top.x, top.y, r_cw, src_w, src_h, 180.0)
                 wf = min(max((pnone_depr_near_deg - depr) / depr_span, 0.0), 1.0)
                 scale = pnone_scale + (pnone_far_scale - pnone_scale) * wf
             else:

@@ -152,3 +152,50 @@ def test_step_registered():
 
     assert "ball_select" in _STEP_REGISTRY
     assert "track" not in _STEP_REGISTRY
+
+
+def test_select_depr_hold_requires_src_dims(tmp_path):
+    """The depression-conditioned far-hold (dcB, default-on) hard-fails on an
+    artifact without src_w/src_h — never a silent fallback."""
+    det, poly, net = tmp_path / "d.json", tmp_path / "p.json", tmp_path / "n.npz"
+    _write_selector_npz(net, len(FEATURE_NAMES))
+    poly.write_text(json.dumps({"polygon": POLY}))
+    _write_candidates(det)
+    art = json.loads(det.read_text())
+    del art["src_w"], art["src_h"]
+    det.write_text(json.dumps(art))
+    cfg = BallSelectStepConfig(select_model_path=str(net))
+    with pytest.raises(RuntimeError, match="src_w/src_h"):
+        _run_selection(str(det), str(poly), str(tmp_path / "t.json"), cfg)
+
+
+def test_select_depr_hold_disabled_accepts_missing_dims(tmp_path):
+    """near_deg <= far_deg disables the hold: legacy artifacts without src dims
+    still select (flat select_pnone_scale, the pre-dcB behavior)."""
+    det, poly, net = tmp_path / "d.json", tmp_path / "p.json", tmp_path / "n.npz"
+    _write_selector_npz(net, len(FEATURE_NAMES))
+    poly.write_text(json.dumps({"polygon": POLY}))
+    _write_candidates(det)
+    art = json.loads(det.read_text())
+    del art["src_w"], art["src_h"]
+    det.write_text(json.dumps(art))
+    cfg = BallSelectStepConfig(
+        select_model_path=str(net), select_pnone_depr_near_deg=0.0
+    )
+    populated = _run_selection(str(det), str(poly), str(tmp_path / "t.json"), cfg)
+    assert populated > 0
+
+
+def test_select_depr_hold_runs_by_default(tmp_path):
+    """dcB default-on: a candidates/2 artifact with src dims selects end-to-end
+    through the depression-conditioned miss-cost path."""
+    det, poly, net = tmp_path / "d.json", tmp_path / "p.json", tmp_path / "n.npz"
+    _write_selector_npz(net, len(FEATURE_NAMES))
+    poly.write_text(json.dumps({"polygon": POLY}))
+    _write_candidates(det, schema="candidates/2")
+    cfg = BallSelectStepConfig(select_model_path=str(net))
+    assert cfg.select_pnone_far_scale == 2.0  # dcB adopted defaults
+    assert cfg.select_pnone_depr_far_deg == 7.0
+    assert cfg.select_pnone_depr_near_deg == 16.0
+    populated = _run_selection(str(det), str(poly), str(tmp_path / "o.json"), cfg)
+    assert populated > 0

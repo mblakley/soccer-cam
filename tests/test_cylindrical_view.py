@@ -8,7 +8,9 @@ import pytest
 from video_grouper.inference.cylindrical_view import (
     CylindricalViewParams,
     cylindrical_remap,
+    pixel_depression_deg,
     pixel_to_yaw_pitch,
+    polygon_leveling_rotation,
     yaw_pitch_to_pixel,
 )
 
@@ -127,3 +129,50 @@ class TestSquarePixelDefaults:
 
         # 180 * 1800 / 4096 ≈ 79.1°
         assert _resolved_src_vfov(params) == pytest.approx(180.0 * 1800 / 4096)
+
+
+class TestPixelDepression:
+    """Depression angle below the polygon-leveled horizon — the lens-correct
+    farness axis for the depression-conditioned far-hold (EXP-OP-32/33)."""
+
+    # A plausible 10-point field polygon: near touchline low+wide (0-4,
+    # left->right), far touchline high+narrow (5-9, right->left).
+    POLY = [
+        [200.0, 1500.0],
+        [1100.0, 1520.0],
+        [2048.0, 1530.0],
+        [3000.0, 1520.0],
+        [3900.0, 1500.0],
+        [3400.0, 700.0],
+        [2720.0, 690.0],
+        [2048.0, 685.0],
+        [1370.0, 690.0],
+        [700.0, 700.0],
+    ]
+
+    def test_leveling_rotation_is_orthonormal(self):
+        r = polygon_leveling_rotation(self.POLY, SRC_W, SRC_H, SRC_HFOV)
+        assert r is not None
+        assert np.allclose(r.T @ r, np.eye(3), atol=1e-9)
+
+    def test_degenerate_polygon_returns_none(self):
+        assert (
+            polygon_leveling_rotation([[0, 0], [1, 1]], SRC_W, SRC_H, SRC_HFOV) is None
+        )
+
+    def test_depression_increases_toward_image_bottom(self):
+        """Nearer ground (lower in image) = steeper ray = larger depression."""
+        r = polygon_leveling_rotation(self.POLY, SRC_W, SRC_H, SRC_HFOV)
+        cx = SRC_W / 2
+        d_far = pixel_depression_deg(cx, 700.0, r, SRC_W, SRC_H, SRC_HFOV)
+        d_mid = pixel_depression_deg(cx, 1100.0, r, SRC_W, SRC_H, SRC_HFOV)
+        d_near = pixel_depression_deg(cx, 1500.0, r, SRC_W, SRC_H, SRC_HFOV)
+        assert d_far < d_mid < d_near
+        assert d_near > 0  # near touchline is below the leveled horizon
+
+    def test_depression_is_bounded(self):
+        """Unlike ground range, depression stays finite at/above the horizon."""
+        r = polygon_leveling_rotation(self.POLY, SRC_W, SRC_H, SRC_HFOV)
+        for py in (0.0, 300.0, SRC_H - 1.0):
+            d = pixel_depression_deg(2048.0, py, r, SRC_W, SRC_H, SRC_HFOV)
+            assert -90.0 <= d <= 90.0

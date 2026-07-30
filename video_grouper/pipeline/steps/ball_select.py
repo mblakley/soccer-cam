@@ -44,6 +44,10 @@ from video_grouper.inference.ball_tracker import (
     rerank,
 )
 from video_grouper.inference.camera_planner import upsample_disp, upsample_track
+from video_grouper.inference.cylindrical_view import (
+    pixel_depression_deg,
+    polygon_leveling_rotation,
+)
 from video_grouper.inference.world_geometry import build_field_geometry
 from video_grouper.pipeline import register_step
 from video_grouper.pipeline.base import PipelineStep, StepContext
@@ -62,6 +66,18 @@ class BallSelectStepConfig(BaseModel):
     # hybrid, physics transitions, aerial bridge, out-of-bounds pin.
     select_emission_weight: float = 1.0
     select_pnone_scale: float = 1.0
+    # dcB — the depression-conditioned far-hold (EXP-OP-32/33, adopted by Mark
+    # 2026-07-29): when the frame's top candidate is far (small depression angle
+    # below the leveled horizon, from the polygon-derived camera orientation),
+    # the tracker holds it longer before taking a miss. Full select_pnone_far_
+    # scale at depr <= far_deg, ramping linearly to select_pnone_scale at
+    # depr >= near_deg. Depression is the lens-correct farness axis (bounded at
+    # the horizon, height-independent); the planar expected-size ruler bows
+    # ±35%. Disable by setting near_deg <= far_deg (flat select_pnone_scale).
+    select_pnone_far_scale: float = 2.0
+    select_pnone_depr_far_deg: float = 7.0
+    select_pnone_depr_near_deg: float = 16.0
+    select_src_hfov_deg: float = 180.0  # stitched pano span (= render's default)
     select_static_w: float = 2.0
     select_phys_sigma_px: float = 5.0
     select_bridge_w: float = 2.0
@@ -141,10 +157,49 @@ def _run_selection(
         w * -np.log(np.maximum(probs[i, : len(fr)], 1e-6)) if fr else np.zeros(0)
         for i, fr in enumerate(frames)
     ]
-    miss_costs = [
-        float(cfg.select_pnone_scale * w * -np.log(max(float(probs[i, -1]), 1e-6)))
-        for i in range(len(frames))
-    ]
+    # Miss cost = pnone_scale * -log(p_none), depression-conditioned (dcB):
+    # a detected FAR ball (small depression angle) gets a stronger hold before
+    # the tracker takes a miss. See BallSelectStepConfig.select_pnone_far_scale.
+    depr_hold = (
+        cfg.select_pnone_depr_near_deg > cfg.select_pnone_depr_far_deg
+        and cfg.select_pnone_far_scale != cfg.select_pnone_scale
+    )
+    r_cw = None
+    if depr_hold:
+        src_w, src_h = art.get("src_w"), art.get("src_h")
+        if not src_w or not src_h:
+            raise RuntimeError(
+                "select: the depression-conditioned far-hold needs src_w/src_h "
+                "in the candidates artifact — re-run ball_detect (candidates/2) "
+                "or disable the hold (select_pnone_depr_near_deg <= far_deg)."
+            )
+        r_cw = polygon_leveling_rotation(
+            polygon, int(src_w), int(src_h), cfg.select_src_hfov_deg
+        )
+        if r_cw is None:
+            raise RuntimeError(
+                "select: could not derive world-up from the field polygon for "
+                "the depression-conditioned far-hold — fix field_detect's "
+                "output or disable the hold (select_pnone_depr_near_deg <= "
+                "far_deg)."
+            )
+    depr_span = cfg.select_pnone_depr_near_deg - cfg.select_pnone_depr_far_deg
+    miss_costs = []
+    for i in range(len(frames)):
+        base = w * -np.log(max(float(probs[i, -1]), 1e-6))
+        scale = cfg.select_pnone_scale
+        if r_cw is not None and frames[i]:
+            jt = int(np.argmax(probs[i, : len(frames[i])]))
+            top = frames[i][jt]
+            depr = pixel_depression_deg(
+                top.x, top.y, r_cw, int(src_w), int(src_h), cfg.select_src_hfov_deg
+            )
+            wf = min(max((cfg.select_pnone_depr_near_deg - depr) / depr_span, 0.0), 1.0)
+            scale = (
+                cfg.select_pnone_scale
+                + (cfg.select_pnone_far_scale - cfg.select_pnone_scale) * wf
+            )
+        miss_costs.append(float(scale * base))
     rr_cfg = replace(
         RerankConfig(),
         alpha=0.0,
