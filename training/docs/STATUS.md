@@ -16,10 +16,13 @@
 - **EXP-OP-36 data verified:** 7 new-venue 2026 games have video + polygon + full distill
   detections on F: (Western NY Flash, West Seneca, Irondequoit, BU15/Hilton Flaitz,
   Cleveland Force, Lakefront-home). Dataset build + far-weighted retrain = next.
-- **EXP-OP-37 running overnight:** upper90 (maintained held-out, 19 segs ≈ 111k frames)
-  staged F:\test\staging → F:\opclips\upper90 on F-OP; hn4s4 candidates dump auto-chained
-  (U90DUMP), ETA ~06:00. Then: label queue for Mark. NOTE: the `video` share exposes ONLY
-  `test`; F-OP schtasks need /RU training-user for share auth (SYSTEM = RC 16).
+- **EXP-OP-37 automatable half DONE (07-30 05:20):** upper90 hn4s4 dump complete (15/15
+  parts, 22k active-play frames, D:\opstage\dumps\upper90_hn4s4 on F-OP); label set
+  **`upper90__spans_heldout`** built + verified (320 contiguous span frames, 4×~32s spans
+  across both halves, full-frame lossless strips) — live in the far-label UI for Mark's
+  one-sitting labeling. Held-out guard: this game NEVER enters tuning. NOTE: the `video`
+  share exposes ONLY `test`; F-OP schtasks need /RU training-user for share auth
+  (SYSTEM = RC 16).
 
 ## 2026-07-29 (late) — #19 BUILT + DELIVERED (EXP-OP-32/33): ray-geometry depression-conditioned hold reverses EXP-OP-30, beats fd6 on mid (+0.02, robust). The far arc's gated dependency is RESOLVED.
 
