@@ -300,6 +300,7 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         pnone_depr_far_deg=args.pnone_depr_far_deg,
         pnone_depr_near_deg=args.pnone_depr_near_deg,
         world_model=args.world_model,
+        vmax_scale=args.vmax_scale,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -624,6 +625,15 @@ def main(argv: list[str] | None = None) -> None:
         default=0.0,
         help="Depression angle (deg) at/above which no hold (near field). "
         "See --pnone-depr-far-deg.",
+    )
+    a.add_argument(
+        "--vmax-scale",
+        type=float,
+        default=1.0,
+        help="EXP-OP-34 refit: scale the meter-based speed gates "
+        "(ball_vmax_mpf, air_vmax_mpf) — the defaults were implicitly tuned "
+        "to the homography's compressed far meters; the ray metric expands "
+        "far distances so the gates need re-fitting.",
     )
     a.add_argument(
         "--world-model",

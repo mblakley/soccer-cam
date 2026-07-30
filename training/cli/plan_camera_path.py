@@ -106,6 +106,7 @@ def replay_champion_chain(
     pnone_depr_far_deg: float = 0.0,
     pnone_depr_near_deg: float = 0.0,
     world_model: str = "homography",
+    vmax_scale: float = 1.0,
     phys_sigma_px: float = 5.0,
     bridge_w: float = 2.0,
     oob_w: float = 2.0,
@@ -300,6 +301,15 @@ def replay_champion_chain(
         miss_entry_near_k=miss_entry_near_k,
         miss_entry_margin_k=miss_entry_margin_k,
     )
+    if vmax_scale != 1.0:
+        # EXP-OP-34 refit: the meter-based speed gates were implicitly tuned to
+        # the homography's COMPRESSED far meters (over-sized far, EXP-OP-32);
+        # under the ray metric the same gates reject legitimate far motion.
+        cfg = replace(
+            cfg,
+            ball_vmax_mpf=cfg.ball_vmax_mpf * vmax_scale,
+            air_vmax_mpf=cfg.air_vmax_mpf * vmax_scale,
+        )
     # EXP-OP-34 (#19 ray world model): the TRACKER's meters (physics vmax gate,
     # Jacobian measurement noise, world Kalman, oob/restart/bridge) come from
     # tracker_geom. world_model="ray" swaps in the ray-ground-intersection
