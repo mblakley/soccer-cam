@@ -206,6 +206,16 @@ Open: (a) Mark's call on adopting dcB vs keeping binary fd6 as the simpler inter
 wiring the ray ruler into the detector's `expected_ball_diameter_px` (the detector-side
 half of the linchpin, separate task).
 
+**dcB ADOPTED (Mark, 2026-07-29) — shipped as the production default** (w2 a4ec50d):
+`ball_select` now computes the depression-conditioned miss cost by default
+(`select_pnone_far_scale=2.0`, `select_pnone_depr_far_deg=7`, `select_pnone_depr_near_deg
+=16`; disable via near_deg ≤ far_deg). The depression math lives in ONE place —
+`cylindrical_view.polygon_leveling_rotation` + `pixel_depression_deg` — shared by the
+production step and the research champion chain, so research replays == shipped behavior.
+Guard per house rule 8: an artifact without src dims HARD-FAILS when the hold is on (no
+silent fallback). fd6 (binary planar) was never shipped; dcB supersedes it unshipped.
+Open item (b) — the detector-side ray ruler — remains the next linchpin half.
+
 ---
 
 ## 2026-07-27 (x): LEGACY VIEWPORT ADMISSION — quarantined Reolink jsonls are tier-3 admissible ONLY through the verified trim-aware remap; pooled gate, not per-seg (EXP-OP-15)

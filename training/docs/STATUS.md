@@ -16,9 +16,13 @@
   minus fd6's mid drag, PER-GAME by construction). Code: w2 071cf25.
 - **Practical delta over fd6 is modest (~+0.02 mid); strategic value = the correct geometry
   foundation** that also fixes the detector's size prior (shared linchpin).
-- **AWAITING MARK:** (1) adopt dcB vs keep binary fd6 as simpler interim; (2) wire the ray
-  ruler into the detector's `expected_ball_diameter_px` (detector-side half, separate task);
-  (3) fd6 vs dcB clip render if he wants a visual; (4) mgarch promote (unchanged, separate).
+- **dcB ADOPTED (Mark) + SHIPPED (w2 a4ec50d):** production `ball_select` defaults to the
+  depression-conditioned hold (2.0 / depr 7→16); shared helpers in `cylindrical_view`
+  (production == research math); hard-fail guard on artifacts without src dims; full unit
+  suite green (1852 passed). fd6 superseded unshipped.
+- **AWAITING MARK / NEXT:** (1) wire the ray ruler into the detector's
+  `expected_ball_diameter_px` (detector-side linchpin half — needs selector retrain +
+  validation, scoped next); (2) mgarch promote (unchanged, separate).
 
 ## 2026-07-29 (autonomous) — fd6 6-game verification done; far arc closed; #19 is the next lever (needs Mark)
 
