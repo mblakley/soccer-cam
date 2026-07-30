@@ -30,9 +30,32 @@ significance (p=0.076) — the ramp starts fading the hold at depr=3°, so moder
 balls (depr 5–7°, still in fd6's far band) get only a PARTIAL hold where fd6 gives full.
 Fix: extend full-hold across the whole far band (depr≲7°, the fd6-far p90) then ramp
 through mid. dcB (far=7,near=16) and dcC (far=5,near=13) test whether this restores full
-far significance while KEEPING the decisive mid win. **CONCLUSION: #19 delivers the
-per-game geometry conditioning — the depression-conditioned hold is strictly ≥ fd6 and
-fixes the mid band; final config pending the dcB/dcC far-recovery refinement.**
+far significance while KEEPING the decisive mid win.
+
+**REFINEMENT RESULT (dcA/dcB/dcC, 6 games) — dcB is the #19 far config:**
+| band | fd6 vs A0 | dcA (3/12) vs fd6 | dcB (7/16) vs fd6 | dcC (5/13) vs fd6 |
+|---|---|---|---|---|
+| far (456) | +0.026 (p=.003) | −0.003 ns [A0 p=.076] | −0.003 ns [**A0 p=.049**] | −0.005 ns [A0 p=.065] |
+| mid (358) | −0.015 ns | **+0.024 (13/0, p=.0002)** | **+0.020 (12/2, p=.013)** | **+0.021 (12/0, p=.0005)** |
+| near (209) | −0.013 ns | 0.000 ns | −0.003 ns | −0.002 ns |
+**All three depression arms are TIED with fd6 on far + near and DECISIVELY beat it on mid**
+(+0.020–0.024, all p≤0.013) — the mid win is robust to the ramp thresholds, not a single-
+point artifact. **dcB (full hold at depr≤7° = the fd6-far p90, ramp to no-hold at 16° =
+past the near p95) is the winner:** the only arm whose far gain stays significant vs A0
+(p=0.049, effect identical to fd6's) AND it delivers the mid win — turning fd6's −0.015
+mid drag into a neutral +0.005 vs A0. So dcB = fd6's far/near, minus fd6's mid regression.
+
+**CONCLUSION — #19 DELIVERS.** The depression-conditioned hold (dcB) is the geometry-
+conditioned far lever DECISIONS (y) was gated on: it keeps fd6's far win, eliminates its
+mid cost, and is PER-GAME by construction (depression from each game's own polygon-derived
+orientation — the generalization fd6's fixed diam threshold lacked). EXP-OP-30 (continuous
+conditioning WORSE on the bent ruler) is formally reversed by fixing the axis, not the
+ramp. **Practical delta over fd6 is modest (~+0.02 mid, far unchanged); the strategic value
+is the CORRECT geometry foundation** — the same ray model fixes the detector's size prior
+(the ±35% bow, EXP-OP-32), the shared linchpin. **Caveat (honest):** the dc thresholds are
+tuned on these 6 GT games (the entire GT set — no held-out game exists); robustness across
+dcA/dcB/dcC + the per-game axis are the generalization arguments, not held-out validation.
+Adopting dcB over fd6 is Mark's call (modest metric gain vs. the simpler binary interim).
 
 ---
 

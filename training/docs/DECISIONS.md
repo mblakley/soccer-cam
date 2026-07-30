@@ -181,6 +181,31 @@ near-ceiling games is logged as motivation for the per-game #19 form (a geometry
 conditioned hold that self-disables when far containment is already high), NOT a blocker
 for shipping fd6. The quick-cycle far arc is now fully closed and verified at power.
 
+**#19 BUILT + DELIVERED (07-29, EXP-OP-32/33 — the gate is lifted, Mark supplied the rig):**
+Mark gave the rig (camera height 10–15 ft, tilt ~22°) and "figure it out by field
+geometry." KEY finding: the render ALREADY recovers camera ORIENTATION from the polygon
+(`cylindrical_view.field_world_up` via touchline/goal-line vanishing points →
+`mount_tilt_from_up`) — calibration-free — so #19 only needed HEIGHT for scale, a far
+smaller build than feared. Validated (EXP-OP-32): polygon-derived tilt matches Mark's 22°
+(mean 23°, per-game 17–27° — the mount VARIES per game, so per-game conditioning is
+mandatory); the planar homography's bow is real + structured (edge-corr +0.67, under-sizes
+near −28% / over-sizes far +42% — the ±35% wavy ruler, ONE BUG CLASS (p), measured). The
+CONDITIONING axis is the **depression angle** below the leveled horizon (bounded, stable,
+H-INDEPENDENT — height is only needed for the detector's absolute size prior, not the
+operator's far/near conditioning). **EXP-OP-33 REVERSES EXP-OP-30 by fixing the axis:** the
+depression-conditioned hold (`--pnone-depr-far-deg/-near-deg`, w2 071cf25) is net ≥ fd6 in
+every band and DECISIVELY beats fd6 on MID (+0.02, p≤0.013, robust across ramp settings) —
+dissolving fd6's mid regression, the exact global-switch tension (y) predicted. **dcB
+(full hold at depr≤7°, ramp to 16°) = the geometry-conditioned far config:** fd6's far/near
++ fd6's mid drag removed, PER-GAME by construction. Practical delta over fd6 is modest
+(~+0.02 mid); the strategic win is the CORRECT geometry foundation — the same ray model
+fixes the detector's size prior (the shared linchpin, (y) above). Thresholds tuned on the 6
+GT games (no held-out game exists); robustness + per-game axis are the generalization
+arguments. **The far arc's gated dependency is now RESOLVED — #19 exists and works.**
+Open: (a) Mark's call on adopting dcB vs keeping binary fd6 as the simpler interim; (b)
+wiring the ray ruler into the detector's `expected_ball_diameter_px` (the detector-side
+half of the linchpin, separate task).
+
 ---
 
 ## 2026-07-27 (x): LEGACY VIEWPORT ADMISSION — quarantined Reolink jsonls are tier-3 admissible ONLY through the verified trim-aware remap; pooled gate, not per-seg (EXP-OP-15)

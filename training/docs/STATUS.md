@@ -1,6 +1,26 @@
 # Current Status
 
-*Last updated: 2026-07-29 — fd6 far lever VERIFIED at 6-game power (EXP-OP-31: far +0.026, p=0.0025); quick-cycle far arc CLOSED; converged on #19 (needs Mark's rig knowledge). Tomorrow starts at DECISIONS (y).*
+*Last updated: 2026-07-29 (late) — #19 BUILT + DELIVERED (EXP-OP-32/33): ray-geometry depression-conditioned hold reverses EXP-OP-30, beats fd6 on mid (+0.02, robust). The far arc's gated dependency is RESOLVED. Tomorrow starts at DECISIONS (y).*
+
+## 2026-07-29 (late) — #19 built and working; depression-conditioned hold is the geometry-conditioned far lever
+
+- **Mark supplied the rig** (height 10–15 ft, tilt ~22°). KEY: the render already recovers
+  camera ORIENTATION from the polygon (`field_world_up`), calibration-free — so #19 only
+  needed height for scale. Much smaller build than feared.
+- **EXP-OP-32 (Phase A+B):** polygon tilt matches Mark's 22° (mean 23°, per-game 17–27° =
+  mount varies per game); planar bow confirmed real+structured (edge-corr +0.67, under-near
+  −28%/over-far +42%). Conditioning axis = depression angle (H-independent, bounded).
+- **EXP-OP-33 (Phase C):** depression-conditioned hold REVERSES EXP-OP-30 — net ≥ fd6 every
+  band, DECISIVELY beats fd6 on mid (+0.02, p≤0.013, robust across dcA/dcB/dcC). **dcB
+  (depr≤7° full hold → ramp to 16°) = the geometry-conditioned far config** (fd6's far/near,
+  minus fd6's mid drag, PER-GAME by construction). Code: w2 071cf25.
+- **Practical delta over fd6 is modest (~+0.02 mid); strategic value = the correct geometry
+  foundation** that also fixes the detector's size prior (shared linchpin).
+- **AWAITING MARK:** (1) adopt dcB vs keep binary fd6 as simpler interim; (2) wire the ray
+  ruler into the detector's `expected_ball_diameter_px` (detector-side half, separate task);
+  (3) fd6 vs dcB clip render if he wants a visual; (4) mgarch promote (unchanged, separate).
+
+## 2026-07-29 (autonomous) — fd6 6-game verification done; far arc closed; #19 is the next lever (needs Mark)
 
 ## 2026-07-29 (autonomous) — fd6 6-game verification done; far arc closed; #19 is the next lever (needs Mark)
 
