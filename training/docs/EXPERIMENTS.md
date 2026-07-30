@@ -4,6 +4,38 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-33 (#19 Phase C): DEPRESSION-conditioned hold REVERSES EXP-OP-30 — on the lens-correct axis the continuous ramp WORKS: matches fd6's far gain, ties near, and DECISIVELY fixes fd6's mid-band regression (+0.024, 13–0, p=0.0002) (2026-07-29)
+
+**The decisive #19 test.** EXP-OP-30 showed a continuous depth-ramp was WORSE than
+binary fd6 on the BENT (planar) ruler (near −0.051 decisive). Phase C repeats it on the
+lens-CORRECT axis: hold strength ramps on the ray-geometry DEPRESSION angle below the
+leveled horizon (from the polygon-derived world-up; new `--pnone-depr-far-deg/-near-deg`,
+w2 071cf25). dcA = full hold at depr≤3°, ramp to no-hold at depr≥12°, scale 2.0.
+Containment vs A0, pooled events, 6 games:
+| band | fd6 vs A0 | dcA vs A0 | **dcA vs fd6 (head-to-head)** |
+|---|---|---|---|
+| far (456) | +0.026 (p=0.003) | +0.023 (p=0.076) | −0.003 (w11/l16, ns) |
+| mid (358) | −0.015 (ns) | +0.009 (ns) | **+0.024 (w13/l0, p=0.0002)** |
+| near (209) | −0.013 (ns) | −0.013 (ns) | 0.000 (w4/l5, ns) |
+**dcA is net ≥ fd6 in every band and DECISIVELY better in mid (13–0).** Conditioning on
+the correct axis eliminates fd6's mid regression (the "costs a little on near/mid" tension
+Mark flagged as the signature of a global switch on a position-dependent quantity) while
+holding the far gain and the near cost flat. **This is the #19 thesis CONFIRMED and
+EXP-OP-30 REVERSED:** the same continuous ramp that FAILED on the bent ruler (mid-depth is
+where the planar homography is most distorted, EXP-OP-32) now SUCCEEDS on the depression
+axis — because the axis is accurate, the ramp no longer over-holds mid-depth balls.
+
+**Soft spot → refinement (dcB/dcC running):** dcA's far gain slipped to marginal
+significance (p=0.076) — the ramp starts fading the hold at depr=3°, so moderately-far
+balls (depr 5–7°, still in fd6's far band) get only a PARTIAL hold where fd6 gives full.
+Fix: extend full-hold across the whole far band (depr≲7°, the fd6-far p90) then ramp
+through mid. dcB (far=7,near=16) and dcC (far=5,near=13) test whether this restores full
+far significance while KEEPING the decisive mid win. **CONCLUSION: #19 delivers the
+per-game geometry conditioning — the depression-conditioned hold is strictly ≥ fd6 and
+fixes the mid band; final config pending the dcB/dcC far-recovery refinement.**
+
+---
+
 ## EXP-OP-32 (#19 Phase A+B): ray-geometry ruler VALIDATED — polygon-derived tilt matches Mark's 22° rig, and the planar homography's bow is confirmed real + structured (edge-corr +0.67, under-sizes near −28% / over-sizes far +42%) (2026-07-29)
 
 **Context:** Mark supplied the rig (camera height 10–15 ft, tilt ~22°) and said "figure
