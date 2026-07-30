@@ -4,6 +4,53 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-34…37 PRE-REGISTRATION (the four-lever ball-tracking arc, Mark 2026-07-29: "do all 4, fastest to slowest, separate experiments, same branch/worktree")
+
+Ordering = fastest first; EXP-OP-36's GPU data gen starts immediately in the background
+(the long pole; F-OP GPU window closes ~2 weeks). All in w1 (docs) + w2 (code).
+
+**EXP-OP-34 — world-space tracking physics on the RAY world model (fastest, CPU).**
+CORRECTION during scoping (read the code first): the tracker ALREADY runs its physics in
+world meters (`ball_vmax_mpf` gate + homography-Jacobian measurement noise + world-meters
+Kalman) — the defect is that those meters come from `geom.image_to_world`, the PLANAR
+homography (the bent ruler; the code itself warns "far positions may jitter tens of
+meters"). Hypothesis: giving the TRACKER (not the trained selector features) a
+ray-geometry world model — correct meters from the polygon-leveled orientation, height
+anchored so the near touchline measures `field_length_m` (the polygon as SCALE ANCHOR,
+per the #19 design) — improves far/mid containment: the physics gate stops over-permitting
+far jumps (bogus far meters) and stops mis-pricing the far→near boundary. Method: a
+`RayFieldGeometry` with the tracker's exact interface (image_to_world / world_to_image /
+expected_ball_diameter_px / polygon); replay chain on the 6 GT games with the tracker on
+ray world (selector features stay on the trained planar geom), dcB hold on; read
+containment vs the dcB baseline. Reads: win → adopt (tracker-only swap, no retrain);
+flat → the bow doesn't bind through the vmax gate (bank); loss → the vmax/noise priors
+were co-tuned to bent meters and need re-fitting on the correct axis.
+
+**EXP-OP-35 — ray ruler in the SELECTION stack (selector features + retrain).**
+Hypothesis: the selector's geometry features (expected size at candidate location) are
+trained on the bent ruler (−28% near / +42% far, EXP-OP-32), so it systematically
+distrusts true far balls and trusts edge look-alikes; rebuilding features on the ray
+ruler + retraining the (small) selector recovers part of the 54% detected-but-lost far
+share. Method: rebuild selector labels/features with ray expected-size, retrain, replay,
+compare vs the incumbent on the 6 GT games. Detector-side candidate gate follows with
+EXP-OP-36's retrain if this is positive.
+
+**EXP-OP-36 — detector v4: venue diversity + far emphasis (GPU, slowest).**
+Hypothesis (from the documented distill finding: the bottleneck is VENUE DIVERSITY, not
+capacity): distilling new-venue 2026 games + weighting the far band recovers part of the
+46% undetected-far share (worst case: windy fair). Method: inventory unseen venues (102-
+game registry), distill-label with the standard filters (conf + in-field + corroboration,
+active-play windows only), build the training set, retrain on F-OP. Data gen = the long
+pole, started 2026-07-29 in background.
+
+**EXP-OP-37 — held-out GT game(s) (eval integrity).**
+All 6 GT games are consumed by tuning — every threshold (dcB included) lacks held-out
+validation. Method: stage 1–2 unseen-venue games (prefer the maintained held-out list in
+F:\DATA_INVENTORY.md), dump candidates, build the ball-label queue so human labeling is
+one sitting for Mark; those games then NEVER enter tuning. Validates dcB + 34/35/36.
+
+---
+
 ## EXP-OP-33 (#19 Phase C): DEPRESSION-conditioned hold REVERSES EXP-OP-30 — on the lens-correct axis the continuous ramp WORKS: matches fd6's far gain, ties near, and DECISIVELY fixes fd6's mid-band regression (+0.024, 13–0, p=0.0002) (2026-07-29)
 
 **The decisive #19 test.** EXP-OP-30 showed a continuous depth-ramp was WORSE than
