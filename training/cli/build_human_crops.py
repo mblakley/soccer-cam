@@ -46,6 +46,15 @@ def main() -> None:
         help="wind-align bands to each set's first decoded frame; label coords "
         "corrected by the per-frame shift (EXP-DIST-57)",
     )
+    ap.add_argument(
+        "--record-depth",
+        action="store_true",
+        help="record each positive human crop's normalized field depth (band-y / "
+        "band-height: 0=far touchline, 1=near) — same convention as "
+        "build_heatmap_crops(record_depth=True), so a depth-recorded store's "
+        "human positives pass the trainer's require_positive_depth guard "
+        "(EXP-OP-36). Default off = rows byte-identical to the legacy schema.",
+    )
     args = ap.parse_args()
 
     import cv2
@@ -181,14 +190,20 @@ def main() -> None:
                     tag = "hpos" if is_pos else "hneg"
                     fn = f"human_{sd.name}_f{f:06d}_{tag}.npy"
                     np.save(crops / fn, stack)
-                    items.append(
-                        {
-                            "file": fn,
-                            "x": round(float(lx), 1) if is_pos else None,
-                            "y": round(float(ly), 1) if is_pos else None,
-                            "split": "train",
-                        }
-                    )
+                    rec = {
+                        "file": fn,
+                        "x": round(float(lx), 1) if is_pos else None,
+                        "y": round(float(ly), 1) if is_pos else None,
+                        "split": "train",
+                    }
+                    if args.record_depth and is_pos:
+                        # normalized field depth from the ball's band-y (0 = far
+                        # touchline / band top, 1 = near) — identical convention
+                        # to build_heatmap_crops(record_depth=True).
+                        rec["depth"] = round(
+                            float(np.clip(by / max(bh, 1), 0.0, 1.0)), 4
+                        )
+                    items.append(rec)
                     n += 1
                     totals["pos" if is_pos else "neg"] += 1
                 for _k in [k for k in band_gray if k < f - 2]:

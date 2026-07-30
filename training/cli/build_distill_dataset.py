@@ -148,6 +148,14 @@ def main() -> None:
         "the game polygon homography (gray3geo encoding, EXP-DIST-66). Hard "
         "error on any game whose polygon fails the geometry gate.",
     )
+    ap.add_argument(
+        "--record-depth",
+        action="store_true",
+        help="record each positive crop's normalized field depth (0=far touchline, "
+        "1=near) in the index — purely additive metadata; required by the "
+        "trainer's --far-weight/--dynamic-sigma arms (EXP-OP-36). Default off = "
+        "index byte-identical to the legacy schema.",
+    )
     args = ap.parse_args()
 
     holdout, val = set(args.holdout), set(args.val)
@@ -195,6 +203,7 @@ def main() -> None:
         hwaccel=not args.no_hwaccel,
         stabilize=args.stabilize,
         geo_channel=args.geo_channel,
+        record_depth=args.record_depth,
     )
     print("\nDATASET:", summary, flush=True)
 
