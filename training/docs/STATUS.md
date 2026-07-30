@@ -1,6 +1,27 @@
 # Current Status
 
-*Last updated: 2026-07-29 (late) — #19 BUILT + DELIVERED (EXP-OP-32/33): ray-geometry depression-conditioned hold reverses EXP-OP-30, beats fd6 on mid (+0.02, robust). The far arc's gated dependency is RESOLVED. Tomorrow starts at DECISIONS (y).*
+*Last updated: 2026-07-29 (night) — dcB SHIPPED as production default; four-lever arc (EXP-OP-34…37) opened per Mark: 34 CLOSED (no-go, co-tuning insight), 35 scoped (metric-consistent v8), 36 data verified, 37 dump running overnight. Tomorrow: EXP-OP-35 v8 build + EXP-OP-36 dataset build.*
+
+## 2026-07-29 (night) — four-lever arc launched (Mark: "do all 4, fastest to slowest")
+
+- **EXP-OP-34 CLOSED (NO-GO, high-yield):** drop-in ray world model for the tracker loses
+  decisively (far −0.046 vs dcB); vmax refit sweep REFUTES the speed-gate hypothesis
+  (loosening = monotonically worse). Yield: the tracker's whole cost stack is CO-TUNED to
+  the planar metric — correct meters need a JOINT re-tune, which becomes EXP-OP-35's
+  design constraint (v8 = ray features + ray tracker together). Code: RayFieldGeometry
+  (w2 29af184), --world-model/--vmax-scale (eb53d71).
+- **EXP-OP-35 scoped:** build_features accepts RayFieldGeometry via duck interface; v8
+  recipe mirrors overnight_selector_v7.py (server G:\ballresearch) with ray geoms
+  end-to-end. Gate on human-GT containment (EXP-DIST-65 position-bias trap).
+- **EXP-OP-36 data verified:** 7 new-venue 2026 games have video + polygon + full distill
+  detections on F: (Western NY Flash, West Seneca, Irondequoit, BU15/Hilton Flaitz,
+  Cleveland Force, Lakefront-home). Dataset build + far-weighted retrain = next.
+- **EXP-OP-37 running overnight:** upper90 (maintained held-out, 19 segs ≈ 111k frames)
+  staged F:\test\staging → F:\opclips\upper90 on F-OP; hn4s4 candidates dump auto-chained
+  (U90DUMP), ETA ~06:00. Then: label queue for Mark. NOTE: the `video` share exposes ONLY
+  `test`; F-OP schtasks need /RU training-user for share auth (SYSTEM = RC 16).
+
+## 2026-07-29 (late) — #19 BUILT + DELIVERED (EXP-OP-32/33): ray-geometry depression-conditioned hold reverses EXP-OP-30, beats fd6 on mid (+0.02, robust). The far arc's gated dependency is RESOLVED.
 
 ## 2026-07-29 (late) — #19 built and working; depression-conditioned hold is the geometry-conditioned far lever
 
