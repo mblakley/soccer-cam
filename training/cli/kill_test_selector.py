@@ -30,9 +30,10 @@ from pathlib import Path
 import numpy as np
 
 # Spencerport 05.31 + Irondequoit 06.15 are EVAL-ONLY, never trained (plan §6).
+# Upper 90 is the EXP-OP-37 held-out GT game — NEVER in training OR tuning.
 # Matched against the label file's game_dir (lowercased). "irondequoit" alone is NOT
 # a held-out token — Irondequoit 06.04 is a legitimate training game.
-HELD_OUT_TOKENS = ("spencerport", "2026.06.15")
+HELD_OUT_TOKENS = ("spencerport", "2026.06.15", "upper90", "upper_90")
 
 
 def check_not_held_out(dump_path: str, game_dir: str) -> None:
@@ -42,7 +43,7 @@ def check_not_held_out(dump_path: str, game_dir: str) -> None:
             if t in hay:
                 raise SystemExit(
                     f"HELD-OUT game in training set ({t!r}): {dump_path} — "
-                    "Spencerport 05.31 / Irondequoit 06.15 are eval-only"
+                    "Spencerport 05.31 / Irondequoit 06.15 / Upper 90 are eval-only"
                 )
 
 
@@ -55,14 +56,26 @@ def split_train_pair(pair: str) -> tuple[str, str]:
     return a, b
 
 
-def _load_dump(path):
+def _load_dump(
+    path,
+    world_model: str = "homography",
+    src_dims: tuple[int, int] | None = None,
+):
     """Load an ``eval_detector --dump-cands`` pickle OR a ``dump_game_candidates``
     output DIRECTORY (marathon artifact; polygon comes from the game.json its
-    meta.json points at)."""
+    meta.json points at).
+
+    ``world_model='ray'`` (EXP-OP-35) builds the ray-ground geometry instead of
+    the planar homography — it needs the SOURCE dims (game.json segments[0] w/h
+    for dump dirs; ``src_dims`` for .pkl dumps, which don't carry them). Every
+    failure hard-fails (rule 8): a silent planar fallback would train/eval a
+    metric-inconsistent selector, the exact EXP-OP-34 trap.
+    """
     from training.world_model.geometry import build_field_geometry
     from training.world_model.tbd import Candidate
 
     p = Path(path)
+    gj = None
     if p.is_dir():
         from training.cli.build_selector_labels import load_fullgame_candidates
 
@@ -80,7 +93,29 @@ def _load_dump(path):
         [Candidate(x=x, y=y, score=s, size_px=sz) for (x, y, s, sz) in d["cands"][f]]
         for f in d["ef"]
     ]
-    geom = build_field_geometry(np.asarray(d["polygon"], float))
+    polygon = np.asarray(d["polygon"], float)
+    if world_model == "ray":
+        from video_grouper.inference.world_geometry import build_ray_field_geometry
+
+        if src_dims is None and gj is not None and gj.get("segments"):
+            seg0 = gj["segments"][0]
+            if "w" in seg0 and "h" in seg0:
+                src_dims = (int(seg0["w"]), int(seg0["h"]))
+        if src_dims is None:
+            raise SystemExit(
+                f"{path}: --world-model ray needs source dims (game.json "
+                "segments[0] w/h for dump dirs; --src-dims W H for .pkl dumps)"
+            )
+        geom = build_ray_field_geometry(polygon, src_dims[0], src_dims[1], 180.0)
+        if geom is None:
+            raise SystemExit(
+                f"{path}: --world-model ray but the polygon cannot support a "
+                "ray geometry (degenerate/mis-ordered/no world-up)"
+            )
+    elif world_model == "homography":
+        geom = build_field_geometry(polygon)
+    else:
+        raise SystemExit(f"unknown world model {world_model!r}")
     return d, frames, geom
 
 
@@ -149,7 +184,35 @@ def main() -> None:
         "near ball). Up-weights the rare near band so it learns confidence there.",
     )
     ap.add_argument("--depth-bands", type=int, default=4)
+    ap.add_argument(
+        "--world-model",
+        choices=("homography", "ray"),
+        default="homography",
+        help="EXP-OP-35 (#19): world model for the selector FEATURES, the "
+        "internal tracker replay and the eval meters — 'ray' = ray-ground "
+        "intersection (correct meters), 'homography' = the planar ruler "
+        "(bows +/-35%%, EXP-OP-32). EXP-OP-34's lesson: swap the metric "
+        "CONSISTENTLY (labels, features, tracker, eval) or not at all. NB: "
+        "under 'ray' the R15 eval meters are ray meters — not comparable to "
+        "planar-run printouts; the decision gate is human-GT containment on "
+        "the replay eval, never these internal numbers (EXP-DIST-65).",
+    )
+    ap.add_argument(
+        "--src-dims",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("W", "H"),
+        help="source frame dims for --world-model ray with .pkl dumps (dump "
+        "dirs read them from their game.json)",
+    )
     args = ap.parse_args()
+    if args.depth_balance > 0 and args.world_model == "ray":
+        raise SystemExit(
+            "--depth-balance is defined on the touchline-aligned homography "
+            "frame (world_y/field_width); the ray world frame is not "
+            "touchline-aligned — unsupported under --world-model ray"
+        )
 
     from training.cli.sweep_tracker import (
         _ceiling,
@@ -177,16 +240,27 @@ def main() -> None:
         runs = [[]]
 
     # ---- load training pairs once -------------------------------------------------
+    src_dims = tuple(args.src_dims) if args.src_dims else None
     train_sets = []
     for pair in args.train:
         dump_path, labels_path = split_train_pair(pair)
         payload = json.loads(open(labels_path, encoding="utf-8").read())
         check_not_held_out(dump_path, str(payload.get("game_dir", "")))
-        d, frames, geom = _load_dump(dump_path)
+        # metric consistency (EXP-OP-34/35): the LABELS must have been built on
+        # the same world model the features are about to be built on.
+        lab_wm = payload.get("params", {}).get("world_model", "homography")
+        if lab_wm != args.world_model:
+            raise SystemExit(
+                f"{labels_path}: labels built with world_model={lab_wm!r} but "
+                f"--world-model {args.world_model!r} — metric-inconsistent "
+                "training is the measured EXP-OP-34 regression; rebuild the "
+                "labels on the same world model"
+            )
+        d, frames, geom = _load_dump(dump_path, args.world_model, src_dims)
         lab = payload["labels"]
         train_sets.append((d, frames, geom, lab, dump_path))
         print(f"train {dump_path}: {len(lab)} labeled frames")
-    evals = [(p, *_load_dump(p)) for p in args.eval]
+    evals = [(p, *_load_dump(p, args.world_model, src_dims)) for p in args.eval]
 
     def line(name, det, near, far):
         a, nr, fr = _hits(det), _hits(near), _hits(far)

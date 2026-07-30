@@ -106,6 +106,7 @@ def replay_champion_chain(
     pnone_depr_far_deg: float = 0.0,
     pnone_depr_near_deg: float = 0.0,
     world_model: str = "homography",
+    feature_world_model: str = "homography",
     vmax_scale: float = 1.0,
     phys_sigma_px: float = 5.0,
     bridge_w: float = 2.0,
@@ -223,8 +224,33 @@ def replay_champion_chain(
         for g in ef
     ]
     gaps = [1] + [ef[i] - ef[i - 1] for i in range(1, len(ef))]
+    # EXP-OP-34/35 (#19 ray world model): ONE ray geometry serves both consumers
+    # below — the SELECTOR features (feature_world_model, EXP-OP-35: must match
+    # the metric the net was TRAINED on) and the TRACKER's meters (world_model,
+    # EXP-OP-34). EXP-OP-34 measured that swapping the metric under ONE
+    # component of the co-tuned stack regresses — swap them together or not at
+    # all. Unsupported polygons hard-fail (rule 8): a silent planar fallback
+    # would be exactly that piecemeal swap.
+    for name, val in (
+        ("world_model", world_model),
+        ("feature_world_model", feature_world_model),
+    ):
+        if val not in ("homography", "ray"):
+            raise SystemExit(f"plan_camera_path: unknown {name} {val!r}")
+    ray_geom = None
+    if "ray" in (world_model, feature_world_model):
+        from video_grouper.inference.world_geometry import build_ray_field_geometry
+
+        ray_geom = build_ray_field_geometry(polygon, src_w, src_h, 180.0)
+        if ray_geom is None:
+            raise SystemExit(
+                "plan_camera_path: ray world model requested but the polygon "
+                "cannot support a ray geometry (degenerate/mis-ordered/no "
+                "world-up)"
+            )
+    feat_geom = ray_geom if feature_world_model == "ray" else geom
     net, keep = load_selector(net_path)
-    feats = [x[:, keep] for x in build_features(frames, geom, ef=ef)]
+    feats = [x[:, keep] for x in build_features(frames, feat_geom, ef=ef)]
     packed, mask = pack_frames(feats)
     probs = predict_probs(net, packed, mask)
     w = emission_weight
@@ -312,22 +338,9 @@ def replay_champion_chain(
         )
     # EXP-OP-34 (#19 ray world model): the TRACKER's meters (physics vmax gate,
     # Jacobian measurement noise, world Kalman, oob/restart/bridge) come from
-    # tracker_geom. world_model="ray" swaps in the ray-ground-intersection
-    # geometry (correct meters; the planar homography bows +/-35%, EXP-OP-32)
-    # while the SELECTOR features stay on the trained planar geom above.
-    tracker_geom = geom
-    if world_model == "ray":
-        from video_grouper.inference.world_geometry import build_ray_field_geometry
-
-        ray_geom = build_ray_field_geometry(polygon, src_w, src_h, 180.0)
-        if ray_geom is None:
-            raise SystemExit(
-                "plan_camera_path: world_model=ray but the polygon cannot "
-                "support a ray geometry (degenerate/mis-ordered/no world-up)"
-            )
-        tracker_geom = ray_geom
-    elif world_model != "homography":
-        raise SystemExit(f"plan_camera_path: unknown world_model {world_model!r}")
+    # tracker_geom — the ray geometry built above when world_model="ray"
+    # (correct meters; the planar homography bows +/-35%, EXP-OP-32).
+    tracker_geom = ray_geom if world_model == "ray" else geom
     picked, pick_conf = rerank(
         frames,
         tracker_geom,

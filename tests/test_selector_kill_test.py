@@ -614,3 +614,91 @@ class TestLoadDumpAndGuards:
         check_not_held_out(
             "G:/x/fullgame/iron0604", "F:/Heat_2012s/2026.06.04 - vs Irondequoit (away)"
         )
+
+    def test_held_out_guard_upper90(self):
+        """Upper 90 is the EXP-OP-37 held-out GT game — NEVER trainable, under
+        either spelling."""
+        from training.cli.kill_test_selector import check_not_held_out
+
+        with pytest.raises(SystemExit, match="HELD-OUT"):
+            check_not_held_out(
+                "G:/x/fullgame/upper90", "F:/Flash_2013s/2026.07.12 - vs Upper 90"
+            )
+        with pytest.raises(SystemExit, match="HELD-OUT"):
+            check_not_held_out(
+                "G:/x/dump.pkl", "F:/gamedata/flash__2026.07.12_vs_Upper_90_home"
+            )
+
+    def _ray_polygon(self):
+        """A near-wide/far-narrow polygon that supports the ray geometry
+        (mirrors tests/test_cylindrical_view.py TestPixelDepression.POLY)."""
+        return [
+            [200.0, 1500.0],
+            [1100.0, 1520.0],
+            [2048.0, 1530.0],
+            [3000.0, 1520.0],
+            [3900.0, 1500.0],
+            [3400.0, 700.0],
+            [2720.0, 690.0],
+            [2048.0, 685.0],
+            [1370.0, 690.0],
+            [700.0, 700.0],
+        ]
+
+    def test_load_dump_fullgame_dir_ray(self, tmp_path):
+        """EXP-OP-35: world_model='ray' on a dump DIR builds the ray geometry
+        from the game.json polygon + segments[0] source dims."""
+        import pickle
+
+        from training.cli.kill_test_selector import _load_dump
+        from video_grouper.inference.world_geometry import RayFieldGeometry
+
+        game_dir = tmp_path / "game"
+        game_dir.mkdir()
+        (game_dir / "game.json").write_text(
+            __import__("json").dumps(
+                {
+                    "field_polygon": self._ray_polygon(),
+                    "segments": [{"w": 4096, "h": 1800}],
+                }
+            )
+        )
+        fg = tmp_path / "fullgame"
+        fg.mkdir()
+        (fg / "meta.json").write_text(
+            __import__("json").dumps(
+                {"schema": "fullgame_candidates/1", "game_dir": str(game_dir)}
+            )
+        )
+        with open(fg / "part_0000000_0000008.pkl", "wb") as fh:
+            pickle.dump({0: [(1000.0, 900.0, 0.9)], 8: [(1020.0, 902.0, 0.8)]}, fh)
+        d, frames, geom = _load_dump(str(fg), world_model="ray")
+        assert isinstance(geom, RayFieldGeometry) and geom.valid
+        assert len(frames) == 2
+
+    def test_load_dump_pkl_ray_needs_src_dims(self, tmp_path):
+        """.pkl dumps carry no source dims: ray without --src-dims hard-fails;
+        with them it builds the ray geometry (rule 8: no silent planar
+        fallback — that IS the EXP-OP-34 piecemeal-swap trap)."""
+        import pickle
+
+        from training.cli.kill_test_selector import _load_dump
+        from video_grouper.inference.world_geometry import RayFieldGeometry
+
+        p = tmp_path / "dump.pkl"
+        with open(p, "wb") as fh:
+            pickle.dump(
+                {
+                    "polygon": self._ray_polygon(),
+                    "ef": [0, 8],
+                    "cands": {
+                        0: [(1000.0, 900.0, 0.9, None)],
+                        8: [(1020.0, 902.0, 0.8, None)],
+                    },
+                },
+                fh,
+            )
+        with pytest.raises(SystemExit, match="src-dims"):
+            _load_dump(str(p), world_model="ray")
+        _d, _frames, geom = _load_dump(str(p), world_model="ray", src_dims=(4096, 1800))
+        assert isinstance(geom, RayFieldGeometry) and geom.valid

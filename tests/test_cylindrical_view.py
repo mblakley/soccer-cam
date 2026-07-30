@@ -238,3 +238,52 @@ class TestRayFieldGeometry:
         ]
         sel = rerank(frames, g, frame_gaps=[1] * 12)
         assert sum(1 for v in sel.values() if v is not None) > 0
+
+    def test_is_in_support_matches_planar(self):
+        """EXP-OP-35: support is polygon-only, so the ray geometry answers it
+        identically to the planar one (teacher_track calls it on either)."""
+        from video_grouper.inference.world_geometry import build_field_geometry
+
+        g = self._geom()
+        planar = build_field_geometry(np.asarray(TestPixelDepression.POLY, float))
+        pts = np.array(
+            [
+                [2048.0, 1100.0],  # mid-field: inside
+                [10.0, 10.0],  # image corner: far off-field
+                [2048.0, 650.0],  # just above the far line: dome zone
+            ]
+        )
+        for dome in (0.0, 60.0):
+            np.testing.assert_array_equal(
+                g.is_in_support(pts, margin_px=10.0, dome_px=dome),
+                planar.is_in_support(pts, margin_px=10.0, dome_px=dome),
+            )
+        assert g.is_in_support(pts[:1], margin_px=10.0)[0]
+        assert not g.is_in_support(pts[1:2], margin_px=10.0)[0]
+
+    def test_build_features_accepts_ray_geometry(self):
+        """EXP-OP-35: the selector feature builder runs on the ray world model
+        (metric-consistent features for the v8 retrain)."""
+        from video_grouper.inference.ball_selector import (
+            FEATURE_NAMES,
+            build_features,
+        )
+        from video_grouper.inference.ball_tracker import Candidate
+
+        g = self._geom()
+        frames = [
+            [
+                Candidate(x=1800.0 + 12.0 * i, y=1200.0, score=0.8, size_px=8.0),
+                Candidate(x=2500.0, y=800.0, score=0.4, size_px=6.0),
+            ]
+            for i in range(6)
+        ]
+        feats = build_features(frames, g, ef=[i * 8 for i in range(6)])
+        assert len(feats) == 6
+        for x in feats:
+            assert x.shape == (2, len(FEATURE_NAMES))
+            assert np.all(np.isfinite(x))
+        # geometry features are live (not the neutral fallback): the far
+        # candidate must read as smaller expected diameter than the near one
+        depth_i = FEATURE_NAMES.index("depth")
+        assert feats[0][1, depth_i] < feats[0][0, depth_i]

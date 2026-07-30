@@ -121,6 +121,33 @@ def _polygon_ordering_ok(poly: np.ndarray) -> bool:
     return True
 
 
+def _polygon_support(
+    polygon: np.ndarray | None,
+    pts_xy: np.ndarray,
+    margin_px: float,
+    dome_px: float,
+) -> np.ndarray:
+    """Field + dome support test shared by the planar and ray geometries.
+
+    Purely polygon/pixel based (no metric model involved), so both world models
+    answer it identically. ``polygon is None`` accepts everywhere (neutral).
+    """
+    pts = np.asarray(pts_xy, dtype=np.float64).reshape(-1, 2)
+    if polygon is None:
+        return np.ones(pts.shape[0], dtype=bool)
+    poly = polygon.reshape(-1, 1, 2).astype(np.float32)
+    out = np.empty(pts.shape[0], dtype=bool)
+    far_top = float(polygon[:, 1].min())  # smallest y = far edge
+    for i, (x, y) in enumerate(pts):
+        dist = cv2.pointPolygonTest(poly, (float(x), float(y)), True)
+        inside = dist >= -margin_px
+        # Airborne dome: accept points above the far edge within dome_px.
+        if not inside and dome_px > 0.0 and (far_top - dome_px) <= y < far_top:
+            inside = True
+        out[i] = inside
+    return out
+
+
 def _touchline_world_points(length_m: float, width_m: float) -> np.ndarray:
     """World coords of the 10 boundary points (equally spaced on each touchline).
 
@@ -253,21 +280,7 @@ class FieldGeometry:
 
         ``(M, 2)`` or ``(2,)`` in; returns ``(M,)`` bool.
         """
-        pts = np.asarray(pts_xy, dtype=np.float64).reshape(-1, 2)
-        if self.polygon is None:
-            return np.ones(pts.shape[0], dtype=bool)
-
-        poly = self.polygon.reshape(-1, 1, 2).astype(np.float32)
-        out = np.empty(pts.shape[0], dtype=bool)
-        far_top = float(self.polygon[:, 1].min())  # smallest y = far edge
-        for i, (x, y) in enumerate(pts):
-            dist = cv2.pointPolygonTest(poly, (float(x), float(y)), True)
-            inside = dist >= -margin_px
-            # Airborne dome: accept points above the far edge within dome_px.
-            if not inside and dome_px > 0.0 and (far_top - dome_px) <= y < far_top:
-                inside = True
-            out[i] = inside
-        return out
+        return _polygon_support(self.polygon, pts_xy, margin_px, dome_px)
 
 
 @dataclass(frozen=True)
@@ -355,6 +368,17 @@ class RayFieldGeometry:
             )
             sizes += seg
         return sizes / 2.0
+
+    def is_in_support(
+        self,
+        pts_xy: np.ndarray,
+        margin_px: float = 50.0,
+        dome_px: float = 0.0,
+    ) -> np.ndarray:
+        """Field + dome support — identical to the planar geometry's (purely
+        polygon/pixel based; EXP-OP-35 needs it so the selector-label teacher
+        runs unchanged on the ray world model)."""
+        return _polygon_support(self.polygon, pts_xy, margin_px, dome_px)
 
 
 def build_ray_field_geometry(

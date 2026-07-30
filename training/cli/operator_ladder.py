@@ -300,6 +300,7 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         pnone_depr_far_deg=args.pnone_depr_far_deg,
         pnone_depr_near_deg=args.pnone_depr_near_deg,
         world_model=args.world_model,
+        feature_world_model=args.feature_world_model,
         vmax_scale=args.vmax_scale,
     )
     if len(res["plan"]) < 2:
@@ -643,7 +644,16 @@ def main(argv: list[str] | None = None) -> None:
         "gate, measurement noise, Kalman, oob/bridge). 'ray' = ray-ground "
         "intersection from the polygon-leveled orientation (correct meters); "
         "'homography' = the planar ruler (bows +/-35%%, EXP-OP-32). Selector "
-        "features always stay on the trained planar geometry.",
+        "features follow --feature-world-model (default: trained planar).",
+    )
+    a.add_argument(
+        "--feature-world-model",
+        choices=("homography", "ray"),
+        default="homography",
+        help="EXP-OP-35 (#19): world model for the SELECTOR features "
+        "(build_features geometry). MUST match the metric the net was trained "
+        "on (v7 = homography, v8 = ray). EXP-OP-34: piecemeal metric swaps "
+        "regress — swap features AND tracker (--world-model) together.",
     )
     a.add_argument(
         "--static-filter-offfield-only",

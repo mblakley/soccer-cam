@@ -213,6 +213,17 @@ def main() -> None:
     ap.add_argument("--gap-frames", type=int, default=12)
     ap.add_argument("--gold-weight", type=float, default=20.0)
     ap.add_argument("--conf-floor", type=float, default=0.06)
+    ap.add_argument(
+        "--world-model",
+        choices=("homography", "ray"),
+        default="homography",
+        help="EXP-OP-35 (#19): metric for the teacher tracker and the snap/jump "
+        "distances. 'ray' = ray-ground intersection from the polygon-leveled "
+        "orientation (correct meters); 'homography' = the planar ruler the "
+        "incumbent selector was trained on (bows +/-35%%, EXP-OP-32). "
+        "EXP-OP-34: the metric must be swapped CONSISTENTLY end-to-end — use "
+        "the SAME world model in kill_test_selector and at replay eval.",
+    )
     args = ap.parse_args()
 
     from training.data_prep import distill_dataset as dd
@@ -231,9 +242,26 @@ def main() -> None:
         with open(args.dump, "rb") as fh:
             d = pickle.load(fh)
         src_name = args.dump
-    geom = build_field_geometry(np.asarray(d["polygon"], float))
-    if not geom.valid:
-        raise SystemExit("dump polygon does not fit a valid homography")
+    polygon = np.asarray(d["polygon"], float)
+    if args.world_model == "ray":
+        from video_grouper.inference.world_geometry import build_ray_field_geometry
+
+        seg0 = gj["segments"][0]
+        if "w" not in seg0 or "h" not in seg0:
+            raise SystemExit(
+                f"{gd}: --world-model ray needs source dims but game.json "
+                "segments[0] has no w/h"
+            )
+        geom = build_ray_field_geometry(polygon, int(seg0["w"]), int(seg0["h"]), 180.0)
+        if geom is None:
+            raise SystemExit(
+                "--world-model ray but the polygon cannot support a ray "
+                "geometry (degenerate/mis-ordered/no world-up)"
+            )
+    else:
+        geom = build_field_geometry(polygon)
+        if not geom.valid:
+            raise SystemExit("dump polygon does not fit a valid homography")
 
     detections = dd.load_detections(gd / "autocam_detections.jsonl", offs)
     hb, hn = (
@@ -274,6 +302,7 @@ def main() -> None:
             "gap_frames": args.gap_frames,
             "gold_weight": args.gold_weight,
             "conf_floor": args.conf_floor,
+            "world_model": args.world_model,
         },
         "stats": stats,
         "labels": {str(i): [c, w] for i, (c, w) in sorted(labels.items())},
