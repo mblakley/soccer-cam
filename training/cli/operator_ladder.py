@@ -299,6 +299,7 @@ def cmd_run_a(args: argparse.Namespace) -> None:
         pnone_far_near_diam=args.pnone_far_near_diam,
         pnone_depr_far_deg=args.pnone_depr_far_deg,
         pnone_depr_near_deg=args.pnone_depr_near_deg,
+        world_model=args.world_model,
     )
     if len(res["plan"]) < 2:
         _fail(f"champion chain produced {len(res['plan'])} frames -- need >= 2")
@@ -623,6 +624,16 @@ def main(argv: list[str] | None = None) -> None:
         default=0.0,
         help="Depression angle (deg) at/above which no hold (near field). "
         "See --pnone-depr-far-deg.",
+    )
+    a.add_argument(
+        "--world-model",
+        choices=("homography", "ray"),
+        default="homography",
+        help="EXP-OP-34 (#19): world model for the TRACKER's meters (physics "
+        "gate, measurement noise, Kalman, oob/bridge). 'ray' = ray-ground "
+        "intersection from the polygon-leveled orientation (correct meters); "
+        "'homography' = the planar ruler (bows +/-35%%, EXP-OP-32). Selector "
+        "features always stay on the trained planar geometry.",
     )
     a.add_argument(
         "--static-filter-offfield-only",

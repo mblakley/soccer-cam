@@ -176,3 +176,65 @@ class TestPixelDepression:
         for py in (0.0, 300.0, SRC_H - 1.0):
             d = pixel_depression_deg(2048.0, py, r, SRC_W, SRC_H, SRC_HFOV)
             assert -90.0 <= d <= 90.0
+
+
+class TestRayFieldGeometry:
+    """Ray-ground world model (EXP-OP-34): correct meters from the polygon-
+    leveled orientation; height anchored so the near touchline = field length."""
+
+    def _geom(self):
+        from video_grouper.inference.world_geometry import build_ray_field_geometry
+
+        return build_ray_field_geometry(
+            TestPixelDepression.POLY, SRC_W, SRC_H, SRC_HFOV
+        )
+
+    def test_builds_from_valid_polygon(self):
+        g = self._geom()
+        assert g is not None and g.valid
+        assert g.cam_height_m > 0
+
+    def test_near_touchline_is_scale_anchored(self):
+        g = self._geom()
+        poly = np.asarray(TestPixelDepression.POLY, float)
+        ends = g.image_to_world(poly[[0, 4]])
+        assert np.linalg.norm(ends[1] - ends[0]) == pytest.approx(
+            g.field_length_m, rel=1e-6
+        )
+
+    def test_image_world_round_trip_on_field(self):
+        g = self._geom()
+        pts = np.array([[2048.0, 1400.0], [1000.0, 1000.0], [3000.0, 800.0]])
+        back = g.world_to_image(g.image_to_world(pts))
+        assert np.allclose(back, pts, atol=1e-6)
+
+    def test_expected_size_shrinks_with_distance(self):
+        g = self._geom()
+        sizes = g.expected_ball_diameter_px(
+            np.array([[2048.0, 1500.0], [2048.0, 1100.0], [2048.0, 700.0]])
+        )
+        assert sizes[0] > sizes[1] > sizes[2] > 0
+
+    def test_horizon_ray_stays_finite(self):
+        g = self._geom()
+        w = g.image_to_world(np.array([[2048.0, 0.0]]))
+        assert np.all(np.isfinite(w))
+
+    def test_flipped_polygon_returns_none(self):
+        from video_grouper.inference.world_geometry import build_ray_field_geometry
+
+        poly = np.asarray(TestPixelDepression.POLY, float)
+        flipped = np.concatenate([poly[5:], poly[:5]])  # near/far swapped
+        assert build_ray_field_geometry(flipped, SRC_W, SRC_H, SRC_HFOV) is None
+
+    def test_rerank_accepts_ray_geometry(self):
+        """The tracker runs end-to-end on the ray world model (duck interface)."""
+        from video_grouper.inference.ball_tracker import Candidate, rerank
+
+        g = self._geom()
+        frames = [
+            [Candidate(x=1800.0 + 12.0 * i, y=1200.0, score=0.8, size_px=8.0)]
+            for i in range(12)
+        ]
+        sel = rerank(frames, g, frame_gaps=[1] * 12)
+        assert sum(1 for v in sel.values() if v is not None) > 0

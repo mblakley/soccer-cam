@@ -38,6 +38,7 @@ inference time.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace as replace_dataclass
 
 import cv2
 import numpy as np
@@ -267,6 +268,146 @@ class FieldGeometry:
                 inside = True
             out[i] = inside
         return out
+
+
+@dataclass(frozen=True)
+class RayFieldGeometry:
+    """Ray-geometry world model: image <-> ground meters via the polygon-leveled
+    camera orientation (EXP-OP-32/34, the #19 ruler).
+
+    Same duck interface as :class:`FieldGeometry` where the tracker touches it
+    (``image_to_world`` / ``world_to_image`` / ``expected_ball_diameter_px`` /
+    ``polygon`` / ``valid``), but the meters come from RAY-GROUND INTERSECTION
+    (equirectangular pixel -> world ray -> ground plane at the camera height)
+    instead of the planar pinhole homography — which, fit to a 180° cylindrical
+    panorama, bows ±35% (under-sizes near −28% / over-sizes far +42%, worst at
+    the frame edges; EXP-OP-32). Camera orientation comes calibration-free from
+    the polygon's vanishing points (:func:`cylindrical_view.field_world_up`);
+    the camera height is anchored so the near touchline measures
+    ``field_length_m`` — the polygon as a SCALE ANCHOR only, keeping the meter
+    units compatible with the homography-tuned physics priors (ball_vmax_mpf).
+
+    World frame: +x right, +y down, +z forward of the LEVELED camera; ground
+    points are ``(X, Z)`` meters. Distances/speeds are meaningful; the frame is
+    not aligned to the touchline axes (callers only use metric distances).
+    """
+
+    polygon: np.ndarray
+    r_cw: np.ndarray  # world->camera rotation (cols = world axes in camera coords)
+    cam_height_m: float
+    src_w: int
+    src_h: int
+    src_hfov_deg: float
+    src_vfov_deg: float
+    field_length_m: float
+    field_width_m: float
+    ball_diameter_m: float
+    valid: bool = True
+
+    # Rays flatter than this depression are clamped: they never hit the ground
+    # (or hit absurdly far), mirroring the homography's horizon guard. 0.3° at
+    # a ~3.8 m camera caps ground range at ~730 m.
+    MIN_DEPRESSION_SIN = float(np.sin(np.deg2rad(0.3)))
+
+    def _rays_world(self, pts_xy: np.ndarray) -> np.ndarray:
+        """Unit view rays for pixels ``(M, 2)`` in the leveled world frame."""
+        pts = np.asarray(pts_xy, dtype=np.float64).reshape(-1, 2)
+        yaw = (pts[:, 0] / self.src_w - 0.5) * np.deg2rad(self.src_hfov_deg)
+        pitch = (pts[:, 1] / self.src_h - 0.5) * np.deg2rad(self.src_vfov_deg)
+        ce = np.cos(pitch)
+        d_cam = np.stack([ce * np.sin(yaw), np.sin(pitch), ce * np.cos(yaw)], axis=1)
+        return d_cam @ self.r_cw  # == (r_cw.T @ d).T : camera -> world
+
+    def image_to_world(self, pts_xy: np.ndarray) -> np.ndarray:
+        """Pixel ``(x, y)`` -> ground ``(X, Z)`` meters (ray-ground intersection)."""
+        d = self._rays_world(pts_xy)
+        down = np.maximum(d[:, 1], self.MIN_DEPRESSION_SIN)  # +y down; clamp horizon
+        t = self.cam_height_m / down
+        return np.stack([t * d[:, 0], t * d[:, 2]], axis=1)
+
+    def world_to_image(self, pts_xy: np.ndarray) -> np.ndarray:
+        """Ground ``(X, Z)`` meters -> pixel ``(x, y)`` (exact inverse below the
+        horizon clamp)."""
+        pts = np.asarray(pts_xy, dtype=np.float64).reshape(-1, 2)
+        d = np.stack(
+            [pts[:, 0], np.full(len(pts), self.cam_height_m), pts[:, 1]], axis=1
+        )
+        d_cam = d @ self.r_cw.T  # world -> camera
+        az = np.arctan2(d_cam[:, 0], d_cam[:, 2])
+        el = np.arctan2(d_cam[:, 1], np.hypot(d_cam[:, 0], d_cam[:, 2]))
+        px = (az / np.deg2rad(self.src_hfov_deg) + 0.5) * self.src_w
+        py = (el / np.deg2rad(self.src_vfov_deg) + 0.5) * self.src_h
+        return np.stack([px, py], axis=1)
+
+    def expected_ball_diameter_px(self, pts_xy: np.ndarray) -> np.ndarray:
+        """Apparent ball diameter (px) at each pixel — same ground-segment
+        projection as the planar version, through the ray model."""
+        pts = np.asarray(pts_xy, dtype=np.float64).reshape(-1, 2)
+        world = self.image_to_world(pts)
+        half = self.ball_diameter_m / 2.0
+        sizes = np.zeros(pts.shape[0], dtype=np.float64)
+        for axis in (0, 1):
+            off = np.zeros((1, 2))
+            off[0, axis] = half
+            seg = np.linalg.norm(
+                self.world_to_image(world + off) - self.world_to_image(world - off),
+                axis=1,
+            )
+            sizes += seg
+        return sizes / 2.0
+
+
+def build_ray_field_geometry(
+    polygon: np.ndarray | None,
+    src_w: int,
+    src_h: int,
+    src_hfov_deg: float = 180.0,
+    field_length_m: float = DEFAULT_FIELD_LENGTH_M,
+    field_width_m: float = DEFAULT_FIELD_WIDTH_M,
+    ball_diameter_m: float = SOCCER_BALL_DIAMETER_M,
+) -> RayFieldGeometry | None:
+    """Build :class:`RayFieldGeometry`, or ``None`` when the polygon can't
+    support it (degenerate, mis-ordered, or no world-up) — callers decide
+    whether to fall back to the planar :class:`FieldGeometry` or hard-fail.
+
+    The camera height is solved from the scale anchor: with the orientation
+    fixed, ground coordinates scale linearly with height, so ``H`` is chosen to
+    make the near touchline (polygon points 0->4, the least-distorted span)
+    measure ``field_length_m``.
+    """
+    from video_grouper.inference.cylindrical_view import polygon_leveling_rotation
+
+    if polygon is None:
+        return None
+    poly = np.asarray(polygon, dtype=np.float64)
+    if (
+        poly.shape != (10, 2)
+        or not np.all(np.isfinite(poly))
+        or abs(cv2.contourArea(poly.astype(np.float32))) < MIN_POLYGON_AREA_PX
+        or not _polygon_ordering_ok(poly)
+    ):
+        return None
+    r_cw = polygon_leveling_rotation(poly, src_w, src_h, src_hfov_deg)
+    if r_cw is None:
+        return None
+    src_vfov_deg = src_hfov_deg * src_h / src_w  # square pixels (equirect source)
+    probe = RayFieldGeometry(
+        polygon=poly.astype(np.float32),
+        r_cw=r_cw,
+        cam_height_m=1.0,
+        src_w=src_w,
+        src_h=src_h,
+        src_hfov_deg=src_hfov_deg,
+        src_vfov_deg=src_vfov_deg,
+        field_length_m=field_length_m,
+        field_width_m=field_width_m,
+        ball_diameter_m=ball_diameter_m,
+    )
+    ends = probe.image_to_world(poly[[0, 4]])
+    length_at_1m = float(np.linalg.norm(ends[1] - ends[0]))
+    if not np.isfinite(length_at_1m) or length_at_1m <= 1e-9:
+        return None
+    return replace_dataclass(probe, cam_height_m=field_length_m / length_at_1m)
 
 
 def build_field_geometry(
