@@ -26,6 +26,20 @@ containment vs the dcB baseline. Reads: win → adopt (tracker-only swap, no ret
 flat → the bow doesn't bind through the vmax gate (bank); loss → the vmax/noise priors
 were co-tuned to bent meters and need re-fitting on the correct axis.
 
+**EXP-OP-34 FIRST READ (2026-07-29 late): drop-in ray world model = decisive LOSS —
+pre-registered read (c): the physics priors are co-tuned to bent meters.** wray (dcB hold
++ ray tracker meters) vs dcB, 6 games: far −0.046 (w13/l49, p<0.0001), mid −0.038 (w2/l21,
+p=0.0001), near −0.018 (ns) — worse than A0 too. NOT a defeat of the ray model; the
+MECHANISM is legible and confirms the bow quantitatively: the planar homography OVER-SIZES
+far balls +42% (EXP-OP-32) ⇒ its far meters are COMPRESSED ⇒ the tracker's ball_vmax gate
+was implicitly tuned to compressed far meters. Correct (ray) meters EXPAND far distances,
+so the same vmax now rejects legitimate far motion → far drops (far hit worst, exactly as
+predicted by this mechanism). **Completion cycle: re-fit the speed/noise priors on the ray
+metric (ball_vmax scale sweep ×1.25/1.5/2.0 under wray).** If refit recovers ≥ dcB, the
+correct-meters tracker is viable and the bent-meters tuning debt is measured; if not, the
+homography's compressed-far metric is (accidentally) load-bearing regularization and we
+bank that.
+
 **EXP-OP-35 — ray ruler in the SELECTION stack (selector features + retrain).**
 Hypothesis: the selector's geometry features (expected size at candidate location) are
 trained on the bent ruler (−28% near / +42% far, EXP-OP-32), so it systematically
