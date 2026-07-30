@@ -81,6 +81,93 @@ one sitting for Mark; those games then NEVER enter tuning. Validates dcB + 34/35
 
 ---
 
+## EXP-OP-36 PROGRESS (2026-07-30): v4 store BUILD + two-arm retrain LAUNCHED — with a load-bearing CORRECTION to the pre-registration's data premise (6 of the "7 new-venue games" were already in hn4's training store)
+
+**1. v3/hn4 provenance, verified from artifacts (the recipe v4 replicates).** The deployed
+research detector `D:\opstage\ckpt\hn4_best.pt` (F-OP) is EXP-DIST-46's hn4: its ckpt is the
+early `{model, epoch: 4}` format (0-based = best@ep5, matching EXP-DIST-46's "best=ep5").
+Its data = `crops_reolink` pre-hn5 (83,459 items / train 77,916, EXP-DIST-55), which
+reconciles EXACTLY as the 2026-07-01 20-game build (`G:\ballresearch\distill\build_reolink.log`:
+76,875 samples) + `build_human_crops` append (6,104 rows = 1,526 unique ×4 passes,
+EXP-DIST-60) + 480 GT-guard negs. The canonical CURRENT build/train procedure is the
+crops_reolink_cur chain (`G:\ballresearch\encoding\cur_twin_chain.ps1`, EXP-DIST-60/63 —
+"champion recipe on current data", ceiling-far 0.974 > hn4's 0.965):
+`training/cli/build_distill_dataset.py` (15-game `--games` pin, `--camera reolink`,
+`--max-per-game 3000`, holdout spc+iron-06.15, `--val` Cleveland) → `build_human_crops` →
+`mine_hard_negatives --use-gt --min-ball-dist-px 80 --sample-stride 1 --ckpt hm_reolink_hn2`
+→ freeze_index. Trainer = `training/train_v4_heatmap.py` (store index path, `--base 24`,
+batch 16, lr 1e-3, gray3, σ=4 from store summary, FULL 40 epochs no patience
+[EXP-DIST-61], `--seed 123` [EXP-DIST-55 seed rule]); best.pt selected on val-crop recall
+(checkpoint-selection only — verdicts on held-out ceiling/argmax, EXP-DIST-46 lesson).
+
+**2. CORRECTION (investigate-first): the "7 new-venue 2026 games" were mostly NOT new.**
+`build_reolink.log` (07-01) + the cur pin prove Western-NY-Flash (3000 labels), West-Seneca
+(`_14.40`, 3000), Irondequoit-06.04 (3000), BU15-Flaitz (3000), Lakefront-home (3299) and
+Cleveland (val, 3240) were ALL in hn4's training store. The only net-new listed game is
+**Hilton-Heat-Flaitz 06.08**, skipped in July because its `gen_detections_all` per-video
+jsonl covered only seg 1/25 (28,615 rows, one seg — build log: "active-play filter 431→0").
+As pre-registered, the venue delta would have been ≈+1 venue. Actions taken:
+- **Converted the FULL archived AutoCam-GUI detections** (`F:\archive\ball_distill\…`,
+  stride-1/uncapped/floor .05) into the canonical per-video jsonl contract
+  (stride-4, top-20/frame, floor .05 — `gen_detections_all.py` constants) for
+  **Hilton (652,814 rows / 35,808 frames / 25 segs)** and for
+  **heat__2026.06.10_vs_Lakefront_SC_away (Parma Town Hall Park; 541,898 rows / 29,298
+  frames / 20 segs)** — a second data-complete never-trained venue (video + 10-pt polygon +
+  human game_state verified). Seg-order/coord mapping VALIDATED on Lakefront-home (both
+  sources exist): 146/150 archive top-candidates within 25 px of per-video rows (97.3%).
+  Provenance READMEs written next to each jsonl; partial Hilton jsonl kept as `.bak`.
+- **v4 game pin = cur 15-pin + Hilton + Lakefront-0610 − Upper_90** (16 games: 15 train +
+  Cleveland val).
+- **Honest power note:** the retrain confounds (i) +2 new venues / −1 (Upper_90 leaves
+  training), (ii) the data-refresh effect (worth ~+0.009 ceiling-far by itself,
+  EXP-DIST-63), (iii) the 07-22 polygon repairs. This round is a WEAK incremental test of
+  the venue-diversity hypothesis, not the decisive one; the decisive lever at current
+  corpus is Dahua multi-venue distill (geodet Phase 0b: 39 confirmed-polygon Dahua games
+  with detection jsonl) which stays out of scope here (Reolink-primary policy).
+
+**3. Held-out policy applied (hard gates in the chain, not warnings).**
+- **Upper_90 (both ids) is REMOVED from training** — it was IN hn4/cur (5,170 distill +
+  43 human crops) but is now the EXP-OP-37 held-out (labels pending Mark) and on the
+  DATA_INVENTORY held-out list. spc + Iron-06.15 stay held out (precedent).
+- **The 6 GT tuning games:** precedent (cur chain) trains on fair/chili/pitmust/fair0530/
+  lakefront-home and holds out ONLY spc — followed exactly. (GT games gate the OPERATOR
+  tuning; detector training keeps them, which is WHY EXP-OP-37's upper90 exists.)
+- **LEAK FOUND in crops_reolink_cur/stab (documented, those stores left as-is):**
+  `build_human_crops`' default `--exclude` regex (`spc|0615|irondequoit|Spencerport|…`)
+  does not match the set name `iron_ourloss_spans` → **270 held-out Iron-06.15 human crops
+  are inside crops_reolink_cur AND _stab** (so hm_ctrl_cur/hm_ctrl_stab trained on them;
+  hn4-era store was verified clean by the EXP-DIST-50 scan — the sets postdate it). v4
+  passes an extended exclude (`+iron_ourloss +upper90|Upper_90`) and the build chain ends
+  in a HARD leak-scan + depth-completeness gate (exit≠0 aborts the chain, CLAUDE.md rule 8).
+
+**4. Far emphasis = pre-registered arm 2, not baked into the store.** Store is built with
+`--record-depth` (new additive flags on `build_distill_dataset` + `build_human_crops`, w2)
+so positives carry normalized field depth; crops are byte-identical to the legacy recipe.
+- **hm_v4 (arm 1, control):** exact cur/hn4 recipe on the v4 store — reads the
+  venue/data-refresh effect alone.
+- **hm_v4fw (arm 2):** `--far-weight 2.0` (a far-touchline ball weighs up to 3× a near one
+  in the positive-pixel loss), same seed 123 / same frozen index as arm 1. EXP-DIST-14's
+  K=4 negative is acknowledged: different harness (recall_train, 30k steps, 58
+  mixed-camera games, June recipe) and the trainer's `--far-weight` path (EXP-DIST-49-era)
+  has never reached a verdict under the hn4-family recipe; K=2 + paired-seed control
+  isolates it. If arm 2 < arm 1 held-out, loss-side far weighting is dead in this family
+  too and that gets banked.
+- **Eval (unchanged protocol):** held-out spc-clip ceiling/argmax @R15m (EXP-DIST-46,
+  denominator-pinned per EXP-DIST-71) + product-chain far containment on the operator
+  scoreboard; upper90 becomes the untouched validation game when Mark labels it
+  (EXP-OP-37). NOT judged on val-crop recall.
+
+**5. Logistics/launch record.** Store `D:\training_data\deploy\crops_reolink_v4` (G: has
+only 17 GB free; store ≈17 GB) → staged `F:\test\staging\crops_reolink_v4` → F-OP pull →
+train `D:\opstage\runs\hm_v4` then `hm_v4fw`. Server chain: `G:\ballresearch\op36\v4_chain.ps1`
+(isolated w2 checkout `G:\ballresearch\op36\repo`), status `G:\ballresearch\op36\v4build.status`,
+logs `build_v4/human_v4/gtneg_v4/verify_v4.log`. F-OP: `run_v4pull.cmd` (training-user task;
+SYSTEM has no share access) + `run_v4train.cmd` (both arms, `v4train.status`).
+Expected: build ~7.5 h (cur took 6.75 h for 15 games), ~8-9 h per training arm on the
+3060 Ti (~12 min/epoch × 40). [launch timestamps + verification in STATUS.md]
+
+---
+
 ## EXP-OP-33 (#19 Phase C): DEPRESSION-conditioned hold REVERSES EXP-OP-30 — on the lens-correct axis the continuous ramp WORKS: matches fd6's far gain, ties near, and DECISIVELY fixes fd6's mid-band regression (+0.024, 13–0, p=0.0002) (2026-07-29)
 
 **The decisive #19 test.** EXP-OP-30 showed a continuous depth-ramp was WORSE than

@@ -1,6 +1,32 @@
 # Current Status
 
-*Last updated: 2026-07-29 (night) — dcB SHIPPED as production default; four-lever arc (EXP-OP-34…37) opened per Mark: 34 CLOSED (no-go, co-tuning insight), 35 scoped (metric-consistent v8), 36 data verified, 37 dump running overnight. Tomorrow: EXP-OP-35 v8 build + EXP-OP-36 dataset build.*
+*Last updated: 2026-07-30 (midday) — EXP-OP-36 v4 store build RUNNING on the server (ETA ~18:00), F-OP two-arm retrain queued behind it; pre-registration data premise CORRECTED (6/7 "new-venue" games were already in hn4's store — see EXPERIMENTS EXP-OP-36 PROGRESS).*
+
+## 2026-07-30 (midday) — EXP-OP-36 v4 dataset build LAUNCHED (+ corrected data premise)
+
+- **CORRECTION (verified from build_reolink.log 07-01 + the cur pin):** of the 7
+  "new-venue" games, 6 were ALREADY in hn4's training store; only Hilton-06.08 was absent
+  (its per-video detections covered seg 1/25). Fixed by converting the archived AutoCam-GUI
+  detections (F:\archive\ball_distill) to the canonical per-video jsonl contract
+  (stride-4/top-20/floor .05; seg-mapping validated 97.3% on the Lakefront-home control) for
+  **Hilton** AND **Lakefront-0610 away (Parma Town Hall Park)** — two genuinely-new venues.
+- **v4 store `crops_reolink_v4` building on the server** (task `v4build`, chain
+  `G:\ballresearch\op36\v4_chain.ps1`, isolated w2 checkout `G:\ballresearch\op36\repo` @
+  ecf7aa6, status `G:\ballresearch\op36\v4build.status`): cur-chain recipe, 16-game pin
+  (cur 15-pin + Hilton + Lakefront-0610 **− Upper_90**, now held-out per EXP-OP-37/
+  DATA_INVENTORY), `--record-depth`, extended human-crop exclude (found + dodged a
+  **270-crop Iron-06.15 leak that is INSIDE crops_reolink_cur/stab** — `iron_ourloss_spans`
+  misses the default exclude regex), HARD leak+depth verification gate, then auto-stage to
+  `F:\test\staging\crops_reolink_v4`. Launched 10:12, ~7.5 h → store ~18:00, staged ~20:30.
+- **F-OP retrain queued** (tasks registered, run after the store lands): `v4pull` (training
+  user; share auth) then `v4train` = **hm_v4** (exact cur/hn4 recipe: base 24, 40 ep, no
+  patience, seed 123) then **hm_v4fw** (`--far-weight 2.0`, same seed/index) —
+  `D:\opstage\runs\hm_v4{,fw}`, status `D:\opstage\v4train.status`. ~8-9 h/arm on the
+  3060 Ti; arm 1 done ~05:00-06:00 07-31, arm 2 ~15:00 07-31.
+- **w2 code:** `--record-depth` on `build_distill_dataset` + `build_human_crops` (ecf7aa6,
+  1864 unit tests green). Eval protocol + arms pre-registered in EXPERIMENTS EXP-OP-36
+  PROGRESS; verdicts on held-out spc ceiling/argmax + operator far containment, upper90
+  reserved (EXP-OP-37), never val-crop recall.
 
 ## 2026-07-29 (night) — four-lever arc launched (Mark: "do all 4, fastest to slowest")
 
