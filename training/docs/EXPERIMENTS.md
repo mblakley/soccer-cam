@@ -200,14 +200,23 @@ so positives carry normalized field depth; crops are byte-identical to the legac
   scoreboard; upper90 becomes the untouched validation game when Mark labels it
   (EXP-OP-37). NOT judged on val-crop recall.
 
-**5. Logistics/launch record.** Store `D:\training_data\deploy\crops_reolink_v4` (G: has
-only 17 GB free; store ≈17 GB) → staged `F:\test\staging\crops_reolink_v4` → F-OP pull →
-train `D:\opstage\runs\hm_v4` then `hm_v4fw`. Server chain: `G:\ballresearch\op36\v4_chain.ps1`
-(isolated w2 checkout `G:\ballresearch\op36\repo`), status `G:\ballresearch\op36\v4build.status`,
-logs `build_v4/human_v4/gtneg_v4/verify_v4.log`. F-OP: `run_v4pull.cmd` (training-user task;
-SYSTEM has no share access) + `run_v4train.cmd` (both arms, `v4train.status`).
-Expected: build ~7.5 h (cur took 6.75 h for 15 games), ~8-9 h per training arm on the
-3060 Ti (~12 min/epoch × 40). [launch timestamps + verification in STATUS.md]
+**5. Launch record (all VERIFIED, 2026-07-30).** Server chain `G:\ballresearch\op36\v4_chain.ps1`
+(isolated w2 checkout `G:\ballresearch\op36\repo` @ ecf7aa6, task `v4build`): build 10:12:33 →
+`DATASET {samples: 85358, train: 79347, val: 6011, positives: 50246}` 17:40:50 (7 h 28 m; 16
+games all labeled — **Hilton 26,339 teacher frames → 3,000 labels** [was 0 in July],
+Lakefront-0610 → 3,000) → human crops **+2,908 pos / +692 neg** (extended exclude active) →
+GT-negs **+456** → HARD verify gate PASS → staged 19:22:23. **Final store: index_v3
+sha `29a6f902f3cd6a7a`, 89,414 items / 53,154 positives, ALL positives depth-recorded, zero
+held-out contamination** (composition table in `G:\ballresearch\op36\verify_v4.log`).
+Data note for the read: Chili's evolved teacher track shrank to 6,515 frames → 2,619 labels
+(was 22,191 → 3,309 on 07-01) — the current tracker/filters are much pickier on Chili.
+Staged 16.44 GB → F-OP pull 19:26–20:11 (89,414 files) → **arm 1 `hm_v4` RUNNING on F-OP**
+(task `v4train`, started 20:13:04): trainer pins `index_v3 sha=29a6f902f3cd6a7a` (byte-equal
+to the server sha = transfer integrity), seed 123, train 83,403 / val 6,011, epoch 1 in
+12.9 min — `loss=0.0103 val={recall 0.31, 1092/3518, fp_on_bg 157}` — best.pt checkpointed,
+GPU 99 %. ETA arm 1 ~04:50 07-31, arm 2 (`hm_v4fw`, auto-chained) ~13:45 07-31. Logs:
+`D:\opstage\out\train_v4{,fw}.log`, status `D:\opstage\v4train.status`, ckpts
+`D:\opstage\runs\hm_v4{,fw}\best.pt`.
 
 ---
 

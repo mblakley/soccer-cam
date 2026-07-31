@@ -1,6 +1,28 @@
 # Current Status
 
-*Last updated: 2026-07-30 (midday) — EXP-OP-36 v4 store build RUNNING on the server (ETA ~18:00), F-OP two-arm retrain queued behind it; pre-registration data premise CORRECTED (6/7 "new-venue" games were already in hn4's store — see EXPERIMENTS EXP-OP-36 PROGRESS). Separately: EXP-OP-35 CLOSED (NO-GO, decisive — see the 07-30 morning block below); champion unchanged (selector_v7 + dcB).*
+*Last updated: 2026-07-30 (night) — EXP-OP-36 v4 store BUILT+VERIFIED (89,414 crops, sha 29a6f902, zero held-out contamination); arm 1 (hm_v4) TRAINING on F-OP, epoch 1 verified (val 0.31, GPU 99%), arm 2 (hm_v4fw --far-weight 2.0) auto-chains — ETAs arm 1 ~04:50, arm 2 ~13:45 07-31. EXP-OP-35 CLOSED (NO-GO, decisive — see the 07-30 morning block); champion unchanged (selector_v7 + dcB).*
+
+## 2026-07-30 (night) — EXP-OP-36 training LAUNCHED + verified producing
+
+- **Store `crops_reolink_v4` COMPLETE + verified:** index_v3 `29a6f902f3cd6a7a`, 89,414
+  items / 53,154 positives (ALL depth-recorded), 16 games — Hilton (5,110 rows) +
+  Lakefront-0610 (5,052) IN; Upper_90 / spc / Iron-06.15 / `iron_ourloss_spans` OUT (hard
+  verify gate PASS; composition in `G:\ballresearch\op36\verify_v4.log`). Build 10:12→19:22
+  (DATASET 17:40: 85,358 distill samples / 50,246 pos; human +2,908/+692; GT-negs +456).
+  Homes: server `D:\training_data\deploy\crops_reolink_v4`, staged
+  `F:\test\staging\crops_reolink_v4` (16.44 GB), F-OP `D:\opstage\data\crops_reolink_v4`
+  (trainer pinned the SAME sha = transfer verified).
+- **arm 1 `hm_v4` RUNNING** (F-OP task `v4train`, started 20:13): epoch 1 in 12.9 min —
+  loss 0.0103, val-crop 0.31 (1092/3518, fp 157), best.pt written, GPU 99%. **arm 2
+  `hm_v4fw`** (`--far-weight 2.0`, seed 123, same index_v3) runs automatically after arm 1
+  inside the same task.
+- **RESUME POINTERS:** status `D:\opstage\v4train.status`; logs
+  `D:\opstage\out\train_v4{,fw}.log`; ckpts `D:\opstage\runs\hm_v4{,fw}\best.pt`; build
+  logs `G:\ballresearch\op36\{build,human,gtneg,verify}_v4.log`. **Next when arms land:**
+  held-out spc-clip ceiling/argmax @R15m (EXP-DIST-46/-71 protocol; anchors hn4 0.965 /
+  ctrl_cur 0.974 ceiling-far) + operator-scoreboard far containment (6 GT games) + upper90
+  validation once Mark labels (EXP-OP-37). Verdict NEVER on val-crop recall. Full analysis
+  + the corrected data premise: EXPERIMENTS "EXP-OP-36 PROGRESS".
 
 ## 2026-07-30 (midday) — EXP-OP-36 v4 dataset build LAUNCHED (+ corrected data premise)
 
