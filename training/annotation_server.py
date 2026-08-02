@@ -1801,12 +1801,21 @@ async def get_far_set(set_id: str):
 
 @app.get("/api/far-label/{set_id}/strip/{frame_idx}")
 async def get_far_strip(set_id: str, frame_idx: int):
-    """Serve a pre-extracted far-field crop strip (native-res JPEG)."""
+    """Serve a pre-extracted far-field crop strip.
+
+    Prefers the JPEG; falls back to a lossless PNG of the same stem —
+    build_far_label_queue writes PNG strips with .jpg manifest names and
+    relies on this fallback (which the upper90 set proved didn't exist:
+    the route was jpg-only, so the whole set 404'd until the strips were
+    hand-converted, 2026-07-31)."""
     d = _far_set_dir(set_id)
     strip = d / "strips" / f"f{frame_idx:06d}.jpg"
-    if not strip.exists():
-        raise HTTPException(404, f"Strip not found: {frame_idx}")
-    return FileResponse(strip, media_type="image/jpeg")
+    if strip.exists():
+        return FileResponse(strip, media_type="image/jpeg")
+    png = strip.with_suffix(".png")
+    if png.exists():
+        return FileResponse(png, media_type="image/png")
+    raise HTTPException(404, f"Strip not found: {frame_idx}")
 
 
 @app.post("/api/far-label/{set_id}/result")
