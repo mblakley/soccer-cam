@@ -180,6 +180,37 @@ def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> boo
     return bool(live)
 
 
+def _read_autocam_status(main_window) -> str:
+    """Best-effort read of AutoCam's status text, across UI versions.
+
+    3.0.x exposed a single ``auto_id="Notification"`` Text control. 3.1.1
+    replaced it with a status panel (``Status: Initializing|Running|
+    Succeeded``, plus Processed/Dropped/FPS/Elapsed/ETA rows), so the
+    old lookup raised and the caller's ``except`` swallowed it — leaving
+    processing_started False and success undetectable. Fall back to
+    concatenating every Text descendant so the caller's substring checks
+    keep working whatever the layout is.
+    """
+    try:
+        return main_window.child_window(
+            auto_id="Notification", control_type="Text"
+        ).window_text()
+    except Exception:
+        pass
+    parts: list[str] = []
+    try:
+        for ctrl in main_window.descendants(control_type="Text"):
+            try:
+                text = ctrl.window_text()
+            except Exception:
+                continue
+            if text and text.strip():
+                parts.append(text.strip())
+    except Exception as exc:  # window gone / UIA hiccup
+        logger.debug("Could not enumerate AutoCam Text controls: %s", exc)
+    return " | ".join(parts)
+
+
 def _taskkill_autocam_tree() -> None:
     """Kill GUI.exe AND autocam.exe. AutoCam 3.0.7 spawns autocam.exe
     as a child of GUI.exe; killing only GUI.exe leaves autocam.exe
@@ -638,10 +669,7 @@ def _wait_for_completion_and_cleanup(
     try:
         while (datetime.datetime.now() - start_time).total_seconds() < timeout_seconds:
             try:
-                notification = main_window.child_window(
-                    auto_id="Notification", control_type="Text"
-                )
-                raw_notification = notification.window_text()
+                raw_notification = _read_autocam_status(main_window)
                 notification_text = raw_notification.lower()
                 logger.info("Autocam status: %r", raw_notification)
 
@@ -690,11 +718,38 @@ def _wait_for_completion_and_cleanup(
                             )
                     break
 
-                if "finished processing" in notification_text:
-                    found = True
-                    logger.info("Detected success message: %r", raw_notification)
-                    break
-                elif "error" in notification_text:
+                # Success vocabulary differs by build: 3.0.x wrote
+                # "finished processing"; 3.1.1's status panel reads
+                # "Status: Succeeded" (same words the CLI prints). Accept
+                # either, and only trust "succeeded" once the output
+                # validates, so a stale/partial file can't pass.
+                if "finished processing" in notification_text or (
+                    "succeeded" in notification_text and output_path
+                ):
+                    ok, reason = (
+                        _validate_autocam_output(output_path, input_path=input_path)
+                        if output_path
+                        else (True, "no output path to validate")
+                    )
+                    if ok:
+                        found = True
+                        logger.info(
+                            "Detected success (%r, validation=%s)",
+                            raw_notification,
+                            reason,
+                        )
+                        break
+                    logger.warning(
+                        "Success text seen but output not valid yet (%s); "
+                        "continuing to poll.",
+                        reason,
+                    )
+                elif "failed" in notification_text or (
+                    "error" in notification_text
+                    # 3.1.1's panel always shows an "ETA:" row; don't let
+                    # that substring look like an error report.
+                    and "eta:" not in notification_text
+                ):
                     logger.error("Autocam reported an error: %r", raw_notification)
                     if output_path and os.path.isfile(output_path):
                         try:
@@ -705,6 +760,9 @@ def _wait_for_completion_and_cleanup(
                 elif (
                     "processing" in notification_text
                     or "processed" in notification_text
+                    # 3.1.1 status values before completion
+                    or "running" in notification_text
+                    or "initializing" in notification_text
                 ):
                     if not processing_started:
                         processing_started = True

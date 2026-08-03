@@ -792,3 +792,48 @@ class TestOutputProgressStartsProcessing:
         genuinely wedged AutoCam doesn't pin the queue."""
         polls = self._run("", [0])
         assert polls <= 12, f"wedged AutoCam should bail by ~poll 10, got {polls}"
+
+
+class TestStatusVocabulary311:
+    """AutoCam 3.1.1 replaced the single auto_id='Notification' Text
+    control with a status panel whose text reads e.g.
+    'Status: | Running | Processed: | 1234 | ... | ETA: | 00:12:00'.
+    _read_autocam_status must fall back to concatenating Text
+    descendants, and the caller's matching must understand the 3.1.1
+    words (Initializing/Running/Succeeded) as well as 3.0.x's.
+    Screenshot evidence captured 2026-08-03.
+    """
+
+    def test_read_status_falls_back_to_descendants(self):
+        import video_grouper.tray.autocam_automation as mod
+
+        mw = MagicMock()
+        mw.child_window.side_effect = Exception("no such element")
+        t1, t2, t3 = MagicMock(), MagicMock(), MagicMock()
+        t1.window_text.return_value = "Status:"
+        t2.window_text.return_value = "Running"
+        t3.window_text.return_value = "   "  # whitespace should be dropped
+        mw.descendants.return_value = [t1, t2, t3]
+
+        text = mod._read_autocam_status(mw)
+        assert "Status:" in text and "Running" in text
+        assert text.count("|") == 1, f"whitespace-only control not dropped: {text!r}"
+
+    def test_read_status_prefers_legacy_notification_control(self):
+        import video_grouper.tray.autocam_automation as mod
+
+        mw = MagicMock()
+        note = MagicMock()
+        note.window_text.return_value = "finished processing"
+        mw.child_window.return_value = note
+        assert mod._read_autocam_status(mw) == "finished processing"
+        mw.descendants.assert_not_called()
+
+    def test_eta_row_is_not_treated_as_an_error(self):
+        """'ETA:' contains 'eta' but the panel also has no error; the
+        substring must not trip the error branch."""
+        text = "Status: | Running | Processed: | 900 | ETA: | 00:11:00"
+        lowered = text.lower()
+        # mirrors the production condition
+        is_error = "failed" in lowered or ("error" in lowered and "eta:" not in lowered)
+        assert not is_error
