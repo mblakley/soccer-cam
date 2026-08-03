@@ -154,6 +154,57 @@ one sitting for Mark; those games then NEVER enter tuning. Validates dcB + 34/35
 
 ---
 
+## EXP-OP-36 RESULTS (2026-08-02): NO-GO for promotion — the v4 retrain does NOT lift the far ceiling on either held-out game (venue delta was too small to test the hypothesis, as corrected below); TWO high-yield findings: (1) the "current-data" rebuild carries a DECISIVE far-ORDERING cost on windy fair (v4 argmax 0.316 vs hn4 0.724, CIs disjoint), and (2) --far-weight 2.0 RESCUES it (0.713 ≈ hn4) — EXP-DIST-14's "far-weight hurts" does NOT generalize to the hn4-family recipe
+
+**Training (both arms completed 07-31 12:48, F-OP task `v4train`, full 40 ep each, seed
+123, index_v3 `29a6f902f3cd6a7a`):** hm_v4 best@ep11 val-crop 0.372; hm_v4fw
+(`--far-weight 2.0`) best@ep22 val-crop 0.397. Ckpts `D:\opstage\runs\hm_v4{,fw}\best.pt`
+(+ copies `G:\ballresearch\distill\runs\hm_{v4,v4fw}\best.pt`). The depth-recorded store's
+`require_positive_depth` guard passed live (first use incl. human hpos depth).
+
+**Held-out read (server-1060 dumps via the eval_tag protocol; scored by the EXP-DIST-70
+event-bootstrap audit — one scorer over v4 arms AND all cached anchors):**
+| game/metric | hn4 | ctrl_cur | **hm_v4** | **hm_v4fw** |
+|---|---|---|---|---|
+| spc far-ceil (7 ev) | 0.965[0.85,1.00] | 0.974[0.87,1.00] | 0.948[0.77,1.00] | 0.957[0.79,1.00] |
+| spc far-arg (7 ev) | 0.261[0.16,0.43] | 0.165[0.05,0.23] | 0.217[0.06,0.31] | 0.217[0.13,0.30] |
+| spc near-ceil (5 ev) | 1.000 | 1.000 | 1.000 | 0.947[0.40,1.00] |
+| **fair far-ceil (11 ev)** | 0.983[0.96,1.00] | 0.971* | 0.977[0.94,1.00] | 0.977[0.96,1.00] |
+| **fair far-arg (11 ev)** | 0.724[0.60,0.86] | 0.663* | **0.316[0.20,0.42]** | **0.713[0.52,0.88]** |
+(fair anchors: `cands_fair_raw.pkl` = hn4 re-scored identically; * = EXP-DIST-71 banked
+ctrl_cur values, protocol-matched. Artifacts: `G:\ballresearch\op36\v4_audit_table.txt`,
+`dump_{v4,v4fw}.log`, `dump_fair_{v4,v4fw}.log`; pkls `cands_{spc,fair}_{v4,v4fw}.pkl`.)
+
+**Verdicts (pre-registered reads):**
+1. **Far CEILING unchanged everywhere** (all CIs overlap; fair 0.977 vs 0.983 = 1 ball).
+   The +Hilton/+Parma −Upper_90 venue delta does NOT reduce the 46% undetected-far share —
+   as the corrected premise predicted (6/7 "new" venues were already trained on), this
+   round could not decisively test venue diversity. The hypothesis is UNTESTED at scale,
+   not refuted; the decisive test remains genuinely-unseen venues in volume (Dahua
+   multi-venue distill, 39 detection-jsonl games — geodet Phase 0b) or new 2027 venues.
+2. **hm_v4 (uniform loss) = DECISIVE fair far-ordering regression** (0.316 vs hn4 0.724,
+   disjoint CIs): "the champion recipe on current data" is NOT ordering-preserving — the
+   evolved teacher/composition (Chili track 22,191→6,515; −Upper_90; +2 noisy new venues)
+   costs far argmax exactly where far detection matters most. Echoes ctrl_cur's spc
+   far-arg dip (0.165 vs ctrl 0.261). The frozen hn4-era data is doing unpriced ordering
+   work; data refresh ≠ free.
+3. **hm_v4fw (--far-weight 2.0) rescues the ordering** (fair far-arg 0.713 ≈ hn4; beats
+   its own uniform twin decisively, CIs disjoint) at the price of 1 spc near ball
+   (near-ceil 0.947). **EXP-DIST-14's far-weight negative does not reproduce under the
+   hn4-family recipe** — banked as a context-dependent lever, validated infrastructure
+   (depth-recorded store + flag).
+4. **Promotion: NO.** Neither arm beats deployed hn4 on any cell; hn4 stays the research
+   champion. The operator-chain far-containment read was NOT spent: with input candidates
+   tied-at-best, containment gains are implausible, and F-OP GPU is re-gated (below).
+
+**Ops/constraint note (2026-08-02):** the F-OP 2-week borrow window is OVER — Mark's son
+is gaming again; FLEET.md gates back in force (GPU work only behind the physical
+nvidia-smi no-game gate, queue+guard, yield/resume; prefer the server 1060 — these evals
+already ran there via the checkpoint-waiter pattern, ckpts pulled to the server).
+**Follow-up available:** upper90 held-out GT now exists (218 far-dominant frames,
+EXP-OP-37); a detector-side upper90 read needs one candidate dump per arm (server-1060
+overnight, or guarded F-OP) — queued as the next cheap eval if the v4fw line is pursued.
+
 ## EXP-OP-36 PROGRESS (2026-07-30): v4 store BUILD + two-arm retrain LAUNCHED — with a load-bearing CORRECTION to the pre-registration's data premise (6 of the "7 new-venue games" were already in hn4's training store)
 
 **1. v3/hn4 provenance, verified from artifacts (the recipe v4 replicates).** The deployed

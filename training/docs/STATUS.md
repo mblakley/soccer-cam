@@ -1,6 +1,28 @@
 # Current Status
 
-*Last updated: 2026-07-30 (night) — EXP-OP-36 v4 store BUILT+VERIFIED (89,414 crops, sha 29a6f902, zero held-out contamination); arm 1 (hm_v4) TRAINING on F-OP, epoch 1 verified (val 0.31, GPU 99%), arm 2 (hm_v4fw --far-weight 2.0) auto-chains — ETAs arm 1 ~04:50, arm 2 ~13:45 07-31. EXP-OP-35 CLOSED (NO-GO, decisive — see the 07-30 morning block); champion unchanged (selector_v7 + dcB).*
+*Last updated: 2026-08-02 (night) — EXP-OP-36 CLOSED: NO-GO for promotion (hn4 stays champion) — far ceilings unchanged on spc AND windy fair; but hm_v4 uniform shows a DECISIVE fair far-argmax collapse (0.316 vs hn4 0.724) and --far-weight 2.0 RESCUES it (0.713) — EXP-DIST-14 does not generalize. F-OP borrow window OVER (gaming gates back). Four-lever arc complete: 34 no-go, 35 no-go, 36 no-go-with-yield, 37 dcB==A0 validated.*
+
+## 2026-08-02 (night) — EXP-OP-36 CLOSED (results banked; full table in EXPERIMENTS)
+
+- **Both arms trained clean** (F-OP, done 07-31 12:48): hm_v4 best@ep11 val 0.372;
+  hm_v4fw best@ep22 val 0.397; ckpts `D:\opstage\runs\hm_v4{,fw}\best.pt` +
+  `G:\ballresearch\distill\runs\hm_{v4,v4fw}\best.pt` (4.2 MB each, pulled to server).
+- **Held-out reads (server 1060; EXP-DIST-70 audit, one scorer for arms + anchors):**
+  far CEILING tied everywhere (spc 0.948/0.957 vs 0.965-0.974; fair 0.977 both vs 0.983 —
+  all CIs overlap). **hm_v4 fair far-ARGMAX 0.316 [0.20,0.42] vs hn4 0.724 [0.60,0.86] =
+  decisive regression of the current-data rebuild; hm_v4fw 0.713 [0.52,0.88] = full
+  rescue by --far-weight 2.0.** No promotion; venue-diversity hypothesis UNTESTED at
+  scale (the 7-game list was mostly already in training — see the 07-30 correction);
+  decisive venue test = Dahua multi-venue distill (39 games) or new venues.
+- **F-OP CONSTRAINT (effective 08-02): the 2-week borrow is OVER** — gaming-first gates
+  back in force (FLEET.md): GPU work only behind the physical nvidia-smi no-game gate,
+  queue+guard with yield/resume; prefer the server 1060 (these evals ran there).
+- **Open follow-ups:** (1) upper90 detector read (218 far-GT frames exist; needs one
+  dump/arm — server-1060 overnight); (2) if the v4fw line is pursued, its spc near-ceil
+  0.947 (−1 ball) needs a look; (3) the fair ordering-collapse mechanism (evolved teacher
+  on Chili 22,191→6,515 labels is the prime suspect) before any future current-data rebuild.
+- Artifacts: `G:\ballresearch\op36\{v4_audit_table.txt, dump_*.log, v4eval.status,
+  v4fair.status}`; dumps `G:\ballresearch\distill\cands_{spc,fair}_{v4,v4fw}.pkl`.
 
 ## 2026-07-30 (night) — EXP-OP-36 training LAUNCHED + verified producing
 
