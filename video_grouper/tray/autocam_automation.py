@@ -16,7 +16,13 @@ logger = logging.getLogger(__name__)
 # Window title prefix the AutoCam main window uses on Windows. Keeping
 # this as a module constant lets the resume + fresh-launch paths agree.
 _AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
-_AUTOCAM_PROCESS_NAME = "GUI.exe"
+# Image names AutoCam's main window process can have. 3.0.x shipped `GUI.exe`;
+# 3.1.1 renamed it to `AutocamGUI.exe`. Matching only the old name made
+# _live_autocam_pids() return [] for a perfectly healthy 3.1.1 render, so the
+# completion wait concluded "GUI exited without producing output" ~6s after
+# processing started and failed the step mid-render (observed 2026-08-03).
+_AUTOCAM_PROCESS_NAMES = ("GUI.exe", "AutocamGUI.exe")
+_AUTOCAM_PROCESS_NAME = _AUTOCAM_PROCESS_NAMES[0]
 
 # Suppress the console flash on every tasklist/wmic poll -- the tray is
 # a GUI app and these run on a 30s discovery loop.
@@ -175,7 +181,7 @@ def _taskkill_autocam_tree() -> None:
     orphaned, eating CPU and holding the output file handle so the
     next pass can't delete the partial.
     """
-    for image in ("GUI.exe", "autocam.exe"):
+    for image in (*_AUTOCAM_PROCESS_NAMES, "autocam.exe"):
         subprocess.run(
             ["taskkill", "/F", "/IM", image],
             capture_output=True,
@@ -339,18 +345,23 @@ def _find_autocam_gui_pids(
             the launch path to avoid grabbing PIDs of unrelated GUI.exe
             instances that were already running.
     """
-    pids = _parse_tasklist_csv_pids(
-        _run_console(
-            [
-                "tasklist",
-                "/FI",
-                f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
-                "/FO",
-                "CSV",
-                "/NH",
-            ]
+    pids: list[int] = []
+    for image in _AUTOCAM_PROCESS_NAMES:
+        pids.extend(
+            _parse_tasklist_csv_pids(
+                _run_console(
+                    [
+                        "tasklist",
+                        "/FI",
+                        f"IMAGENAME eq {image}",
+                        "/FO",
+                        "CSV",
+                        "/NH",
+                    ]
+                )
+            )
         )
-    )
+    pids = sorted(set(pids))
     if since_epoch is None:
         return pids
     filtered: list[int] = []
@@ -368,20 +379,22 @@ def _live_autocam_pids(candidate_pids: list[int]) -> list[int]:
     intersects with ``candidate_pids``. This avoids spawning one
     subprocess per PID on every 30-second poll.
     """
-    all_gui = set(
-        _parse_tasklist_csv_pids(
-            _run_console(
-                [
-                    "tasklist",
-                    "/FI",
-                    f"IMAGENAME eq {_AUTOCAM_PROCESS_NAME}",
-                    "/FO",
-                    "CSV",
-                    "/NH",
-                ]
+    all_gui: set[int] = set()
+    for image in _AUTOCAM_PROCESS_NAMES:
+        all_gui.update(
+            _parse_tasklist_csv_pids(
+                _run_console(
+                    [
+                        "tasklist",
+                        "/FI",
+                        f"IMAGENAME eq {image}",
+                        "/FO",
+                        "CSV",
+                        "/NH",
+                    ]
+                )
             )
         )
-    )
     return [pid for pid in candidate_pids if pid in all_gui]
 
 
@@ -1068,9 +1081,16 @@ def _execute_autocam_gui_automation(
             except Exception as e:
                 logger.warning(f"Could not click Auto mark button: {e}")
 
-            # Wait for field marking to complete (up to 60s after clicking Auto mark)
+            # Wait for field marking to complete after clicking Auto mark.
+            # 60s was too short for full-size camera files: AutoCam's own log
+            # shows SavePlayingFieldMarkingImage taking ~102s on a 15 GB 8K
+            # source. Worse, timing out here did not just skip marking -- the
+            # code below clicked Apply/Start anyway, which disposed the settings
+            # window mid-snapshot and crashed AutoCam's UI thread
+            # (ObjectDisposedException -> ArgumentNullException, observed
+            # 2026-08-03). Give the detector room to finish.
             marking_complete = False
-            deadline = time.time() + 60
+            deadline = time.time() + 300
             while time.time() < deadline:
                 try:
                     for txt in settings_window.descendants(control_type="Text"):

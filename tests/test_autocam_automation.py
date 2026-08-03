@@ -562,10 +562,12 @@ class TestTaskkillAutocamTree:
 
         with patch("video_grouper.tray.autocam_automation.subprocess.run") as mock_run:
             _taskkill_autocam_tree()
-        # Two calls, one for each image name. taskkill order doesn't matter
-        # operationally but the test pins it for clarity.
+        # One call per image name. Both GUI image names must be covered:
+        # 3.0.x shipped GUI.exe, 3.1.1 renamed it AutocamGUI.exe, and missing
+        # the new name left renders un-killable (2026-08-03). taskkill order
+        # doesn't matter operationally but the test pins it for clarity.
         image_names = [c.args[0][3] for c in mock_run.call_args_list]
-        assert image_names == ["GUI.exe", "autocam.exe"]
+        assert image_names == ["GUI.exe", "AutocamGUI.exe", "autocam.exe"]
 
 
 class TestShutdownMarkerFastPath:
