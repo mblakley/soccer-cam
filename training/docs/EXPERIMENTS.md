@@ -4,6 +4,36 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-OP-37 RESULTS (held-out validation, Mark's upper90 GT): dcB does NO HARM on a never-tuned game (dcB ≡ A0 exactly); far containment 0.979 absolute on an unseen venue; the far GAIN remains unvalidated (no headroom game held out) (2026-08-02)
+
+Mark labeled `upper90__spans_heldout` (316/320 frames: 218 ball + 98 not-visible; spans
+rebuilt on the HUMAN game-state phases after the first build landed in pre-game/halftime —
+window semantics lesson: `play_windows` ≠ human phases). Labels → ball_labels.jsonl
+(`F:\opclips\upper90`, prior file backed up as .pre_exp37). Chain: upper90_hn4s4 dump →
+selector_v7 → {A0, dcB} → containment vs Mark's GT (the established pooled-events method).
+
+**Result:** band mix is far-dominant (182 far / 20 mid / 16 near GT frames; 6/4/1 events —
+contiguous spans = few events, LOW power by design):
+| band | A0 | dcB | Δ |
+|---|---|---|---|
+| far (6 ev/182 fr) | 0.979 | 0.979 | +0.000 (identical every event) |
+| mid (4 ev/20 fr) | 0.750 | 0.750 | +0.000 |
+| near (1 ev/16 fr) | 0.312 | 0.312 | +0.000 |
+
+**Reads (honest):** (1) **dcB does NO HARM held-out** — upper90 is a ceiling-type game
+(A0 far 0.979, like pitmust/lakefront) and dcB's paths are IDENTICAL to A0 here: the hold
+only engages at drop decision points, and this game's far tracking has almost none. On the
+tuning set the ceiling games paid a small cost (lakefront −0.037); held-out shows exact
+parity — better than feared. (2) **The far GAIN is NOT validated by this game** — the gain
+lives on headroom games (spc/chili-like), and no such game is held out; validating it needs
+a held-out game where the champion actually drops far balls. (3) **Absolute sanity:** far
+0.979 on a never-tuned venue says the champion chain generalizes. (4) **Near 0.312** (one
+event) is a weak spot worth a look when near-band work resumes. (5) Caveat: selector_v7
+trained on this game's distill data (the (35)-found leak) — inflates ABSOLUTE numbers
+slightly but cancels in the A0-vs-dcB comparison (same net both arms).
+
+---
+
 ## EXP-OP-34…37 PRE-REGISTRATION (the four-lever ball-tracking arc, Mark 2026-07-29: "do all 4, fastest to slowest, separate experiments, same branch/worktree")
 
 Ordering = fastest first; EXP-OP-36's GPU data gen starts immediately in the background
