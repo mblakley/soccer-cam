@@ -717,3 +717,78 @@ class TestShutdownMarkerFastPath:
         # fast path. It eventually falls through and returns False once
         # the synthetic 24h ceiling triggers.
         assert result is False
+
+
+class TestOutputProgressStartsProcessing:
+    """AutoCam 3.1.1 stopped emitting a notification containing
+    "processing"/"processed", so the UI-string-only signal never set
+    processing_started and the 5-minute startup guard killed healthy
+    renders (observed 2026-08-03 with 401 MB already written). A growing
+    output file must count as proof that processing started.
+    """
+
+    def _run(self, notification_text, sizes):
+        import video_grouper.tray.autocam_automation as mod
+
+        notification = MagicMock()
+        notification.window_text.side_effect = lambda: notification_text
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+
+        start = datetime.datetime(2026, 8, 3, 18, 40, 0)
+        clock = [start]
+        polls = [0]
+        real_sleep = mod.time.sleep
+
+        def counted_sleep(_seconds):
+            polls[0] += 1
+            # 30s per poll: crosses the 300s startup guard after 10 polls
+            clock[0] = clock[0] + datetime.timedelta(seconds=30)
+            if polls[0] >= 20:
+                clock[0] = start + datetime.timedelta(days=2)
+            real_sleep(0)
+
+        size_seq = list(sizes)
+
+        def fake_getsize(_p):
+            return size_seq[min(polls[0], len(size_seq) - 1)]
+
+        with (
+            patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
+            patch.object(mod, "_live_autocam_pids", return_value=[999]),
+            patch(
+                "video_grouper.tray.autocam_automation.time.sleep",
+                side_effect=counted_sleep,
+            ),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.isfile",
+                side_effect=lambda p: p == "C:/fake/out.mp4",
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.getsize",
+                side_effect=fake_getsize,
+            ),
+            patch(
+                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                return_value=True,
+            ),
+        ):
+            fake_dt.now = MagicMock(side_effect=lambda: clock[0])
+            mod._wait_for_completion_and_cleanup(
+                mw, state=None, output_path="C:/fake/out.mp4", tracked_pids=[999]
+            )
+        return polls[0]
+
+    def test_growing_output_survives_startup_guard(self):
+        """Silent UI + growing output: must NOT bail at the 5-min guard."""
+        polls = self._run("", [0, 20_000_000, 400_000_000, 900_000_000])
+        # The guard would fire ~poll 10 (300s). Surviving well past it
+        # proves the output-size signal set processing_started.
+        assert polls > 12, f"startup guard killed a growing render at poll {polls}"
+
+    def test_no_output_still_bails_at_startup_guard(self):
+        """Silent UI and nothing written: the guard must still fire, so a
+        genuinely wedged AutoCam doesn't pin the queue."""
+        polls = self._run("", [0])
+        assert polls <= 12, f"wedged AutoCam should bail by ~poll 10, got {polls}"

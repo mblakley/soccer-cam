@@ -24,6 +24,11 @@ _AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
 _AUTOCAM_PROCESS_NAMES = ("GUI.exe", "AutocamGUI.exe")
 _AUTOCAM_PROCESS_NAME = _AUTOCAM_PROCESS_NAMES[0]
 
+# Output bytes that prove the render is actually writing, used as a
+# UI-independent "processing started" signal. Comfortably above an empty
+# container/header but reached within the first minute of a real render.
+_OUTPUT_PROGRESS_MIN_BYTES = 5 * 1024 * 1024
+
 # Suppress the console flash on every tasklist/wmic poll -- the tray is
 # a GUI app and these run on a 30s discovery loop.
 _NO_WINDOW = 0x08000000
@@ -753,6 +758,25 @@ def _wait_for_completion_and_cleanup(
                     f"output at {output_path}; treating as failure."
                 )
                 break
+
+            # A growing output file is proof processing started, whatever
+            # the UI says. AutoCam 3.1.1 stopped emitting a notification
+            # containing "processing"/"processed", so the string-only
+            # signal above never fired and the startup guard below killed
+            # healthy renders five minutes in (observed 2026-08-03: 401 MB
+            # already written when the guard tripped).
+            if not processing_started and output_path:
+                try:
+                    size_now = os.path.getsize(output_path)
+                except OSError:
+                    size_now = 0
+                if size_now > _OUTPUT_PROGRESS_MIN_BYTES:
+                    processing_started = True
+                    logger.info(
+                        "Processing started (output file is %.1f MB and growing; "
+                        "no UI notification seen).",
+                        size_now / (1024 * 1024),
+                    )
 
             # If processing hasn't started within 5 minutes, bail out.
             # (Skip this guard on the resume path: an in-flight pass has
