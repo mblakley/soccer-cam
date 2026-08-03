@@ -10,6 +10,21 @@ from pywinauto import Desktop
 from video_grouper.models.directory_state import DirectoryState
 from video_grouper.utils.config import AutocamConfig
 
+# Output-validation thresholds + checks now live in video_grouper.utils.mp4 so
+# the service-side `autocam_cli` step can reuse them without importing this
+# module (which pulls in pywinauto/win32gui and needs an interactive desktop).
+# Re-exported under the historical private names this module's callers and
+# tests already use.
+from video_grouper.utils.mp4 import (  # noqa: F401 - re-exported for back-compat
+    MIN_OUTPUT_BYTES_ABSOLUTE as _MIN_OUTPUT_BYTES_ABSOLUTE,
+)
+from video_grouper.utils.mp4 import (  # noqa: F401 - re-exported for back-compat
+    mp4_has_moov_atom as _mp4_has_moov_atom,
+)
+from video_grouper.utils.mp4 import (
+    validate_video_output as _validate_autocam_output,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,115 +55,6 @@ _NO_WINDOW = 0x08000000
 # "finished processing" on its own, so framereader_close is the
 # authoritative end-of-run signal.
 _SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
-
-
-# Output-validation thresholds. AutoCam 3.x hardcodes ~8 Mbps output;
-# a healthy completed render is roughly input_duration_seconds * 1 MB/s.
-# The 10 MB absolute floor is a backstop for empty/header-only output;
-# the moov-atom presence check (below) is the load-bearing reject for
-# the 2026-06-01 failure mode.
-_MIN_OUTPUT_BYTES_ABSOLUTE = 10 * 1024 * 1024  # 10 MB
-
-
-def _mp4_has_moov_atom(path: str) -> bool:
-    """Walk top-level MP4 boxes looking for the 'moov' atom.
-
-    A clean AutoCam exit writes ftyp + ... + moov + mdat (or with
-    movflags=faststart, ftyp + moov + mdat). A mid-write or truncated
-    output has the ftyp box but no moov -- the same shape as the 15.5 MB
-    file produced 2026-06-01 that v0.4.10 wrongly marked
-    ball_tracking_complete.
-
-    Pure-Python so the tray binary doesn't need PyAV bundled (v0.4.11
-    shipped with PyAV in the validator but av.open isn't reachable from
-    the tray PyInstaller bundle -- AttributeError on av.open at runtime
-    fed the broad exception handler and produced the right verdict for
-    the wrong reason).
-
-    Returns False on any I/O error or malformed box header.
-    """
-    try:
-        with open(path, "rb") as f:
-            while True:
-                header = f.read(8)
-                if len(header) < 8:
-                    return False
-                size = int.from_bytes(header[:4], "big")
-                box_type = header[4:8]
-                if box_type == b"moov":
-                    return True
-                if size == 1:
-                    # 'largesize' extension box: real size is the next 8 bytes.
-                    ext = f.read(8)
-                    if len(ext) < 8:
-                        return False
-                    size = int.from_bytes(ext, "big")
-                    skip = size - 16
-                elif size == 0:
-                    # Box extends to EOF -- no further boxes, so no moov.
-                    return False
-                else:
-                    skip = size - 8
-                if skip < 0:
-                    return False
-                f.seek(skip, 1)
-    except OSError:
-        return False
-
-
-def _validate_autocam_output(
-    output_path: str,
-    input_path: str | None = None,
-    min_bytes: int = _MIN_OUTPUT_BYTES_ABSOLUTE,
-) -> tuple[bool, str]:
-    """Validate an AutoCam output is a real processed video, not a partial.
-
-    Two checks, in order:
-
-    1. Absolute size floor (default 10 MB). Cheap reject for empty or
-       barely-started files; primarily a backstop in case the moov scan
-       returns spuriously True on a tiny well-formed test fixture.
-    2. moov-atom presence via :func:`_mp4_has_moov_atom`. AutoCam writes
-       the moov atom only at clean exit, so its absence means the file
-       is a partial -- the exact 2026-06-01 failure mode where a 15.5 MB
-       header-only MP4 passed the size-only check and got marked
-       ball_tracking_complete.
-
-    Returns (ok, reason). On a False result the caller deletes the file
-    as a crashed partial before retry.
-
-    Note (v0.4.12): the PyAV-based duration parity / bitrate floor that
-    v0.4.11 attempted was unreachable in the production tray binary
-    (PyAV's av.open isn't exposed there). For v0.4.12 we rely on the
-    pure-Python moov scan, which catches the actual observed failure
-    mode. The duration-parity defense returns when the tray binary
-    properly bundles PyAV.
-
-    ``input_path`` is accepted for forward compatibility but unused.
-    """
-    del input_path  # kept in signature for caller compatibility
-
-    if not os.path.isfile(output_path):
-        return False, f"output file does not exist: {output_path}"
-    try:
-        size = os.path.getsize(output_path)
-    except OSError as e:
-        return False, f"could not stat output: {e}"
-    if size < min_bytes:
-        return (
-            False,
-            f"output {size / 1024 / 1024:.1f} MB below "
-            f"{min_bytes / 1024 / 1024:.0f} MB absolute floor",
-        )
-
-    if not _mp4_has_moov_atom(output_path):
-        return (
-            False,
-            f"output {size / 1024 / 1024:.1f} MB has no moov atom "
-            f"(AutoCam exited before finalizing the MP4 container)",
-        )
-
-    return True, f"OK: {size / 1024 / 1024:.1f} MB, moov atom present"
 
 
 def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> bool:

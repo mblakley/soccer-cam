@@ -11,7 +11,7 @@ bundle, including the tray bundle that lacks the inference stack).
 
 Each preset's step ``type`` is a registered built-in step name
 (``stitch_correct`` / ``field_detect`` / ``ball_detect`` / ``ball_select`` /
-``plan_camera`` / ``render`` / ``autocam``); the
+``plan_camera`` / ``render`` / ``autocam`` / ``autocam_cli``); the
 ``step_id`` is set equal to the type for the single-instance presets here.
 
 The model source for the ``detect`` step is intentionally left **unset** in the
@@ -136,6 +136,19 @@ PRESETS: dict[str, list[_PresetStep]] = {
             "autocam",
             "autocam",
             # executable intentionally unset — user supplies their AutoCam path.
+            {"executable": ""},
+        ),
+    ],
+    # AutoCam via its command-line front-end. Same vendor engine as the
+    # "autocam" preset above, but a plain subprocess instead of GUI automation,
+    # so it runs in the Windows service with no interactive desktop. Only the
+    # executable is seeded (unset — the user supplies their AutocamCLI.exe
+    # path); every optional flag is deliberately omitted so the default
+    # invocation is the minimal proven command.
+    "autocam_cli": [
+        (
+            "autocam_cli",
+            "autocam_cli",
             {"executable": ""},
         ),
     ],

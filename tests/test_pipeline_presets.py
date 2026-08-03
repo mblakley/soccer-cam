@@ -127,6 +127,19 @@ def test_autocam_preset_is_single_autocam_step():
     assert ordered[0].step_id == "autocam"
 
 
+def test_autocam_cli_preset_is_single_autocam_cli_step():
+    """The CLI preset is a sibling of "autocam", not a replacement — both
+    presets exist so an install can switch back and forth."""
+    pc = apply_preset("autocam_cli")
+    ordered = pc.ordered_steps()
+    assert len(ordered) == 1
+    assert ordered[0].type == "autocam_cli"
+    assert ordered[0].step_id == "autocam_cli"
+    # Only the executable is seeded; no unmeasured flag is on the default path.
+    assert ordered[0].config == {"executable": ""}
+    assert "autocam" in list_presets()
+
+
 def test_get_preset_returns_independent_copy():
     """Mutating get_preset's result must not corrupt the shared template."""
     rows = get_preset("homegrown")

@@ -26,6 +26,11 @@ except Exception as e:  # noqa: BLE001 — see module docstring
     logger.debug("pipeline: step autocam unavailable (%s: %s)", type(e).__name__, e)
 
 try:
+    from video_grouper.pipeline.steps import autocam_cli  # noqa: F401
+except Exception as e:  # noqa: BLE001 — see module docstring
+    logger.debug("pipeline: step autocam_cli unavailable (%s: %s)", type(e).__name__, e)
+
+try:
     from video_grouper.pipeline.steps import stitch_correct  # noqa: F401
 except Exception as e:  # noqa: BLE001
     logger.debug(

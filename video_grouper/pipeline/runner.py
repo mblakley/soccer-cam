@@ -49,6 +49,7 @@ _STEP_LABELS: dict[str, str] = {
     "track": "Ball Tracking",
     "render": "Render",
     "autocam": "AutoCam",
+    "autocam_cli": "AutoCam (CLI)",
     "fanout": "Fanout",
     "licensed_model": "Licensed Model",
 }

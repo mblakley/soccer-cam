@@ -155,8 +155,10 @@ class PipelineProcessor(QueueProcessor):
 
             # Infer pipeline_preset from configured step types for TTT reporting.
             step_type_set = {s.type for s in step_specs}
-            if "autocam" in step_type_set:
-                pipeline_preset: str | None = "autocam"
+            if "autocam_cli" in step_type_set:
+                pipeline_preset: str | None = "autocam_cli"
+            elif "autocam" in step_type_set:
+                pipeline_preset = "autocam"
             elif "ball_detect" in step_type_set or "render" in step_type_set:
                 pipeline_preset = "homegrown"
             else:

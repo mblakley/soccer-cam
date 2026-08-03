@@ -87,6 +87,20 @@ class PipelineConfig(BaseModel):
         return specs
 
 
+# Legacy [BALL_TRACKING.AUTOCAM_CLI] keys carried into the autocam_cli step's
+# config. Values stay raw strings — the step's own config_model coerces them.
+_AUTOCAM_CLI_FIELDS: tuple[str, ...] = (
+    "executable",
+    "mode",
+    "overlay_icon",
+    "overlay_scale",
+    "execution_provider",
+    "video_bitrate",
+    "output_resolution",
+    "extra_args",
+    "progress_timeout_seconds",
+)
+
 # Which legacy [BALL_TRACKING.HOMEGROWN] fields belong to which stage, so a
 # migrated pipeline carries only each step's own options.
 _HOMEGROWN_STAGE_FIELDS: dict[str, list[str]] = {
@@ -120,8 +134,9 @@ def migrate_ball_tracking_to_pipeline(bt: dict | None) -> dict | None:
     """Build a ``[PIPELINE]`` config dict from a legacy ``[BALL_TRACKING]`` dict.
 
     *bt* is the BALL_TRACKING dict as nested by ``load_config`` (with
-    ``AUTOCAM_GUI`` / ``HOMEGROWN`` / ``PER_TEAM`` sub-dicts). Returns ``None``
-    when there's nothing recognizable to migrate (caller leaves PIPELINE as-is).
+    ``AUTOCAM_GUI`` / ``AUTOCAM_CLI`` / ``HOMEGROWN`` / ``PER_TEAM`` sub-dicts).
+    Returns ``None`` when there's nothing recognizable to migrate (caller leaves
+    PIPELINE as-is).
     """
     if not bt:
         return None
@@ -142,6 +157,15 @@ def migrate_ball_tracking_to_pipeline(bt: dict | None) -> dict | None:
         out["step_specs"]["autocam"] = {
             "step_id": "autocam",
             "type": "autocam",
+            "config": cfg,
+        }
+    elif provider == "autocam_cli":
+        acli = bt.get("AUTOCAM_CLI") or {}
+        cfg = {f: acli[f] for f in _AUTOCAM_CLI_FIELDS if acli.get(f) not in (None, "")}
+        out["steps"] = ["autocam_cli"]
+        out["step_specs"]["autocam_cli"] = {
+            "step_id": "autocam_cli",
+            "type": "autocam_cli",
             "config": cfg,
         }
     elif provider == "homegrown":

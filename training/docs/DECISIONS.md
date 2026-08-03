@@ -1837,3 +1837,64 @@ in decision 8 (that guard required a `truncated_start` flag that does not exist 
 and cannot be derived in-detector). **Fast-follow:** replace the NTFY 5-min walk fallback with a
 single detector-seeded "is this the kickoff?" confirmation (the S3 verify, moved ahead of the trim).
 **Files:** `video_grouper/task_processors/phase_game_start.py`, `tests/test_phase_game_start.py`
+
+## 2026-08-03: Ball tracking gets a CLI step (`autocam_cli`); the ball sidecar is dropped, not substituted
+
+**Context:** The `autocam` step drives the AutoCam **desktop GUI** through ~1200 lines of
+pywinauto, so it must run in the tray's interactive session (`runtime="tray"`) and the
+service hands games off to get it done. Every production failure of that path has been a
+*window* failure — a renamed process image (fixed in `e59dcae`), a settings window whose UI
+thread died mid-render, a front-end refusing to start work — and 2026-08-03 cost a full day
+to the vendor's 3.1.1 update. The vendor also ships `AutocamCLI.exe` on the same engine; it
+was proven end-to-end headless under `NT AUTHORITY\SYSTEM` with no interactive session, does
+its field marking automatically, exposes a real exit-code contract (0/1/2) plus a
+machine-parseable progress line, and ran ~1.38x realtime vs the GUI's 0.85-1.02x
+(`training/docs/AUTOCAM_CLI_EVALUATION.md` on `feat/operator-w1-scoreboard`).
+
+**Decision (a):** add `video_grouper/pipeline/steps/autocam_cli.py` as a NEW step —
+`runtime="service"`, `resources=("gpu",)` — **alongside** the GUI step, selectable by preset
+/ step type / `[BALL_TRACKING] provider = autocam_cli`. The GUI path is untouched and not
+deprecated in this change; retiring `autocam_automation.py` + the `autocam_ui` resource is a
+later change, once the CLI path has run real games. The MP4 output validator moved to
+`video_grouper/utils/mp4.py` so both paths share one gate (the tray module can't be imported
+from the service — it pulls in pywinauto at module top).
+
+**Decision (b) — the ball sidecar:** the GUI wrote `<output>.mp4.jsonl` (per-frame `{t, xy}`),
+which `inference/phase_detector.py::ball_restarts()` reads. The CLI writes no such file.
+**Accept the loss; do not substitute.** `ball_restarts()` never raises on absence and the ball
+signal is one of three fused inputs (the player-on-field curve is the backbone), so phase
+detection **degrades rather than breaks** — by an amount not yet measured. The CLI's
+tracking-log option emits camera/**viewport** centres, not ball coordinates; feeding those
+into thresholds tuned on ball positions would change phase detection in an *unmeasured* way,
+and an unmeasured absence is visible where an unmeasured substitution is not. The step logs
+the gap on every successful run so it can't disappear quietly.
+
+**Trade-off / follow-up:** on a game with both a GUI render and a CLI render, measure fused
+phase boundaries with and without the ball signal. If material, add the viewport track as its
+own explicit signal in `phase_detector.py` with its own thresholds — never disguised as ball
+positions. The `homegrown` preset's real ball trajectory (`trajectory_path`) is the strategic
+answer either way.
+
+**Verified directly against the 3.1.1 binary** (help dump + two throwaway invocations + a real
+run log, after a first pass had been built on secondhand notes): exit 2 on an unknown flag, exit 1
+on an unopenable input; the failure line is `[cli] Error: <cause>`; the progress line is
+`status=... processed=... dropped=... total=... elapsed=HH:MM:SS msPerFrame=... eta=...`, with
+`total=N/A` on failure and `processed < total` on success. Three defects in the first pass were
+found this way and fixed: (1) the `execution_provider` whitelist omitted `coreml`, rejecting a
+valid config; (2) `mode` was a free string, so `stitch` would have built an `--input` command
+that cannot run (stitch takes `--input-left/--input-right/--stitch-maps`); (3) the failure-reason
+scan picked the last line containing error, which is a telemetry line whose event name contains
+`RuntimeError` — burying the real cause. Also: the output container is NOT always MP4 (the GUI
+defaults to `.mkv`, and `get_ball_tracking_io_paths()` already offers `output_ext=mkv`), so the
+shared validator now branches by suffix — moov walk for MP4, EBML header for Matroska (a weaker
+gate, stated as such), size floor otherwise.
+
+**Still not verified (no full render):** full-length render + RAM behaviour, camera-work parity over
+a whole game, supplying our own `field_detect` polygon via `--field-polygon`, the accepted spelling
+for `--video-bitrate` values, and Matroska finalization.
+
+**Files:** `video_grouper/pipeline/steps/autocam_cli.py`, `video_grouper/utils/mp4.py`,
+`video_grouper/pipeline/{register_steps,presets,config,runner}.py`,
+`video_grouper/task_processors/pipeline_processor.py`,
+`video_grouper/tray/autocam_automation.py`, `docs/AUTOCAM_CLI_STEP.md`,
+`tests/test_autocam_cli_step.py`

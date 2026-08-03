@@ -122,6 +122,46 @@ def test_migrate_autocam():
     assert [s.type for s in pc.ordered_steps()] == ["autocam"]
 
 
+def test_migrate_autocam_cli():
+    out = migrate_ball_tracking_to_pipeline(
+        {
+            "provider": "autocam_cli",
+            "enabled": "true",
+            "AUTOCAM_CLI": {
+                "executable": "C:/once/AutocamCLI.exe",
+                "execution_provider": "dml",
+                "overlay_icon": "C:/branding/team.png",
+                "overlay_scale": "0.4",
+                "video_bitrate": "12M",
+                "output_resolution": "1920x1080",
+                # Blank values are dropped so the step keeps its own defaults.
+                "extra_args": "",
+            },
+        }
+    )
+    assert out["steps"] == ["autocam_cli"]
+    spec = out["step_specs"]["autocam_cli"]
+    assert spec["type"] == "autocam_cli"
+    assert spec["config"] == {
+        "executable": "C:/once/AutocamCLI.exe",
+        "execution_provider": "dml",
+        "overlay_icon": "C:/branding/team.png",
+        "overlay_scale": "0.4",
+        "video_bitrate": "12M",
+        "output_resolution": "1920x1080",
+    }
+    pc = PipelineConfig.model_validate(out)
+    assert [s.type for s in pc.ordered_steps()] == ["autocam_cli"]
+
+
+def test_migrate_autocam_cli_without_subsection():
+    """provider set but no [BALL_TRACKING.AUTOCAM_CLI] — still migrates; the
+    user fills in the executable afterwards (same shape as autocam_gui)."""
+    out = migrate_ball_tracking_to_pipeline({"provider": "autocam_cli"})
+    assert out["steps"] == ["autocam_cli"]
+    assert out["step_specs"]["autocam_cli"]["config"] == {}
+
+
 def test_migrate_homegrown_splits_fields_per_step():
     out = migrate_ball_tracking_to_pipeline(
         {
@@ -348,6 +388,28 @@ def test_load_migrates_autocam_gui_when_no_pipeline_section(tmp_path):
     ordered = cfg.pipeline.ordered_steps()
     assert [s.type for s in ordered] == ["autocam"]
     assert ordered[0].config["executable"] == "C:/once/GUI.exe"
+
+
+_BALL_TRACKING_AUTOCAM_CLI_ONLY = """\
+[BALL_TRACKING]
+enabled = true
+provider = autocam_cli
+
+[BALL_TRACKING.AUTOCAM_CLI]
+executable = C:/once/AutocamCLI.exe
+execution_provider = dml
+"""
+
+
+def test_load_migrates_autocam_cli_when_no_pipeline_section(tmp_path):
+    cfg = load_config(
+        _write(tmp_path, _REQUIRED_SECTIONS + _BALL_TRACKING_AUTOCAM_CLI_ONLY)
+    )
+    assert cfg.pipeline.is_active() is True
+    ordered = cfg.pipeline.ordered_steps()
+    assert [s.type for s in ordered] == ["autocam_cli"]
+    assert ordered[0].config["executable"] == "C:/once/AutocamCLI.exe"
+    assert ordered[0].config["execution_provider"] == "dml"
 
 
 def test_load_does_not_migrate_when_pipeline_section_present(tmp_path):

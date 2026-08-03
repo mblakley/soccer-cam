@@ -315,7 +315,7 @@ class TestWaitForCompletionExitDetection:
                     return_value=[],
                 ),
                 patch(
-                    "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                    "video_grouper.utils.mp4.mp4_has_moov_atom",
                     return_value=True,
                 ),
                 patch("video_grouper.tray.autocam_automation.time.sleep"),
@@ -393,7 +393,7 @@ class TestWaitForCompletionExitDetection:
                     side_effect=lambda pids: next(live_results),
                 ),
                 patch(
-                    "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                    "video_grouper.utils.mp4.mp4_has_moov_atom",
                     return_value=True,
                 ),
                 patch("video_grouper.tray.autocam_automation.time.sleep"),
@@ -431,7 +431,7 @@ class TestExecuteAutocamGuiAutomationOutputPrecheck:
             ) as mock_popen,
             patch("video_grouper.tray.autocam_automation.Desktop") as mock_desktop,
             patch(
-                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                "video_grouper.utils.mp4.mp4_has_moov_atom",
                 return_value=True,
             ),
         ):
@@ -631,7 +631,7 @@ class TestShutdownMarkerFastPath:
             # this test's purpose is the fast-path timing, not the
             # validator (covered in test_autocam_output_validation.py).
             patch(
-                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                "video_grouper.utils.mp4.mp4_has_moov_atom",
                 return_value=True,
             ),
         ):
@@ -770,7 +770,7 @@ class TestOutputProgressStartsProcessing:
                 side_effect=fake_getsize,
             ),
             patch(
-                "video_grouper.tray.autocam_automation._mp4_has_moov_atom",
+                "video_grouper.utils.mp4.mp4_has_moov_atom",
                 return_value=True,
             ),
         ):
