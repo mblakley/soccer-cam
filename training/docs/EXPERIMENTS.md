@@ -4,6 +4,104 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-PHASE-18: full accuracy audit of the phase detector vs human GT — WHISTLE AUDIO is the single dominant factor; production combined-video KO is median 1.1s with ZERO mis-trims on the trusted set (2026-08-03)
+
+**Question (Mark):** "I just wanted to see how the model did in detecting the game phases."
+
+**Method (read-only, no `--write`):** `phase_detect.py --predict --gt-only` (regenerates `<gid>.fit.json`
+for every human-GT game, never touches `game_state`) + `phase_eval.py --human-only`, plus an extended
+summarizer for p90 / 30-60-240s bands / gate quality. Code on the box (`G:\ballresearch\selector\repo`)
+verified **byte-identical to `origin/main`** by sha256 on all three phase files before running. All 43
+human-GT games already had cached signals, so the whole audit re-fused from cache in **8.7s** — zero
+video decode, zero D: pressure (Mark's July batch was live on D:). Isolated cache at
+`G:\pipeline_work\test\phase_eval\cache` (copy of `G:\ballresearch\phase_cache`, research cache untouched).
+
+**GT source correction (matters for future runs):** the task framing assumed GT lived in `game.json`
+`play_windows` (2 entries, 34 games). **`play_windows` does not exist in a single `game.json`** —
+verified across all 103 registry games. The real human truth is `game_state` with `source="human"`:
+**43 games x 5 phases** = 4 boundaries (kickoff / halftime / second_half / end), which is strictly
+richer. `manifest.db game_phases` was not needed and was not read (D: was off-limits).
+
+### Headline — trimmed-video scorecard, 38 aligned games / 143 boundaries
+
+| boundary | n | median | p90 | <=30s | <=60s | <=240s |
+|---|---|---|---|---|---|---|
+| kickoff | 35 | **72.2s** | 709.5s | 17/35 | 17/35 | 24/35 |
+| halftime | 38 | **6.4s** | 305.6s | 28/38 | 31/38 | 33/38 |
+| second_half | 38 | **28.3s** | 552.7s | 21/38 | 26/38 | 32/38 |
+| end | 32 | **10.4s** | 186.3s | 21/32 | 25/32 | 29/32 |
+| **ALL** | 143 | **14.3s** | 547.4s | 87 (61%) | 99 (69%) | 118 (83%) |
+
+Sanity gate rejected **13/38 (34%)**. 5 games excluded as **misaligned** (video span != GT span — a
+data issue, not detector error: e.g. `flash__2024.10.13` video 9998s vs GT 5428s = multi-game recording;
+`heat__2024.05.28` raw 120866s).
+
+### The dominant split is WHISTLE AUDIO, not camera model per se
+
+| cohort | games | bounds | median | <=30s |
+|---|---|---|---|---|
+| whistle available (44.1/32kHz) | 21 | 76 | **1.5s** | 66/76 (87%) |
+| no whistle (16kHz dahua combined) | 17 | 67 | **68.6s** | 21/67 (31%) |
+| reolink | 18 | 63 | **1.1s** | 58/63 (92%) |
+| dahua | 20 | 80 | **57.7s** | 29/80 (36%) |
+
+Kickoff is where it collapses: **median 1.2s with whistle vs 270.0s without** (4.5 min). Without the
+whistle the detector falls back to player-curve + ball restarts, which cannot separate a warm-up
+center restart from the real kickoff. Note the split is *audio*, not vendor: four 2025 **dahua** games
+do have 44.1/32kHz audio, and one **reolink** game (`flash__2026.03.21`) has none and behaves like a
+dahua game (KO +527s on the combined path).
+
+### Production path (the NTFY question) — combined video + `localize=True`, 17 reolink games
+
+This is the code that would actually replace the manual game-start walk (the trimmed scorecard above
+is a *different, easier* instrument — the trim has already removed most pre-game).
+
+- **12/17 games `ko_trustworthy=True`**; the other 5 correctly fall back to NTFY.
+- Of the 12 trusted, 9 have a non-truncated GT kickoff: **median |KO error| 1.1s, p90 39.6s, max 42s.**
+- **Every trusted KO error is early or zero (max -42s). ZERO games late by >240s => ZERO mis-trim risk**
+  (production trims at KO - 4min backup, so early is safe; only a late KO cuts into the game).
+- The gate caught exactly the bad ones: `flash__2026.03.21` +527s (0 whistle blasts detected),
+  `heat__2026.05.30_vs_Fairport` -261s, `heat__2026.05.30_vs_Western_NY_Flash` -279s — all untrusted.
+
+**Incidental finding:** 16kHz *reolink* combined audio DOES yield whistle blasts (31-119 per game on
+16/17 games) — the whistle pitch band (3-4.9kHz) sits under the 8kHz Nyquist. The detector docstring's
+"16kHz combined cuts the whistle" holds for the dahua archive but is **not** a general property of 16kHz.
+
+### The sanity gate over-rejects on reolink
+
+| cohort | rejected | of those, actually accurate (all bounds <=30s) |
+|---|---|---|
+| reolink | 7 | **6** |
+| dahua | 6 | **0** |
+
+**All 13 rejections fired on `asym`** (|h1-h2| > 3 min). On dahua the gate is well-calibrated (0/6
+rejects were good). On reolink it throws away 6 genuinely near-perfect fits — e.g.
+`heat__2026.05.28` (REJ; errors -1/-2/+0/-2s), `heat__2026.06.08` (REJ; -1/+0/+0/+1s),
+`heat__2026.06.07_vs_Lakefront_SC_home` (REJ; -1/-1/-29s). Real youth halves are unequal (stoppage,
+shortened second halves), so a fixed 3-min symmetry bound is the wrong shape. **The 34% headline
+rejection rate substantially overstates real failure.**
+
+### Failure characterization (worst offenders)
+
+1. **No-whistle dahua kickoff** — the big one. `flash__2024.10.27_vs_Rush_home` **+709s**,
+   `heat__2024.06.25_vs_Pittsford_home` **-586s**, `flash__2024.05.01_vs_RNYFC_away` **+581s**.
+   All gate-ACCEPTED, i.e. confidently wrong on the trimmed path.
+2. **Halftime/2H drift when the field never empties** — `flash__2025.05.17` (-363s HT / -430s 2H /
+   -823s END) and `heat__2026.05.27` on the combined path (+617s HT / +413s 2H) despite a perfect KO.
+3. **Misaligned/multi-game recordings** — 5 games unscoreable; a data-hygiene problem to fix upstream.
+
+**Conclusion:** phase detection is **production-ready for the NTFY game-start walk on whistle-capable
+(reolink) recordings** — 71% auto-trim coverage, ~1s median, zero mis-trims, honest fallback on the
+rest. It is **not** ready as a general phase labeller for the no-whistle dahua archive (KO median
+4.5 min). Highest-value next step is not detector work but the **`asym` gate** (recover ~6 good
+reolink games); after that, a kickoff signal that survives missing audio.
+
+**Repro:** `PHASE_CACHE=G:\pipeline_work\test\phase_eval\cache GAME_REGISTRY=F:/training_data/game_registry.json`
+`PYTHONPATH=G:\ballresearch\selector\repo`, then `phase_detect.py --predict --gt-only` + `phase_eval.py --human-only`.
+Combined-path scorer: `G:\pipeline_work\test\phase_eval\combscore.py` (fuses `G:\ballresearch\phase_cache_comb` with `localize=True`).
+
+---
+
 ## EXP-OP-37 RESULTS (held-out validation, Mark's upper90 GT): dcB does NO HARM on a never-tuned game (dcB ≡ A0 exactly); far containment 0.979 absolute on an unseen venue; the far GAIN remains unvalidated (no headroom game held out) (2026-08-02)
 
 Mark labeled `upper90__spans_heldout` (316/320 frames: 218 ball + 98 not-visible; spans
