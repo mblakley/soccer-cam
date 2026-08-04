@@ -217,6 +217,18 @@ class NtfyConfig(BaseModel):
 class AutocamConfig(BaseModel):
     enabled: bool = True
     executable: str | None = None
+    # AutoCam licence key, as sold by the vendor (their own spelling is
+    # "licence"; we use the US spelling for our config surface). Entirely
+    # user-supplied — we never ship a key.
+    #
+    # AutoCam stores its activation per Windows profile, under
+    # %LOCALAPPDATA%\Once\licence.txt. That makes the licence invisible to
+    # any other account: a render driven from a different user (notably the
+    # LocalSystem service) is unlicensed and comes out watermarked even
+    # though the desktop user is fully licensed. Setting this lets the
+    # pipeline activate the profile it actually renders under, instead of
+    # asking the operator to log in as that account and activate by hand.
+    license_key: str = ""
 
 
 class CloudSyncConfig(BaseModel):
@@ -400,6 +412,12 @@ class Config(BaseModel):
     )
     setup: SetupConfig = Field(alias="SETUP", default_factory=SetupConfig)
     node: NodeConfig = Field(alias="NODE", default_factory=NodeConfig)
+    # Installation-level AutoCam settings (where the vendor's app lives and
+    # the operator's licence key), as opposed to per-run rendering options,
+    # which belong to the pipeline step. Kept a top-level section so it is
+    # editable from /config: the editor only renders scalar fields of
+    # top-level sections, and pipeline step specs are nested.
+    autocam: AutocamConfig = Field(alias="AUTOCAM", default_factory=AutocamConfig)
     pipeline: PipelineConfig = Field(alias="PIPELINE", default_factory=PipelineConfig)
 
     model_config = {"validate_by_name": True}
@@ -536,7 +554,37 @@ def load_config(config_path: Path) -> Config:
     # into [PIPELINE].
     config_dict.pop("BALL_TRACKING", None)
 
+    # Installation-level AutoCam settings live in [AUTOCAM] so they're
+    # editable from /config. Fold them into the AutoCam step spec, which is
+    # what actually runs, unless that spec sets its own value. Same shape as
+    # the legacy migration above: one operator-facing place, resolved here
+    # rather than by giving steps access to the whole Config.
+    _merge_autocam_section(config_dict)
+
     return Config.model_validate(config_dict)
+
+
+# Step types that consume installation-level AutoCam settings.
+_AUTOCAM_STEP_TYPES = ("autocam", "autocam_cli")
+
+
+def _merge_autocam_section(config_dict: dict) -> None:
+    """Push ``[AUTOCAM]`` values down into AutoCam pipeline step specs."""
+    autocam_section = config_dict.get("AUTOCAM") or {}
+    shared = {
+        key: value
+        for key in ("executable", "license_key")
+        if (value := autocam_section.get(key))
+    }
+    if not shared:
+        return
+    specs = (config_dict.get("PIPELINE") or {}).get("step_specs") or {}
+    for spec in specs.values():
+        if not isinstance(spec, dict) or spec.get("type") not in _AUTOCAM_STEP_TYPES:
+            continue
+        step_cfg = spec.setdefault("config", {})
+        for key, value in shared.items():
+            step_cfg.setdefault(key, value)
 
 
 def save_config(config: Config, config_path: Path):
