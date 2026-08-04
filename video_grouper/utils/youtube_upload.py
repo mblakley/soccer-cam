@@ -526,7 +526,13 @@ class YouTubeUploader:
                         logger.warning("on_progress final callback raised: %s", cb_exc)
             except HttpError as e:
                 reason = ""
-                if e.resp and e.resp.status in (400, 403):
+                # 429 is what the API actually returns when the project's
+                # "Video Uploads per day" limit is hit. It was missing here,
+                # so `reason` stayed empty, YouTubeQuotaError was never
+                # raised, and the queue's quota-deferral path never ran --
+                # the uploader just retried every 60s. Observed 2026-08-04:
+                # 1,800 such calls in six hours, all answered identically.
+                if e.resp and e.resp.status in (400, 403, 429):
                     try:
                         import json
 
@@ -535,6 +541,10 @@ class YouTubeUploader:
                         reason = errors[0].get("reason", "") if errors else ""
                     except Exception:
                         pass
+                # Belt and braces: a 429 from this API is a quota response
+                # whatever the body parses to.
+                if not reason and e.resp and e.resp.status == 429:
+                    reason = "rateLimitExceeded"
                 if reason in (
                     "uploadLimitExceeded",
                     "quotaExceeded",
