@@ -158,6 +158,17 @@ class YoutubeUploadTask(BaseUploadTask):
                 )
                 return False
 
+            # Which of the two videos are already on YouTube? This task
+            # uploads processed + raw and only marks the group complete
+            # when BOTH land, so without this check a failure on the
+            # second one re-uploads the first on every retry -- a
+            # duplicate video and 1,600 wasted quota units out of a
+            # daily allowance of six uploads.
+            from video_grouper.models import DirectoryState as _DirState
+
+            _state = _DirState(str(resolved_group_dir), storage_path)
+            already = _state.get_uploaded_videos()
+
             # googleapiclient is sync; without asyncio.to_thread the
             # 60-90 minute resumable upload would block this event loop,
             # which the auth server, tray status poller, and other queue
@@ -165,7 +176,14 @@ class YoutubeUploadTask(BaseUploadTask):
             # "update status poll unexpected error: timed out" every
             # 60s in the tray log throughout the upload window.
             # Upload processed (trimmed) video
-            if processed_video_path and os.path.exists(processed_video_path):
+            if already.get("processed"):
+                logger.info(
+                    "Skipping processed video for %s: already uploaded as %s",
+                    self.group_dir,
+                    already["processed"],
+                )
+                self.youtube_video_id = already["processed"]
+            elif processed_video_path and os.path.exists(processed_video_path):
                 logger.info(f"Uploading processed video: {processed_video_path}")
                 title = match_info.get_youtube_title("processed")
                 description = match_info.get_youtube_description("processed")
@@ -195,9 +213,16 @@ class YoutubeUploadTask(BaseUploadTask):
                 else:
                     # Expose for UploadProcessor → TTT step artifact reporting
                     self.youtube_video_id = video_id
+                    _state.record_uploaded_video("processed", video_id)
 
             # Upload raw (untrimmed) video
-            if raw_video_path and os.path.exists(raw_video_path):
+            if already.get("raw"):
+                logger.info(
+                    "Skipping raw video for %s: already uploaded as %s",
+                    self.group_dir,
+                    already["raw"],
+                )
+            elif raw_video_path and os.path.exists(raw_video_path):
                 logger.info(f"Uploading raw video: {raw_video_path}")
                 title = match_info.get_youtube_title("raw")
                 description = match_info.get_youtube_description("raw")
@@ -222,6 +247,8 @@ class YoutubeUploadTask(BaseUploadTask):
                 if not video_id:
                     logger.error(f"Failed to upload raw video: {raw_video_path}")
                     success = False
+                else:
+                    _state.record_uploaded_video("raw", video_id)
 
             if success:
                 logger.info(
