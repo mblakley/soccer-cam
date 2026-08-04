@@ -29,6 +29,85 @@ _AUTOCAM_PROCESS_NAME = _AUTOCAM_PROCESS_NAMES[0]
 # container/header but reached within the first minute of a real render.
 _OUTPUT_PROGRESS_MIN_BYTES = 5 * 1024 * 1024
 
+# AutoCam's activation lives per Windows profile, not per machine.
+_LICENCE_FILENAME = "licence.txt"  # vendor's spelling
+_ACTIVATE_TIMEOUT_SECONDS = 120
+
+
+def _profile_licence_path() -> str:
+    """Where AutoCam keeps this profile's activation."""
+    local_app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser(
+        r"~\AppData\Local"
+    )
+    return os.path.join(local_app_data, "Once", _LICENCE_FILENAME)
+
+
+def _autocam_cli_path(executable: str | None) -> str | None:
+    """Locate AutocamCLI.exe next to the configured front-end.
+
+    Activation is a CLI verb, so it works regardless of whether the render
+    itself is driven through the GUI or the CLI.
+    """
+    if not executable:
+        return None
+    candidate = os.path.join(os.path.dirname(executable), "AutocamCLI.exe")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def ensure_autocam_licence(executable: str | None, license_key: str) -> bool:
+    """Activate AutoCam for the *current* Windows profile if it isn't already.
+
+    Returns True when the profile ends up licensed (or was already), False
+    when activation was needed, attempted and failed.
+
+    Deliberately a no-op when no key is configured: existing installs where
+    the operator activated AutoCam by hand keep working untouched. The
+    reason this exists at all is that ``licence.txt`` is per-profile, so the
+    account that renders has to be the account that activated -- which is
+    invisible and surprising when the renderer is a service account rather
+    than the desktop user who bought the licence.
+    """
+    if not license_key:
+        return True
+    licence_path = _profile_licence_path()
+    if os.path.isfile(licence_path):
+        logger.debug("AutoCam already activated for this profile (%s)", licence_path)
+        return True
+    cli = _autocam_cli_path(executable)
+    if cli is None:
+        logger.error(
+            "AutoCam licence key is configured but AutocamCLI.exe was not found "
+            "next to %r; cannot activate this profile.",
+            executable,
+        )
+        return False
+    logger.info("Activating AutoCam for this profile using the configured key")
+    try:
+        result = subprocess.run(
+            [cli, "activate", license_key],
+            capture_output=True,
+            text=True,
+            timeout=_ACTIVATE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.error("AutoCam activation could not be run: %s", exc)
+        return False
+    # Never log the key itself; the vendor echoes it in some messages.
+    stdout = (result.stdout or "").replace(license_key, "***")
+    stderr = (result.stderr or "").replace(license_key, "***")
+    if result.returncode == 0 and os.path.isfile(licence_path):
+        logger.info("AutoCam activated for this profile: %s", licence_path)
+        return True
+    logger.error(
+        "AutoCam activation failed (exit=%s). Renders from this account will "
+        "be watermarked. stdout=%r stderr=%r",
+        result.returncode,
+        stdout.strip(),
+        stderr.strip(),
+    )
+    return False
+
+
 # Suppress the console flash on every tasklist/wmic poll -- the tray is
 # a GUI app and these run on a 30s discovery loop.
 _NO_WINDOW = 0x08000000
@@ -1363,6 +1442,12 @@ def run_autocam_on_file(
         # Validate inputs
         if not _validate_autocam_inputs(autocam_config, input_path, output_path):
             return False
+
+        # Activate this profile if a key is configured and it isn't already.
+        # Non-fatal: an unlicensed render still produces usable video, just
+        # watermarked, and failing the whole game over it would be worse
+        # than the watermark. The error log above is the loud part.
+        ensure_autocam_licence(autocam_config.executable, autocam_config.license_key)
 
         # Execute GUI automation
         return _execute_autocam_gui_automation(

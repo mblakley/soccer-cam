@@ -369,3 +369,66 @@ def test_load_no_ball_tracking_no_pipeline_stays_disabled(tmp_path):
     cfg = load_config(_write(tmp_path, _REQUIRED_SECTIONS))
     assert cfg.pipeline.is_active() is False
     assert cfg.pipeline.ordered_steps() == []
+
+
+_AUTOCAM_SECTION = """\
+[AUTOCAM]
+executable = C:/once/AutocamGUI.exe
+license_key = KEY-FROM-CONFIG-SCREEN
+"""
+
+
+def test_autocam_section_feeds_the_autocam_step(tmp_path):
+    """[AUTOCAM] is the operator-facing home for installation settings.
+
+    It exists because the /config editor only renders scalar fields of
+    top-level sections — pipeline step specs are nested and never appear.
+    The values have to reach the step that actually runs AutoCam.
+    """
+    cfg = load_config(
+        _write(
+            tmp_path,
+            _REQUIRED_SECTIONS + _AUTOCAM_SECTION + _BALL_TRACKING_AUTOCAM_ONLY,
+        )
+    )
+    step = cfg.pipeline.ordered_steps()[0]
+    assert step.type == "autocam"
+    assert step.config["license_key"] == "KEY-FROM-CONFIG-SCREEN"
+
+
+def test_step_spec_value_wins_over_autocam_section(tmp_path):
+    """A step that names its own executable keeps it — the section only
+    fills gaps, so an explicit per-step choice is never overwritten."""
+    ini = (
+        _REQUIRED_SECTIONS
+        + _AUTOCAM_SECTION
+        + textwrap.dedent(
+            """\
+        [PIPELINE]
+        enabled = true
+        steps = autocam
+        [PIPELINE.autocam]
+        type = autocam
+        executable = D:/other/AutocamGUI.exe
+        """
+        )
+    )
+    step = load_config(_write(tmp_path, ini)).pipeline.ordered_steps()[0]
+    assert step.config["executable"] == "D:/other/AutocamGUI.exe"
+    # ...but the licence key it didn't specify still comes through.
+    assert step.config["license_key"] == "KEY-FROM-CONFIG-SCREEN"
+
+
+def test_no_autocam_section_changes_nothing(tmp_path):
+    cfg = load_config(
+        _write(tmp_path, _REQUIRED_SECTIONS + _BALL_TRACKING_AUTOCAM_ONLY)
+    )
+    assert "license_key" not in cfg.pipeline.ordered_steps()[0].config
+
+
+def test_autocam_section_survives_save_round_trip(tmp_path):
+    path = _write(tmp_path, _REQUIRED_SECTIONS + _AUTOCAM_SECTION)
+    cfg = load_config(path)
+    assert cfg.autocam.license_key == "KEY-FROM-CONFIG-SCREEN"
+    save_config(cfg, path)
+    assert load_config(path).autocam.license_key == "KEY-FROM-CONFIG-SCREEN"

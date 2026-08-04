@@ -291,3 +291,38 @@ def test_post_config_preserves_pipeline_section(pipeline_client, pipeline_config
     by_id = {s.step_id: s for s in ordered}
     assert by_id["stitch"].config["stitch_profile_path"] == "/calib/flash.json"
     assert by_id["ball_detect"].config["model_path"] == "/m/model.onnx"
+
+
+def test_autocam_license_key_is_editable_and_masked(client, config_path):
+    """The AutoCam licence key must be settable from /config, and must
+    behave like every other credential: never rendered back, and left
+    alone when the operator saves the form without retyping it.
+
+    It exists because AutoCam activation is per Windows profile, so the
+    account that renders has to be the account that activated — which
+    otherwise means logging in as the service account by hand.
+    """
+    page = client.get("/config").text
+    assert "AUTOCAM.license_key" in page, "licence key must appear on the config screen"
+    # Rendered as a credential input, not plain text.
+    field = page[page.index("AUTOCAM.license_key") - 200 :]
+    assert 'type="password"' in field[:600]
+
+    resp = client.post(
+        "/config",
+        data={"AUTOCAM.license_key": "SECRET-KEY-1", "LOGGING.level": "INFO"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert load_config(config_path).autocam.license_key == "SECRET-KEY-1"
+
+    # Never echoed back to the browser.
+    assert "SECRET-KEY-1" not in client.get("/config").text
+
+    # Saving an unrelated field with the key left blank keeps the stored value.
+    client.post(
+        "/config",
+        data={"AUTOCAM.license_key": "", "LOGGING.level": "DEBUG"},
+        follow_redirects=False,
+    )
+    assert load_config(config_path).autocam.license_key == "SECRET-KEY-1"

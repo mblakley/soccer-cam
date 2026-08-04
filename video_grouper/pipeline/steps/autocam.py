@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 class AutocamStepConfig(BaseModel):
     executable: str | None = None
+    # See AutocamConfig.license_key: AutoCam activation is per Windows
+    # profile, so the account that renders must be the account that
+    # activated. Blank leaves any hand-activated install alone.
+    license_key: str = ""
 
 
 def _invoke_autocam(
@@ -32,6 +36,7 @@ def _invoke_autocam(
     input_path: str,
     output_path: str,
     group_dir: str | None = None,
+    license_key: str = "",
 ) -> bool:
     """Lazy-import the GUI driver and run AutoCam on a single file.
 
@@ -42,7 +47,9 @@ def _invoke_autocam(
     from video_grouper.tray.autocam_automation import run_autocam_on_file
     from video_grouper.utils.config import AutocamConfig
 
-    legacy_cfg = AutocamConfig(enabled=True, executable=executable)
+    legacy_cfg = AutocamConfig(
+        enabled=True, executable=executable, license_key=license_key
+    )
     return run_autocam_on_file(legacy_cfg, input_path, output_path, group_dir=group_dir)
 
 
@@ -69,6 +76,7 @@ class AutocamStep(PipelineStep[AutocamStepConfig]):
                 input_path,
                 output_path,
                 str(ctx.group_dir),
+                self.config.license_key,
             )
         except Exception:
             logger.exception(

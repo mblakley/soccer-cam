@@ -45,6 +45,7 @@ _SENSITIVE_FIELDS = frozenset(
         "plugin_signing_key",
         "access_token",
         "refresh_token",
+        "license_key",
     }
 )
 

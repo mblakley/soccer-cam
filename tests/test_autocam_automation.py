@@ -1,6 +1,9 @@
 """Tests for the autocam automation function."""
 
 import datetime
+import logging
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -899,3 +902,81 @@ class TestStatusClassification311:
         assert fields["processed"] == "3874"
         assert fields["fps"] == "29.5"
         assert fields["eta"] == "00:45:24"
+
+
+class TestEnsureAutocamLicence:
+    r"""``ensure_autocam_licence`` activates the *current* Windows profile.
+
+    AutoCam keeps activation in %LOCALAPPDATA%\Once\licence.txt, which is
+    per-profile. A render driven by a different account (e.g. the
+    LocalSystem service) is therefore unlicensed -- and silently
+    watermarked -- even when the desktop user holds a valid licence.
+    """
+
+    def _paths(self, tmp_path):
+        exe_dir = tmp_path / "Once.Autocam"
+        exe_dir.mkdir()
+        (exe_dir / "AutocamCLI.exe").write_text("stub", encoding="utf-8")
+        return str(exe_dir / "AutocamGUI.exe"), str(exe_dir / "AutocamCLI.exe")
+
+    def test_no_key_configured_is_a_noop(self, tmp_path):
+        """Hand-activated installs must keep working untouched."""
+        gui, _ = self._paths(tmp_path)
+        with patch("subprocess.run") as run:
+            assert mod.ensure_autocam_licence(gui, "") is True
+        run.assert_not_called()
+
+    def test_already_licensed_profile_does_not_reactivate(self, tmp_path):
+        gui, _ = self._paths(tmp_path)
+        licence = tmp_path / "local" / "Once" / "licence.txt"
+        licence.parent.mkdir(parents=True)
+        licence.write_text("blob", encoding="utf-8")
+        with (
+            patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path / "local")}),
+            patch("subprocess.run") as run,
+        ):
+            assert mod.ensure_autocam_licence(gui, "KEY-123") is True
+        run.assert_not_called()
+
+    def test_activates_when_profile_has_no_licence(self, tmp_path):
+        gui, cli = self._paths(tmp_path)
+        local = tmp_path / "local"
+        licence = local / "Once" / "licence.txt"
+
+        def _fake_run(cmd, **kwargs):
+            # The vendor writes licence.txt on a successful activate.
+            licence.parent.mkdir(parents=True, exist_ok=True)
+            licence.write_text("blob", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        with (
+            patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+            patch("subprocess.run", side_effect=_fake_run) as run,
+        ):
+            assert mod.ensure_autocam_licence(gui, "KEY-123") is True
+        run.assert_called_once()
+        assert run.call_args[0][0] == [cli, "activate", "KEY-123"]
+
+    def test_failed_activation_reports_false_and_hides_the_key(self, tmp_path, caplog):
+        gui, _ = self._paths(tmp_path)
+        local = tmp_path / "local"
+        result = subprocess.CompletedProcess(
+            [], 1, stdout="Invalid LicenceToken for KEY-123", stderr=""
+        )
+        with (
+            patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+            patch("subprocess.run", return_value=result),
+            caplog.at_level(logging.ERROR),
+        ):
+            assert mod.ensure_autocam_licence(gui, "KEY-123") is False
+        assert "KEY-123" not in caplog.text, "licence key must not reach the logs"
+        assert "watermarked" in caplog.text
+
+    def test_missing_cli_is_reported_not_crashed(self, tmp_path):
+        exe_dir = tmp_path / "Once.Autocam"
+        exe_dir.mkdir()  # no AutocamCLI.exe alongside
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path / "local")}):
+            assert (
+                mod.ensure_autocam_licence(str(exe_dir / "AutocamGUI.exe"), "KEY-123")
+                is False
+            )
