@@ -837,3 +837,65 @@ class TestStatusVocabulary311:
         # mirrors the production condition
         is_error = "failed" in lowered or ("error" in lowered and "eta:" not in lowered)
         assert not is_error
+
+
+import video_grouper.tray.autocam_automation as mod  # noqa: E402
+
+
+class TestStatusClassification311:
+    """``_autocam_is_processing`` must not read the idle start screen as
+    a running render (regression: 2026-08-03).
+
+    3.1.1 has no Notification control, so the status read is a walk of
+    every Text descendant -- which includes the buttons "Processing
+    Setup" and "Start Processing". The old ``"processing" in text``
+    check matched those on a completely idle window.
+    """
+
+    # Verbatim from D:\soccer-cam-storage\logs\video_grouper_tray.log.
+    IDLE = (
+        "c588e0da50fb | Source: | Browse files | None selected | "
+        "Destination: | Browse file | None selected | Processing Setup | "
+        "Add Logo | Start Processing"
+    )
+    RUNNING = (
+        "c588e0da50fb | Source: | Browse files | Selected 1 videos | "
+        "Destination: | Browse file | D:/out.mp4 | Processing Setup | "
+        "Add Logo | Start Processing | Status: | Running | Processed: | "
+        "3874 | Dropped: | 0 | FPS: | 29.5 | Elapsed: | 00:02:20 | "
+        "ETA: | 00:45:24 | 4.6%"
+    )
+    INITIALIZING = (
+        "c588e0da50fb | Source: | Browse files | Selected 1 videos | "
+        "Destination: | Browse file | D:/out.mp4 | Processing Setup | "
+        "Add Logo | Start Processing | Status: | Initializing | "
+        "Processed: | 0 | Dropped: | 0 | FPS: | N/A | Elapsed: | "
+        "00:00:00 | ETA: | N/A | N/A"
+    )
+    SUCCEEDED = IDLE + " | Status: | Succeeded | Processed: | 81000"
+
+    def test_idle_start_screen_is_not_processing(self):
+        """The exact string that wedged the queue for ~50 minutes."""
+        assert mod._autocam_is_processing(self.IDLE) is False
+
+    def test_running_panel_is_processing(self):
+        assert mod._autocam_is_processing(self.RUNNING) is True
+
+    def test_initializing_panel_is_processing(self):
+        assert mod._autocam_is_processing(self.INITIALIZING) is True
+
+    def test_succeeded_is_not_reported_as_still_processing(self):
+        assert mod._autocam_is_processing(self.SUCCEEDED) is False
+
+    def test_legacy_30x_notification_still_recognised(self):
+        """3.0.x had a free-text Notification control and no Status row;
+        that vocabulary must keep working."""
+        assert mod._autocam_is_processing("processing") is True
+        assert mod._autocam_is_processing("finished processing") is True
+
+    def test_fields_parse_label_value_pairs(self):
+        fields = mod._autocam_status_fields(self.RUNNING)
+        assert fields["status"] == "Running"
+        assert fields["processed"] == "3874"
+        assert fields["fps"] == "29.5"
+        assert fields["eta"] == "00:45:24"

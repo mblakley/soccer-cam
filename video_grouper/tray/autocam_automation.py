@@ -180,6 +180,63 @@ def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> boo
     return bool(live)
 
 
+# Values 3.1.1 shows in its "Status:" row while a render is in flight.
+_ACTIVE_STATUS_VALUES = ("running", "initializing", "processing")
+
+# Window chrome that only shows up when we are reading the whole window
+# (the 3.1.1 descendants walk) rather than 3.0.x's single Notification
+# string. "Start Processing" and "Processing Setup" are *buttons* -- they
+# are present whether or not anything is running.
+_CONFIG_SCREEN_MARKERS = ("start processing", "browse files", "processing setup")
+
+
+def _autocam_status_fields(raw: str) -> dict[str, str]:
+    """Split a ``' | '``-joined status blob into ``label -> value``.
+
+    3.1.1's panel renders as alternating label/value Text controls
+    (``Status: | Running | Processed: | 3874 | ...``), so the value for
+    a row is simply the segment following its ``Label:`` segment.
+    """
+    parts = [p.strip() for p in raw.split("|")]
+    fields: dict[str, str] = {}
+    for label, value in zip(parts, parts[1:], strict=False):
+        if label.endswith(":"):
+            fields[label[:-1].strip().lower()] = value
+    return fields
+
+
+def _autocam_is_processing(raw: str) -> bool:
+    """True only when AutoCam is genuinely mid-render.
+
+    3.1.1 has no dedicated notification control, so
+    :func:`_read_autocam_status` returns a walk of every Text
+    descendant -- including the button labels "Processing Setup" and
+    "Start Processing". A plain ``"processing" in text`` check therefore
+    fires on the completely *idle* start screen.
+
+    That is exactly what wedged the queue on 2026-08-03: a run died
+    during setup, the next attempt reattached to the leftover
+    unconfigured GUI, read ``Source: ... None selected`` as "Processing
+    started", and polled a render that did not exist until the task
+    timed out -- three times, until the game was marked pipeline_failed.
+
+    So: when the panel exposes a ``Status:`` row, trust only that row.
+    When we can see window chrome but no ``Status:`` row has appeared,
+    nothing has started yet. Otherwise fall back to the 3.0.x
+    free-text notification vocabulary.
+    """
+    lowered = raw.lower()
+    status = _autocam_status_fields(raw).get("status")
+    if status is not None:
+        return status.strip().lower() in _ACTIVE_STATUS_VALUES
+    if any(marker in lowered for marker in _CONFIG_SCREEN_MARKERS):
+        return False
+    return any(
+        token in lowered
+        for token in ("processing", "processed", "running", "initializing")
+    )
+
+
 def _read_autocam_status(main_window) -> str:
     """Best-effort read of AutoCam's status text, across UI versions.
 
@@ -757,13 +814,7 @@ def _wait_for_completion_and_cleanup(
                         except OSError:
                             pass
                     break
-                elif (
-                    "processing" in notification_text
-                    or "processed" in notification_text
-                    # 3.1.1 status values before completion
-                    or "running" in notification_text
-                    or "initializing" in notification_text
-                ):
+                elif _autocam_is_processing(raw_notification):
                     if not processing_started:
                         processing_started = True
                         logger.info("Processing started: %r", raw_notification)
@@ -998,13 +1049,34 @@ def _execute_autocam_gui_automation(
                         e,
                     )
                 else:
-                    return _wait_for_completion_and_cleanup(
-                        main_window,
-                        state,
-                        output_path=existing.get("output_path", abs_output_path),
-                        tracked_pids=live,
-                        input_path=existing.get("input_path", abs_input_path),
+                    # Belt and braces alongside the deferred marker write:
+                    # a live process + a live window still isn't proof the
+                    # GUI is rendering. It may have been reset to the idle
+                    # start screen (AutoCam relaunched by hand, a finished
+                    # run dismissed). Reattaching to an idle window means
+                    # polling a render that will never appear, so require
+                    # either an active Status: row or the completion text
+                    # before skipping setup.
+                    resume_status = _read_autocam_status(main_window)
+                    resumable = _autocam_is_processing(resume_status) or any(
+                        token in resume_status.lower()
+                        for token in ("finished processing", "succeeded")
                     )
+                    if not resumable:
+                        logger.warning(
+                            "Reattach candidate is idle, not rendering (%r); "
+                            "clearing marker and doing a full relaunch",
+                            resume_status,
+                        )
+                        state.clear_autocam_run()
+                    else:
+                        return _wait_for_completion_and_cleanup(
+                            main_window,
+                            state,
+                            output_path=existing.get("output_path", abs_output_path),
+                            tracked_pids=live,
+                            input_path=existing.get("input_path", abs_input_path),
+                        )
             else:
                 logger.info(
                     "Stale autocam_run marker (live_pids=%s, hwnd=%s); clearing and relaunching",
@@ -1043,29 +1115,17 @@ def _execute_autocam_gui_automation(
         if hwnd is None:
             raise TimeoutError("Once Autocam window not found within 35 seconds")
 
-        # Persist PIDs to state.json so a tray crash mid-pass can reattach
-        # on restart. Get the window-owning PID via win32process (instant,
-        # no subprocess spawn) — this is the child GUI.exe that actually
-        # owns the AutoCam window, not just the launcher which may exit.
+        # Collect the PIDs now (the window-owning PID via win32process is
+        # instant and needs no subprocess) but DON'T write the reattach
+        # marker yet -- see the deferred write after "Start Processing"
+        # below. This is the child GUI.exe that actually owns the AutoCam
+        # window, not just the launcher, which may exit.
         import win32process
 
         _, window_pid = win32process.GetWindowThreadProcessId(hwnd)
-        if state is not None:
-            gui_pids = list({launcher.pid, window_pid})
-            state.set_autocam_run(
-                {
-                    "launcher_pid": launcher.pid,
-                    "gui_pids": gui_pids,
-                    "input_path": abs_input_path,
-                    "output_path": abs_output_path,
-                    "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
-                }
-            )
-            logger.info(
-                "Recorded autocam_run marker: launcher_pid=%s gui_pids=%s",
-                launcher.pid,
-                gui_pids,
-            )
+        pending_gui_pids = (
+            list({launcher.pid, window_pid}) if state is not None else None
+        )
 
         # Wrap the hwnd in a pywinauto window wrapper for interaction
         main_window = desktop.window(handle=hwnd)
@@ -1234,6 +1294,30 @@ def _execute_autocam_gui_automation(
             control_type="Button",
         ).click()
         time.sleep(2)
+
+        # Only NOW record the reattach marker. Writing it at launch time
+        # meant a run that died anywhere during setup (source select,
+        # destination select, field auto-marking) still left a marker
+        # claiming a render was live. The next attempt took the resume
+        # path, skipped kill+launch+setup, and polled an idle
+        # never-configured GUI until it timed out -- which is how the
+        # 2026-08-03 batch wedged and marked a game pipeline_failed.
+        # A marker written here means processing was actually started.
+        if state is not None and pending_gui_pids is not None:
+            state.set_autocam_run(
+                {
+                    "launcher_pid": launcher.pid,
+                    "gui_pids": pending_gui_pids,
+                    "input_path": abs_input_path,
+                    "output_path": abs_output_path,
+                    "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                }
+            )
+            logger.info(
+                "Recorded autocam_run marker after start: launcher_pid=%s gui_pids=%s",
+                launcher.pid,
+                pending_gui_pids,
+            )
 
         # Track both the launcher and the window-owning PID for exit
         # detection. No subprocess spawning — window_pid was already
