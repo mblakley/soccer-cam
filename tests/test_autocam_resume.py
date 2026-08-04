@@ -183,6 +183,17 @@ class TestParseWmiDatetime:
         assert _parse_wmi_datetime("20260529182708.xxxxxx-300") is None
 
 
+# Verbatim AutoCam 3.1.1 status blobs (see video_grouper_tray.log). The
+# idle one is what the reattach path used to mistake for a live render:
+# its "Processing Setup" / "Start Processing" buttons contain the word
+# "processing" even though nothing is running.
+_IDLE_STATUS = (
+    "c588e0da50fb | Source: | Browse files | None selected | Destination: | "
+    "Browse file | None selected | Processing Setup | Add Logo | Start Processing"
+)
+_RUNNING_STATUS = _IDLE_STATUS + " | Status: | Running | Processed: | 3874"
+
+
 class TestResumeBranch:
     """Patch DirectoryState + win32 + psutil + pywinauto to verify the
     resume vs fresh-launch branching in _execute_autocam_gui_automation."""
@@ -211,7 +222,13 @@ class TestResumeBranch:
             # real desktop; without patching it, the fresh-launch test
             # spins for the full 15s "wait for SettingsWindow" deadline.
             patch("video_grouper.tray.autocam_automation.win32gui") as wg,
+            # The resume branch now refuses to reattach to an idle window,
+            # so these tests must say what the GUI is actually showing.
+            patch(
+                "video_grouper.tray.autocam_automation._read_autocam_status"
+            ) as read_status,
         ):
+            read_status.return_value = _RUNNING_STATUS
             wg.EnumWindows = MagicMock()
             wg.IsWindowVisible = MagicMock(return_value=False)
             # Default desktop().window() returns a usable mock window.
@@ -226,8 +243,45 @@ class TestResumeBranch:
                 "live_pids": live_pids,
                 "wait_complete": wait_complete,
                 "window": window,
+                "read_status": read_status,
                 "group_dir": group_dir,
             }
+
+    def test_resume_refuses_idle_window_and_relaunches(self, patches):
+        """Regression (2026-08-03): live PIDs + a live window are not
+        proof of a render. A run that died during setup left an idle,
+        unconfigured GUI; the resume branch attached to it and polled a
+        render that never existed until the game hit pipeline_failed.
+        An idle status must force the full kill+launch+setup path."""
+        gd = patches["group_dir"]
+        state = DirectoryState(gd)
+        input_p = Path(gd) / "video" / "in-raw.mp4"
+        input_p.parent.mkdir(parents=True, exist_ok=True)
+        input_p.touch()
+        input_path = str(input_p)
+        state.set_autocam_run(
+            {
+                "launcher_pid": 1234,
+                "gui_pids": [1234, 5678],
+                "input_path": os.path.abspath(input_path),
+                "output_path": os.path.join(gd, "video", "out.mp4"),
+                "started_at": "2026-05-09T20:00:00Z",
+            }
+        )
+        patches["live_pids"].return_value = [5678]
+        patches["find_hwnd"].return_value = 0xCAFE
+        patches["read_status"].return_value = _IDLE_STATUS
+
+        _execute_autocam_gui_automation(
+            "fake.exe",
+            input_path,
+            os.path.join(gd, "video", "out.mp4"),
+            group_dir=gd,
+        )
+
+        # Full relaunch, not a reattach: the idle window is torn down and
+        # AutoCam is started fresh so setup actually runs.
+        patches["sub"].Popen.assert_called_once()
 
     def test_resume_skips_launch_when_marker_and_processes_alive(self, patches):
         """When state.json has a marker AND PIDs are alive AND window is
