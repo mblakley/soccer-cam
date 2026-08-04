@@ -1003,11 +1003,11 @@ class VideoGrouperApp:
     async def _update_quiescence_check(self) -> tuple[bool, str | None]:
         """Tell the auto-upgrade poller whether it's safe to apply.
 
-        Returns ``(is_idle, busy_reason)``. Idle means: no pipeline
-        processor has queued work AND no download is mid-flight. Busy
-        means: at least one processor would be interrupted by a
-        StopService -- name the loudest one so the dashboard can
-        explain the deferral.
+        Returns ``(is_idle, busy_reason)``. Idle means: no processor
+        has queued work, none has a task in hand, and no download is
+        mid-flight. Busy means: at least one processor would be
+        interrupted by a StopService -- name every one of them so the
+        dashboard can explain the deferral.
 
         The same callable the processor uses for its `deferred`
         journal entries -- keep the reason string short and
@@ -1015,12 +1015,25 @@ class VideoGrouperApp:
         """
         if self._has_active_download():
             return False, "download in progress"
-        # `get_queue_sizes()` reports -1 for processors that are
-        # disabled in this config; treat that as 0, not busy.
-        sizes = {k: v for k, v in self.get_queue_sizes().items() if v > 0}
-        if sizes:
-            top = ", ".join(f"{k}={v}" for k, v in sizes.items())
-            return False, top
+        # Use the in-progress-aware summary, NOT get_queue_sizes():
+        # that one deliberately excludes the task a processor has
+        # already dequeued, so a YouTube upload or an AutoCam render
+        # mid-flight reported queue=0 and read as "idle". An upgrade
+        # then stopped the service on top of the running task -- which
+        # is exactly how a 07.06 upload got killed at 2%. A busy
+        # processor is busy whether the work is queued or in hand.
+        busy: list[str] = []
+        for name, entry in self.get_queue_status_summary().items():
+            if not entry:
+                continue
+            queued = entry.get("queued") or 0
+            in_progress = entry.get("in_progress")
+            if queued > 0:
+                busy.append(f"{name}={queued}")
+            if in_progress:
+                busy.append(f"{name} in progress")
+        if busy:
+            return False, ", ".join(busy)
         return True, None
 
     async def _watch_config_for_restart(self) -> None:
@@ -1329,6 +1342,12 @@ class VideoGrouperApp:
                 getattr(self, "reprocess_request_processor", None),
             ),
             ("clips", self.clip_processor),
+            # The config-driven pipeline (AutoCam render) runs the
+            # longest task in the whole app -- tens of minutes per
+            # game. It was missing here, so the upgrade quiescence
+            # gate could not see a render in flight and would happily
+            # stop the service on top of one.
+            ("pipeline", self.pipeline_processor),
         ):
             entry = _summary(proc)
             if entry is not None:

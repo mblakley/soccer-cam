@@ -139,6 +139,9 @@ class TestQueueStatusSummary:
         app.highlight_reel_processor = None
         app.ttt_job_processor = None
         app.clip_processor = None
+        # Real __init__ always sets this (None when no pipeline is
+        # configured); the summary reads it directly.
+        app.pipeline_processor = None
         return app
 
     def test_all_idle_shows_zero_queues_and_none_in_progress(self):
@@ -195,6 +198,7 @@ class TestQueueStatusSummary:
         app.highlight_reel_processor = None
         app.ttt_job_processor = None
         app.clip_processor = None
+        app.pipeline_processor = None
 
         s = app.get_queue_status_summary()
         assert s["download"]["queued"] == 2  # 0 + 2 across cameras
@@ -227,6 +231,7 @@ class TestLogQueueStatusFormat:
         app.highlight_reel_processor = None
         app.ttt_job_processor = None
         app.clip_processor = None
+        app.pipeline_processor = None
 
         with caplog.at_level(logging.INFO, logger="video_grouper.video_grouper_app"):
             app._log_queue_status()
@@ -260,6 +265,7 @@ class TestGetQueueSizesBackwardCompat:
         app.clip_request_processor = None
         app.ttt_job_processor = None
         app.clip_processor = None
+        app.pipeline_processor = None
 
         sizes = app.get_queue_sizes()
         assert sizes["video"] == 0
@@ -273,3 +279,65 @@ class TestGetQueueSizesBackwardCompat:
         # filter in the StopService deferral path.
         for v in sizes.values():
             assert isinstance(v, int)
+
+
+class TestUpgradeQuiescence:
+    """``_update_quiescence_check`` gates the auto-upgrade. It must
+    treat a dequeued-but-running task as BUSY.
+
+    Regression (2026-08-03): it read ``get_queue_sizes()``, which
+    documents itself as excluding the in-progress item. A YouTube
+    upload that had already been dequeued therefore reported queue=0,
+    the gate said "idle", and the upgrade stopped the service on top
+    of the running upload -- killing it at 2%.
+    """
+
+    def _make_app(self, **kwargs):
+        app = TestQueueStatusSummary()._make_app(**kwargs)
+        # _has_active_download() probes this attribute directly; a bare
+        # MagicMock attribute would read as truthy and mask everything.
+        for dp in app.download_processors.values():
+            dp._in_progress_item = None
+        return app
+
+    @pytest.mark.asyncio
+    async def test_idle_when_nothing_queued_or_running(self):
+        app = self._make_app()
+        is_idle, reason = await app._update_quiescence_check()
+        assert is_idle is True
+        assert reason is None
+
+    @pytest.mark.asyncio
+    async def test_busy_when_upload_is_in_flight_with_empty_queue(self):
+        """The exact failure: queue=0, upload running."""
+        app = self._make_app(
+            youtube_qsize=0,
+            youtube_busy="YoutubeUploadTask(2026.07.06-17.50.05)",
+        )
+        is_idle, reason = await app._update_quiescence_check()
+        assert is_idle is False, "an in-flight upload must block the upgrade"
+        assert "youtube" in reason
+
+    @pytest.mark.asyncio
+    async def test_busy_when_autocam_render_is_in_flight(self):
+        """The pipeline processor runs the longest task in the app and
+        was missing from the summary entirely, so a render in progress
+        was invisible to the gate."""
+        app = self._make_app()
+        proc = MagicMock()
+        proc.get_queue_size = MagicMock(return_value=0)
+        proc.get_in_progress_summary = MagicMock(
+            return_value="PipelineTask(2026.07.08-18.20.31)"
+        )
+        app.pipeline_processor = proc
+
+        is_idle, reason = await app._update_quiescence_check()
+        assert is_idle is False, "an in-flight AutoCam render must block the upgrade"
+        assert "pipeline" in reason
+
+    @pytest.mark.asyncio
+    async def test_busy_when_work_is_merely_queued(self):
+        app = self._make_app(video_qsize=2)
+        is_idle, reason = await app._update_quiescence_check()
+        assert is_idle is False
+        assert "video=2" in reason

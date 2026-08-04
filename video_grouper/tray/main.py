@@ -704,11 +704,10 @@ class SystemTrayIcon(QSystemTrayIcon):
     def apply_pending_update(self) -> None:
         """POST /api/update/apply when the user clicks Install Update.
 
-        Phase 1 boundary: the service returns 503 with a "Phase 2"
-        explanation. We surface that string verbatim so the user
-        understands why nothing happens; once Phase 2 lands the same
-        click drives the real installer spawn with no client-side
-        change needed.
+        The service answers 202 on a successful installer spawn, 409
+        when nothing is staged, and 503 while the pipeline is busy. We
+        surface the returned reason verbatim so the user can tell
+        "nothing to install" apart from "still rendering".
         """
         import json
         import urllib.error
@@ -716,7 +715,21 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         url = self._web_url("/api/update/apply")
         try:
-            req = urllib.request.Request(url, method="POST", data=b"")
+            # The service's CSRF guard (auth_server.host_and_origin_check)
+            # rejects every state-changing request that arrives without an
+            # Origin/Referer -- browsers always send one, urllib never does.
+            # Without this header the tray's own Install Update click came
+            # back 403 "Missing Origin/Referer on state-changing request",
+            # so the manual upgrade path was dead on arrival. Send our own
+            # base URL as the Origin: it is same-origin by construction and
+            # keeps the rebinding/CSRF defense intact for real browsers
+            # (which cannot forge this header).
+            req = urllib.request.Request(
+                url,
+                method="POST",
+                data=b"",
+                headers={"Origin": self._web_url("")},
+            )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             self.showMessage(

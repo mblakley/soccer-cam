@@ -109,3 +109,47 @@ def test_restart_service_success(mock_restart_service):
         tray_icon.showMessage.assert_called_once_with(
             "Service", "Service restarted successfully"
         )
+
+
+def test_apply_pending_update_sends_same_origin_header():
+    """Regression (2026-08-03): the service's rebinding/CSRF middleware
+    rejects any state-changing request without Origin/Referer, and
+    ``urllib.request`` sends neither -- so every Install Update click
+    came back 403 "Missing Origin/Referer on state-changing request"
+    and the manual upgrade path never worked. The tray must supply its
+    own base URL as the Origin.
+    """
+    import json
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self_inner):
+            return self_inner
+
+        def __exit__(self_inner, *exc):
+            return False
+
+        def read(self_inner):
+            return json.dumps({"status": "spawned"}).encode("utf-8")
+
+    def _fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["headers"] = dict(req.header_items())
+        captured["method"] = req.get_method()
+        return _Resp()
+
+    with patch("video_grouper.tray.main.SystemTrayIcon.__init__", lambda x: None):
+        tray_icon = SystemTrayIcon()
+        tray_icon.config = None  # falls back to the default 8765
+        tray_icon.showMessage = MagicMock()
+        with patch("urllib.request.urlopen", _fake_urlopen):
+            tray_icon.apply_pending_update()
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "http://localhost:8765/api/update/apply"
+    # urllib title-cases header keys.
+    origin = {k.lower(): v for k, v in captured["headers"].items()}["origin"]
+    assert origin == "http://localhost:8765"
+    tray_icon.showMessage.assert_called_once()
+    assert "spawned" in tray_icon.showMessage.call_args[0][1]
