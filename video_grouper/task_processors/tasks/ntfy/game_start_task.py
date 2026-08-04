@@ -306,10 +306,9 @@ class GameStartTask(BaseNtfyTask):
         # Create a minimal config and ntfy_service for deserialization
         # These will be properly initialized when the task is executed
         from video_grouper.task_processors.services.ntfy_service import NtfyService
-        from video_grouper.utils.config import Config
 
         # Create minimal config with required fields
-        config = Config()
+        config = cls._placeholder_config()
         ntfy_service = NtfyService(config.ntfy, group_dir)
 
         return cls(

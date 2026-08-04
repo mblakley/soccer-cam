@@ -375,6 +375,11 @@ class YouTubeConfig(BaseModel):
     # video id without calling the Google API. Must NOT be enabled in
     # production — reels will reference non-existent YouTube videos.
     skip_upload: bool = False
+    # Minutes to hold uploads after the API reports the daily upload quota
+    # is exhausted, before probing whether it has freed. The project-level
+    # "Video Uploads per day" limit does NOT reset at midnight Pacific, so
+    # the reset is discovered by polling rather than predicted.
+    quota_retry_minutes: int = 30
     processed_playlist: YouTubePlaylistConfig | None = None
     raw_playlist: YouTubePlaylistConfig | None = None
     playlist_map: YouTubePlaylistMapConfig | None = None

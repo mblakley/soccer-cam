@@ -32,6 +32,20 @@ class QueueProcessor(ABC):
         self.storage_path = storage_path
         self.config = config
 
+        # How long to hold an upload after the API reports the daily quota
+        # is exhausted, before probing again. We can't predict the reset
+        # (see the YouTubeQuotaError branch in _run), so we poll for it.
+        # Read defensively: tests (and some call sites) pass a MagicMock
+        # config, where attribute access yields a Mock that int() rejects.
+        minutes = 30
+        raw = getattr(getattr(config, "youtube", None), "quota_retry_minutes", None)
+        try:
+            if raw is not None:
+                minutes = int(raw)
+        except (TypeError, ValueError):
+            minutes = 30
+        self._quota_retry_seconds = max(60, minutes * 60)
+
         self._queue = None  # Defer creation until start()
         self._queued_items = set()
         self._processor_task = None
@@ -235,28 +249,35 @@ class QueueProcessor(ABC):
                         continue
 
                     if isinstance(e, YouTubeQuotaError):
-                        # Quota errors should not be retried immediately.
-                        # Wait until the quota resets (YouTube daily quotas
-                        # reset at midnight Pacific Time) then retry.
+                        # Quota errors must not be retried immediately, but we
+                        # deliberately do NOT try to predict when the quota
+                        # frees. This used to sleep until "next midnight PT",
+                        # which is wrong for the limit that actually bites:
+                        # the project's "Video Uploads per day" metric. On
+                        # 2026-08-04 uploads were still rejected 3h39m AFTER
+                        # midnight PT, so that model would have woken up,
+                        # failed, and then slept until the FOLLOWING midnight
+                        # -- turning a few-hour wait into a day-plus.
+                        #
+                        # Poll on a bounded interval instead and let the API
+                        # tell us when it has reset. Costs one probe per
+                        # interval (~48/day at the default) versus the 1,440
+                        # of a 60s retry, and recovers within one interval of
+                        # the real reset whenever that happens to be.
                         self._queue.task_done()
                         self._in_progress_item = None
 
-                        # Calculate wait: next midnight PT + 5 min buffer
                         from datetime import datetime, timedelta
 
-                        import pytz
-
-                        now_pt = datetime.now(pytz.timezone("US/Pacific"))
-                        tomorrow_pt = (now_pt + timedelta(days=1)).replace(
-                            hour=0, minute=5, second=0, microsecond=0
-                        )
-                        wait_seconds = (tomorrow_pt - now_pt).total_seconds()
-                        wait_hours = wait_seconds / 3600
+                        wait_seconds = self._quota_retry_seconds
+                        next_try = datetime.now() + timedelta(seconds=wait_seconds)
 
                         logger.warning(
-                            f"{self.__class__.__name__}: YouTube quota exceeded for {item}. "
-                            f"Waiting {wait_hours:.1f}h until quota resets "
-                            f"(~{tomorrow_pt.strftime('%I:%M %p PT')}). [trace_id: {trace_id}]"
+                            f"{self.__class__.__name__}: YouTube upload quota "
+                            f"exhausted for {item}. Holding this upload and "
+                            f"re-probing at {next_try.strftime('%H:%M:%S')} "
+                            f"(every {wait_seconds / 60:.0f} min until the "
+                            f"quota frees). [trace_id: {trace_id}]"
                         )
 
                         # Sleep until quota resets, then requeue

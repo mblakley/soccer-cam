@@ -95,6 +95,41 @@ class BaseNtfyTask(BaseTask, ABC):
         """Return the path of the item being processed."""
         return self.group_dir
 
+    @staticmethod
+    def _placeholder_config():
+        """Build a minimal valid Config for a deserialized task.
+
+        ``Config()`` cannot be called bare -- nine sections are required and
+        it raises ValidationError. Both NTFY deserializers did exactly that,
+        so restoring a persisted task threw before it could return. The real
+        config is injected when the task is executed; this only has to be
+        structurally valid.
+        """
+        from video_grouper.utils.config import (
+            AppConfig,
+            Config,
+            LoggingConfig,
+            NtfyConfig,
+            PlayMetricsConfig,
+            ProcessingConfig,
+            RecordingConfig,
+            StorageConfig,
+            TeamSnapConfig,
+            YouTubeConfig,
+        )
+
+        return Config(
+            STORAGE=StorageConfig(path="."),
+            RECORDING=RecordingConfig(),
+            PROCESSING=ProcessingConfig(),
+            LOGGING=LoggingConfig(),
+            APP=AppConfig(),
+            TEAMSNAP=TeamSnapConfig(),
+            PLAYMETRICS=PlayMetricsConfig(),
+            NTFY=NtfyConfig(),
+            YOUTUBE=YouTubeConfig(),
+        )
+
     def serialize(self) -> dict[str, object]:
         """Serialize the task for state persistence."""
         return {

@@ -72,6 +72,51 @@ class GameEndTask(BaseNtfyTask):
             self.metadata["time_offset"] = time_offset
             self.metadata["time_seconds"] = time_seconds
 
+    @classmethod
+    def deserialize(cls, data: dict[str, object]) -> "GameEndTask":
+        """Rebuild a GameEndTask from its serialized form.
+
+        Without this the class stays abstract, and TaskRegistry.register_task
+        cannot even construct the throwaway instance it uses to read
+        ``task_type`` -- it logs "could not resolve task_type property" and
+        returns, leaving GameEndTask absent from the registry entirely. A
+        game-end task persisted in the NTFY queue then cannot be restored, so
+        a service restart silently drops it and the end-of-game prompt never
+        arrives. GameStartTask was unaffected only because it is concrete.
+
+        ``BaseNtfyTask.serialize`` nests the fields under ``metadata``; the
+        top-level lookups are a fallback for older state files.
+        """
+        metadata = data.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        def _field(name: str, default: object) -> object:
+            if name in metadata:
+                return metadata[name]
+            return data.get(name, default)
+
+        group_dir = str(data.get("group_dir", ""))
+        combined_video_path = str(_field("combined_video_path", ""))
+        start_time_offset = str(_field("start_time_offset", "00:00"))
+        time_offset = _field("time_offset", None)
+        time_seconds = _field("time_seconds", None)
+
+        from video_grouper.task_processors.services.ntfy_service import NtfyService
+
+        config = cls._placeholder_config()
+        ntfy_service = NtfyService(config.ntfy, group_dir)
+
+        return cls(
+            group_dir=group_dir,
+            config=config,
+            ntfy_service=ntfy_service,
+            combined_video_path=combined_video_path,
+            start_time_offset=start_time_offset,
+            time_offset=time_offset if time_offset is None else str(time_offset),
+            time_seconds=None if time_seconds is None else int(time_seconds),
+        )
+
     def get_task_type(self) -> str:
         """Get the task type identifier."""
         from .enums import NtfyInputType
