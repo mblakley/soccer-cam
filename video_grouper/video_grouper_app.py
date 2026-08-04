@@ -1022,9 +1022,37 @@ class VideoGrouperApp:
         # then stopped the service on top of the running task -- which
         # is exactly how a 07.06 upload got killed at 2%. A busy
         # processor is busy whether the work is queued or in hand.
+        # A processor parked on an external quota is NOT busy: its worker
+        # loop is asleep until the quota is re-probed, so nothing is in
+        # flight and nothing can start. Counting it as busy deferred the
+        # auto-upgrade indefinitely on 2026-08-04 -- and because the update
+        # check and StateAuditor's re-queue run on aligned ~60s cadences, the
+        # check hit the churn window every time rather than occasionally, so
+        # the release that stops the retry storm could not install.
+        parked = {
+            name
+            for name, proc in (
+                ("youtube", getattr(self, "upload_processor", None)),
+                ("video", getattr(self, "video_processor", None)),
+                ("pipeline", getattr(self, "pipeline_processor", None)),
+            )
+            if proc is not None
+            and callable(getattr(proc, "is_quota_blocked", None))
+            # `is True`, not truthiness: a MagicMock processor returns a Mock
+            # here, which is truthy, and would silently mark every processor
+            # parked -- reporting the pipeline idle while real work runs.
+            and proc.is_quota_blocked() is True
+        }
+
         busy: list[str] = []
         for name, entry in self.get_queue_status_summary().items():
             if not entry:
+                continue
+            if name in parked:
+                logger.debug(
+                    "quiescence: ignoring %s -- parked on quota, not working",
+                    name,
+                )
                 continue
             queued = entry.get("queued") or 0
             in_progress = entry.get("in_progress")

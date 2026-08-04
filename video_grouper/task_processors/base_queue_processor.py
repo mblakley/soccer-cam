@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 
 from video_grouper.task_processors.tasks.base_task import BaseTask
@@ -45,6 +46,11 @@ class QueueProcessor(ABC):
         except (TypeError, ValueError):
             minutes = 30
         self._quota_retry_seconds = max(60, minutes * 60)
+        # Epoch seconds until which this processor is parked on an external
+        # quota. While parked it is NOT doing work and cannot start any, so
+        # the upgrade quiescence gate must not read it as busy -- see
+        # is_quota_blocked().
+        self._quota_blocked_until = 0.0
 
         self._queue = None  # Defer creation until start()
         self._queued_items = set()
@@ -211,6 +217,7 @@ class QueueProcessor(ABC):
                     self._retry_counts.pop(
                         item_key, None
                     )  # Clear retry count on success
+                    self._quota_blocked_until = 0.0
                     self._in_progress_item = None
                     queue_size = self._queue.qsize()
                     await self.save_state()
@@ -271,6 +278,7 @@ class QueueProcessor(ABC):
 
                         wait_seconds = self._quota_retry_seconds
                         next_try = datetime.now() + timedelta(seconds=wait_seconds)
+                        self._quota_blocked_until = time.time() + wait_seconds
 
                         logger.warning(
                             f"{self.__class__.__name__}: YouTube upload quota "
@@ -472,6 +480,22 @@ class QueueProcessor(ABC):
 
         except Exception as e:
             logger.error(f"{self.__class__.__name__}: Error loading state: {e}")
+
+    def is_quota_blocked(self) -> bool:
+        """True while this processor is parked waiting on an external quota.
+
+        A parked processor holds items it *cannot* act on: the worker loop is
+        sleeping until the quota is probed again, so nothing is in flight and
+        nothing can start. Reporting it as busy blocks the auto-upgrade for as
+        long as the external limit lasts -- and because the update check and
+        the StateAuditor re-queue run on aligned ~60s cadences, the check
+        landed inside the churn window on EVERY attempt rather than
+        occasionally. Observed 2026-08-04: two consecutive hourly checks both
+        deferred with "youtube=2, youtube in progress" while the queue read
+        idle at every 5-minute sample, leaving the very release that stops the
+        retry storm unable to install because of the storm.
+        """
+        return time.time() < self._quota_blocked_until
 
     def get_queue_size(self) -> int:
         """Get the current pending queue size.
