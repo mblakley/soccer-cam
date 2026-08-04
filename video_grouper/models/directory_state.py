@@ -416,6 +416,37 @@ class DirectoryState:
         """Remove the autocam_run marker (run finished successfully or failed)."""
         self._update_state_field("autocam_run", None)
 
+    def get_uploaded_videos(self) -> dict:
+        """Map of ``kind`` -> YouTube video id already uploaded for this group.
+
+        Kinds are ``"processed"`` and ``"raw"``. Absent key means not yet
+        uploaded. Used to make YoutubeUploadTask resumable per file: the
+        task uploads both videos and only marks the group complete when
+        BOTH succeed, so any failure of the second one re-ran the first
+        on the next attempt. That cost a duplicate video on YouTube and
+        1,600 quota units -- a sixth of the daily allowance, which is
+        only six uploads/day (2026-08-03: 07.06's processed video went
+        up twice, and the wasted unit is what pushed the last raw upload
+        past the quota).
+        """
+        try:
+            with FileLock(self.state_file_path):
+                if os.path.exists(self.state_file_path):
+                    with open(self.state_file_path) as f:
+                        state_data = json.load(f)
+                    value = state_data.get("uploaded_videos")
+                    if isinstance(value, dict):
+                        return value
+        except (json.JSONDecodeError, FileNotFoundError, TimeoutError):
+            pass
+        return {}
+
+    def record_uploaded_video(self, kind: str, video_id: str) -> None:
+        """Remember that *kind* is already on YouTube as *video_id*."""
+        existing = self.get_uploaded_videos()
+        existing[kind] = video_id
+        self._update_state_field("uploaded_videos", existing)
+
     def get_autocam_run(self) -> dict | None:
         """Read the autocam_run marker, or None if no run is recorded."""
         try:
