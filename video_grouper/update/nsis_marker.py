@@ -13,6 +13,13 @@ Phases (defined in ``installer.nsi``):
   scheduled-task-registered -> service-started ->
   tray-launched -> complete
 
+Plus three terminal failure phases, each written immediately before
+the installer aborts rather than overwrite a live install:
+
+  service-stop-timeout   the service never reached STOPPED
+  process-kill-timeout   the tray survived taskkill /F
+  files-copy-failed      File /r could not write some of the payload
+
 If the file reads ``complete``, the install ran to the end. Anything
 else is the failure-furthest point reached. Missing file means no
 install has run since the last journal sync (we delete the file

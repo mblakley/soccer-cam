@@ -1273,3 +1273,47 @@ def test_receive_token_completes_when_auto_claim_raises(storage, client):
     # Token still persisted.
     saved = json.loads((storage / "ttt" / "tokens.json").read_text(encoding="utf-8"))
     assert saved["access_token"] == jwt
+
+
+# ---------------------------------------------------------------------------
+# CSRF guard vs. the tray's own POST (regression: 2026-08-03)
+# ---------------------------------------------------------------------------
+
+
+class _StubUpdateProcessor:
+    """Minimal stand-in for UpdateCheckProcessor's HTTP surface."""
+
+    storage_path = "."
+    _pending_version = "9.9.9"
+
+    def build_status(self):
+        from video_grouper.task_processors.update_check_processor import UpdateStatus
+
+        return UpdateStatus(current_version="0.0.1", auto_update=True)
+
+    async def apply_pending(self):
+        return True, "spawned"
+
+
+def test_update_apply_403s_without_origin_but_accepts_the_trays_own(storage):
+    """The tray drives Install Update with ``urllib.request``, which
+    sends neither Origin nor Referer -- so the rebinding/CSRF guard
+    answered every click with 403 and the manual upgrade path was
+    dead. The guard must stay on for headerless callers while the
+    tray's same-origin POST gets through.
+
+    These tests previously mounted ``build_router`` on a bare FastAPI
+    app, which is why the middleware never ran and the bug shipped.
+    """
+    app = create_app(
+        _ttt_config(), str(storage), update_processor=_StubUpdateProcessor()
+    )
+    with TestClient(app, base_url="http://localhost:8765") as c:
+        headerless = c.post("/api/update/apply")
+        assert headerless.status_code == 403
+        assert "Missing Origin/Referer" in headerless.text
+
+        # Exactly what video_grouper.tray.main.apply_pending_update sends.
+        with_origin = c.post("/api/update/apply", headers=_SAME_ORIGIN)
+        assert with_origin.status_code == 202
+        assert with_origin.json()["status"] == "spawned"

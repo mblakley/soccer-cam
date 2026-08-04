@@ -118,6 +118,86 @@ FunctionEnd
     Pop $0
 !macroend
 
+; Block until VideoGrouperService actually reaches STOPPED.
+;
+; `sc.exe stop` is ASYNCHRONOUS -- it returns as soon as the SCM
+; accepts the stop control, NOT when the process has exited. The
+; previous code slept 1500ms and started overwriting, which raced a
+; service that was still shutting down. Windows refuses to overwrite
+; a mapped image, so `File /r` failed on the locked exe and on
+; _internal\*.pyd -- and because nothing checked the error flag, the
+; script wrote "files-copied" .. "complete" regardless. The service
+; then restarted on the OLD code, reported the OLD version, saw the
+; new release again and reinstalled. Observed 2026-08-03: two full
+; 395 MB download+install cycles 35s apart, both reporting 0.5.7,
+; ~15 service restarts in 10 minutes.
+;
+; Timing out here is a HARD FAIL by design: leaving the previous
+; version running and retrying on the next check is strictly better
+; than overwriting a live install.
+!macro WaitForServiceStopped Ticks
+    Push $0
+    Push $1
+    Push $2
+    StrCpy $1 0
+    ${Do}
+        ; Non-zero (typically 1060) means the service isn't registered
+        ; at all -- a fresh install has nothing to wait for.
+        nsExec::ExecToStack 'sc.exe query VideoGrouperService'
+        Pop $0
+        Pop $2
+        ${If} $0 != "0"
+            ${ExitDo}
+        ${EndIf}
+        ; `find` exits 0 only when the STATE line reads STOPPED.
+        nsExec::ExecToStack 'cmd.exe /c "sc query VideoGrouperService | find $\"STOPPED$\" > nul"'
+        Pop $0
+        Pop $2
+        ${If} $0 == "0"
+            ${ExitDo}
+        ${EndIf}
+        Sleep 500
+        IntOp $1 $1 + 1
+        ${If} $1 >= ${Ticks}
+            !insertmacro WritePhase "service-stop-timeout"
+            SetErrorLevel 2
+            Abort
+        ${EndIf}
+    ${Loop}
+    Pop $2
+    Pop $1
+    Pop $0
+!macroend
+
+; Same idea for the tray: taskkill /F returns before Windows has
+; necessarily torn the process down, and the tray shares
+; $INSTDIR\_internal with the service, so a surviving tray locks the
+; payload just as effectively.
+!macro WaitForProcessGone ExeName Ticks
+    Push $0
+    Push $1
+    Push $2
+    StrCpy $1 0
+    ${Do}
+        nsExec::ExecToStack 'cmd.exe /c "tasklist /FI $\"IMAGENAME eq ${ExeName}$\" | find /I $\"${ExeName}$\" > nul"'
+        Pop $0
+        Pop $2
+        ${If} $0 != "0"
+            ${ExitDo}
+        ${EndIf}
+        Sleep 500
+        IntOp $1 $1 + 1
+        ${If} $1 >= ${Ticks}
+            !insertmacro WritePhase "process-kill-timeout"
+            SetErrorLevel 2
+            Abort
+        ${EndIf}
+    ${Loop}
+    Pop $2
+    Pop $1
+    Pop $0
+!macroend
+
 Section "Install" SecInstall
     ; Use 64-bit registry view so the 64-bit service can find the keys
     SetRegView 64
@@ -143,22 +223,40 @@ Section "Install" SecInstall
     ; v0.3.8 upgrade testing (LastTaskResult 0x80071420 on the
     ; post-upgrade /Run because of the lock conflict).
     ;
-    ; sc.exe stop is best-effort: a clean upgrade has the service
-    ; already gone, and a fresh install has nothing to stop. The
-    ; 0 exit code means stopped; non-zero is benign here.
+    ; Request the stop, then WAIT for it. Neither command below is
+    ; synchronous, so both are followed by an explicit poll (see the
+    ; WaitFor* macros above for the reinstall-loop this prevents).
     nsExec::ExecToLog 'sc.exe stop VideoGrouperService'
     nsExec::ExecToLog 'taskkill /F /IM VideoGrouperTray.exe'
-    ; Brief delay so Windows actually releases handles on the
-    ; killed binaries before File /r tries to overwrite them.
-    Sleep 1500
+
+    ; 60 x 500ms = 30s for the service (it has async processors to
+    ; unwind), 20 x 500ms = 10s for the force-killed tray.
+    !insertmacro WaitForServiceStopped 60
+    !insertmacro WaitForProcessGone "VideoGrouperTray.exe" 20
+
+    ; Windows can hold the image section a moment past process exit.
+    Sleep 500
 
     ; Copy the merged onedir output (service + tray + shared _internal/).
     ; The multi-target spec at video_grouper/installer/VideoGrouper.spec
     ; builds both exes against one dependency tree, so service and tray
     ; live side-by-side under $INSTDIR with a single _internal/ folder.
     SetOutPath "$INSTDIR"
+    ; SetOverwrite `on` (the default) reacts to a locked target with a
+    ; modal Abort/Retry/Ignore that /S suppresses -- which is how a
+    ; skipped payload still reached "complete". `try` sets the error
+    ; flag instead, and we hard-fail on it: a partial copy must never
+    ; be reported as a successful install.
+    ClearErrors
+    SetOverwrite try
     File "..\icon.ico"
     File /r "..\dist\VideoGrouper\*"
+    SetOverwrite on
+    ${If} ${Errors}
+        !insertmacro WritePhase "files-copy-failed"
+        SetErrorLevel 2
+        Abort
+    ${EndIf}
 
     !insertmacro WritePhase "files-copied"
 
@@ -234,15 +332,12 @@ Section "Install" SecInstall
     ; CI runs stay headless. (Silent installs also happen during
     ; auto-upgrade: the service spawns us with /S and exits; we
     ; come up cleanly when the service's StartService below fires.)
-    ${IfNot} ${Silent}
-        nsExec::ExecToLog 'sc.exe start VideoGrouperService'
-    ${Else}
-        ; Auto-upgrade re-runs us silently. The previous service
-        ; will have exited cleanly before we got here; start the
-        ; freshly-installed binary so the dashboard comes back up
-        ; without waiting for the recovery actions.
-        nsExec::ExecToLog 'sc.exe start VideoGrouperService'
-    ${EndIf}
+    ; Both branches do the same thing -- WaitForServiceStopped above
+    ; guarantees the old service is gone and the payload landed, so
+    ; there is nothing left to distinguish. (The prior comment here
+    ; claimed the auto-upgrade path had "exited cleanly before we got
+    ; here"; it hadn't, which is what the wait now enforces.)
+    nsExec::ExecToLog 'sc.exe start VideoGrouperService'
 
     !insertmacro WritePhase "service-started"
 
