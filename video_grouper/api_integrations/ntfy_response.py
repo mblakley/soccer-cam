@@ -21,6 +21,13 @@ class NtfyResponseService:
     controlled inputs to simulate user interaction during E2E testing.
     """
 
+    # Reconnect backoff for the long-lived ntfy.sh stream. Starts short
+    # because a server-side close is routine and the topic should be
+    # listened to again almost immediately; caps so a genuine outage
+    # doesn't turn into a hot retry loop.
+    _RECONNECT_MIN_SECONDS = 5
+    _RECONNECT_MAX_SECONDS = 300
+
     def __init__(
         self,
         topic: str,
@@ -86,7 +93,7 @@ class NtfyResponseService:
 
         # Also subscribe to real NTFY topic to respond to real requests
         logger.info(f"Subscribing to real NTFY topic: {self.topic}")
-        self._real_ntfy_task = asyncio.create_task(self._subscribe_to_real_ntfy())
+        self._real_ntfy_task = asyncio.create_task(self._real_ntfy_forever())
 
         logger.info(f"Successfully subscribed to NTFY topic: {self.topic}")
 
@@ -126,8 +133,52 @@ class NtfyResponseService:
         except Exception as e:
             logger.error(f"NTFY response service: Error processing message: {e}")
 
+    async def _real_ntfy_forever(self):
+        """Keep the NTFY subscription alive across server-side disconnects.
+
+        ntfy.sh serves the topic as a long-lived chunked stream and closes
+        it periodically -- observed every 1.5-3 hours in production. The
+        subscribe coroutine used to be spawned exactly once, so the first
+        close ended it ("peer closed connection without sending complete
+        message body") and nothing ever re-created the task. From that
+        moment the service silently stopped receiving responses: game
+        start/end confirmations and team-info replies were dropped until
+        somebody restarted the service. On 2026-08-04 the listener was
+        dead for 25 minutes before an unrelated restart revived it, then
+        died again 3 hours later.
+
+        A disconnect is normal operation, not an error, so reconnect with
+        a short backoff and treat a clean stream end the same as a raised
+        exception -- both mean "no longer subscribed".
+        """
+        backoff = self._RECONNECT_MIN_SECONDS
+        while True:
+            try:
+                await self._subscribe_to_real_ntfy()
+                # Returned without raising: the stream ended cleanly.
+                # Still means we are no longer subscribed.
+                backoff = self._RECONNECT_MIN_SECONDS
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "NTFY response service: subscription dropped (%s); "
+                    "reconnecting in %ss",
+                    exc,
+                    backoff,
+                )
+            try:
+                await asyncio.sleep(backoff)
+            except asyncio.CancelledError:
+                raise
+            backoff = min(backoff * 2, self._RECONNECT_MAX_SECONDS)
+
     async def _subscribe_to_real_ntfy(self):
-        """Subscribe to real NTFY topic and respond to messages."""
+        """Subscribe to real NTFY topic and respond to messages.
+
+        Returns when the stream ends; raises on transport errors. The
+        caller (:meth:`_real_ntfy_forever`) owns reconnection.
+        """
         import json
 
         import httpx
@@ -231,9 +282,12 @@ class NtfyResponseService:
                                 )
 
         except Exception as e:
+            # Do NOT swallow this: _real_ntfy_forever needs it to trigger a
+            # reconnect. Swallowing it here is what left the listener dead.
             logger.error(
                 f"NTFY response service: Error subscribing to real NTFY topic: {e}"
             )
+            raise
 
     def _should_respond_to_message(self, title: str, message: str) -> bool:
         """Determine if we should respond to this message."""
