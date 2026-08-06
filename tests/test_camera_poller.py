@@ -1613,3 +1613,39 @@ class TestCompletionWatermark:
 
         await poller._advance_completion_watermark()
         assert await poller._get_latest_processed_time() == base + timedelta(hours=2)
+
+    @pytest.mark.asyncio
+    async def test_reconcile_ignores_files_behind_the_watermark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Narrowing reconcile's query range is not a filter.
+
+        Cameras return recordings that merely *overlap* the requested window,
+        so a game ending just before the watermark still comes back. If the
+        pass does not re-check per file it falls through to
+        _file_needs_download, which asks whether the .mp4 is on disk — and an
+        archived game's deliberately is not. Found by replaying the live
+        server's state (watermark 2026-07-12, all July groups archived off
+        local disk): reconcile re-queued all five published games.
+        """
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        await poller._update_latest_processed_time(datetime(2026, 7, 12, 10, 35, 15))
+
+        # Camera still holds an archived game, and returns it despite the
+        # narrowed range — exactly what a real Reolink/Dahua search does.
+        mock_camera.get_file_list = AsyncMock(
+            return_value=[
+                {
+                    "path": "/archived.dav",
+                    "startTime": "2026-07-12 10:30:00",
+                    "endTime": "2026-07-12 10:35:15",
+                    "size": 5_000_000,
+                }
+            ]
+        )
+
+        await poller._reconcile_files_from_camera()
+
+        poller.download_processor.add_work.assert_not_called()
