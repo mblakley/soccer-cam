@@ -756,6 +756,16 @@ class CameraPoller(PollingProcessor):
                 if file_end_time is None or file_end_time <= file_start_time:
                     file_end_time = file_start_time
 
+                # Re-check the watermark per file. Narrowing the query range
+                # above is NOT a filter: cameras return recordings that merely
+                # overlap the requested window, so a game ending just before
+                # the watermark still comes back. Without this the pass falls
+                # through to _file_needs_download, which asks whether the .mp4
+                # is on disk -- and for an archived game it deliberately is
+                # not, so all five published July games were re-queued.
+                if watermark is not None and file_end_time <= watermark:
+                    continue
+
                 filename = os.path.basename(file_info["path"])
                 group_dir = find_group_directory(
                     file_start_time, self.storage_path, existing_dirs
