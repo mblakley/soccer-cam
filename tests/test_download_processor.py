@@ -1,5 +1,6 @@
 """Tests for the DownloadProcessor."""
 
+import asyncio
 import os
 import tempfile
 from datetime import datetime
@@ -477,3 +478,68 @@ class TestDownloadProcessor:
 
         key = processor.get_item_key(recording_file)
         assert key == "recording:/test/path/test.dav"
+
+
+class TestAbandonExhaustedDownloads:
+    """A download that can never succeed must be recorded as terminal.
+
+    The base queue processor drops an item once its retries are exhausted, but
+    dropping it from the queue is not a record: the file stays at
+    ``download_failed``, which is not settled, so it pins the camera poller's
+    watermark — and therefore every later game — indefinitely.
+    """
+
+    @pytest.mark.asyncio
+    async def test_permanent_failure_marks_file_abandoned(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        from pathlib import Path
+
+        group_dir = os.path.join(temp_storage, "2026.07.01-10.00.00")
+        # Path.mkdir, not os.makedirs — conftest patches the latter to a no-op.
+        Path(group_dir).mkdir(parents=True, exist_ok=True)
+        file_path = os.path.join(group_dir, "gone.dav")
+
+        dir_state = DirectoryState(group_dir)
+        rec = RecordingFile(
+            start_time=datetime(2026, 7, 1, 10, 0, 0),
+            end_time=datetime(2026, 7, 1, 10, 30, 0),
+            file_path=file_path,
+            status="download_failed",
+        )
+        await dir_state.add_file(file_path, rec)
+
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        await processor.on_item_permanently_failed(rec)
+
+        assert DirectoryState(group_dir).files[file_path].status == "abandoned"
+
+    @pytest.mark.asyncio
+    async def test_base_processor_invokes_the_hook_on_retry_exhaustion(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """The hook is only useful if the base actually calls it."""
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        processor.on_item_permanently_failed = AsyncMock()
+        processor.process_item = AsyncMock(side_effect=RuntimeError("404 gone"))
+
+        rec = RecordingFile(
+            start_time=datetime(2026, 7, 1, 10, 0, 0),
+            end_time=datetime(2026, 7, 1, 10, 30, 0),
+            file_path=os.path.join(temp_storage, "grp", "gone.dav"),
+            status="pending",
+        )
+
+        await processor.add_work(rec)
+        await processor.start()
+        try:
+            # Retries are requeued at the back of the queue; give the loop
+            # enough turns to burn through _max_retries + the final drop.
+            for _ in range(200):
+                if processor.on_item_permanently_failed.await_count:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await processor.stop()
+
+        processor.on_item_permanently_failed.assert_awaited_once()
