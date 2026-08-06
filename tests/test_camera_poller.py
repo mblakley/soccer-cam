@@ -347,10 +347,11 @@ class TestCameraPoller:
         self, temp_storage, mock_config, mock_camera, caplog
     ):
         """When the camera returns only runts (isolated short recordings),
-        no file advances the HWM. The poll-summary log must report
-        all-files-filtered AND a warning must fire so future stalls are
-        debuggable. Regression guard for the 2026-05-30 tournament
-        incident where the HWM stuck at a runt's end_time."""
+        nothing is queued, so nothing can settle and the watermark cannot
+        advance. The poll-summary log must report all-files-filtered AND a
+        warning must fire so future stalls are debuggable. Regression guard
+        for the 2026-05-30 tournament incident where the mark stuck at a
+        runt's end_time."""
         mock_camera.get_file_list.return_value = [
             {
                 "path": "/runt1.dav",
@@ -376,18 +377,25 @@ class TestCameraPoller:
             and "new=0" in r.message
             for r in caplog.records
         ), f"missing or wrong poll summary, got: {[r.message for r in caplog.records]}"
-        # Warning must fire to flag the HWM-stall risk.
+        # Warning must fire to flag the watermark-stall risk.
         assert any(
-            "HWM not advanced" in r.message and r.levelname == "WARNING"
+            "none actionable" in r.message and r.levelname == "WARNING"
             for r in caplog.records
-        ), "expected HWM-not-advanced warning for all-runts case"
+        ), "expected none-actionable warning for all-runts case"
 
     @pytest.mark.asyncio
     async def test_poll_summary_logs_normal_new_file(
         self, temp_storage, mock_config, mock_camera, caplog
     ):
-        """A normal poll with one new file must emit a summary showing
-        new=1 and an HWM-advanced INFO line citing the file."""
+        """A normal poll with one new file emits a summary showing new=1, and
+        must NOT advance the watermark.
+
+        This test previously asserted the opposite — that queueing a file
+        advanced the mark. That was the 2026-06-15 bug written down as an
+        expectation: the mark moved the instant a file was queued, before a
+        byte was downloaded, so a download that never completed was never
+        queried again. A merely-queued file is not settled.
+        """
         mock_camera.get_file_list.return_value = [
             {
                 "path": "/normal.dav",
@@ -410,10 +418,12 @@ class TestCameraPoller:
             "poll summary -- 1 files seen" in r.message and "new=1" in r.message
             for r in caplog.records
         )
-        assert any(
-            "HWM advanced to" in r.message and "normal.dav" in r.message
-            for r in caplog.records
-        ), "expected HWM-advanced INFO line citing the new file"
+        assert not any("Watermark advanced to" in r.message for r in caplog.records), (
+            "a queued-but-not-downloaded file must not advance the watermark"
+        )
+        assert await poller._get_latest_processed_time() is None, (
+            "watermark must stay unset until the download actually settles"
+        )
 
     def test_find_group_directory_new_group(self, temp_storage):
         """Test finding group directory when creating a new group."""
@@ -1432,3 +1442,174 @@ class TestAtomicStateWrites:
         assert state["reo"]["latest_video_time"] == "2026-06-15 10:00:00"
         assert state["reo"]["is_connected"] is True
         assert state["reo"]["connection_events"]
+
+
+class TestCompletionWatermark:
+    """The watermark is the single date that decides what to download.
+
+    It means "every recording at or before this is settled", so it may only
+    advance over a contiguous prefix of settled recordings, and it is
+    monotonic. Those two properties are what let the poller stop asking the
+    local disk whether it still holds the bytes — which is the question
+    archiving deliberately makes unanswerable.
+    """
+
+    async def _write_group(self, storage, name, files):
+        """Create a group dir with state.json holding (basename, end, status).
+
+        Uses Path.mkdir, not os.makedirs — conftest's autouse mock_file_system
+        patches os.makedirs to a no-op, so the directory would never appear and
+        DirectoryState's FileLock would fail to create its lock file.
+        """
+        group_dir = os.path.join(storage, name)
+        Path(group_dir).mkdir(parents=True, exist_ok=True)
+        dir_state = DirectoryState(group_dir)
+        for basename, end_time, status in files:
+            path = os.path.join(group_dir, basename)
+            await dir_state.add_file(
+                path,
+                RecordingFile(
+                    start_time=end_time - timedelta(minutes=30),
+                    end_time=end_time,
+                    file_path=path,
+                    status=status,
+                ),
+            )
+        return group_dir
+
+    @pytest.mark.asyncio
+    async def test_watermark_stops_at_first_unsettled_recording(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Contiguous prefix only: a settled recording AFTER an unsettled one
+        must not drag the watermark past the gap, or the unfinished download
+        in between is never queried again."""
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await self._write_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            [
+                ("a.dav", base, "complete"),
+                ("b.dav", base + timedelta(hours=1), "download_failed"),
+                ("c.dav", base + timedelta(hours=2), "complete"),
+            ],
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == base, (
+            "watermark must stop at the unsettled b.dav, not jump to c.dav"
+        )
+
+    @pytest.mark.asyncio
+    async def test_watermark_does_not_regress_when_games_are_archived(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """The bug that started this work.
+
+        Archiving deletes the whole group directory — videos AND the per-group
+        state.json that recorded "we handled this". If the watermark were
+        re-derived from what remains on local disk it would collapse to None,
+        read as a fresh install, and re-download every archived game. The
+        stored value is a floor.
+        """
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        archived_through = datetime(2026, 7, 12, 10, 35, 15)
+        await poller._update_latest_processed_time(archived_through)
+
+        # Archive ran: every group directory is gone from local storage.
+        assert not [
+            d
+            for d in os.listdir(temp_storage)
+            if os.path.isdir(os.path.join(temp_storage, d))
+        ]
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == archived_through
+
+    @pytest.mark.asyncio
+    async def test_archived_game_is_not_rediscovered(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """End-to-end: a published game still on the camera, archived off local
+        disk, behind the watermark — must not be re-downloaded."""
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        await poller._update_latest_processed_time(datetime(2026, 7, 12, 10, 35, 15))
+
+        mock_camera.get_file_list = AsyncMock(
+            return_value=[
+                {
+                    "path": "/archived_game.dav",
+                    "startTime": "2026-07-12 10:00:00",
+                    "endTime": "2026-07-12 10:35:15",
+                    "size": 5_000_000,
+                }
+            ]
+        )
+        await poller._sync_files_from_camera()
+
+        poller.download_processor.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_first_run_scans_a_year_and_later_runs_start_at_watermark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No watermark => scan the whole card. With one => start there, with
+        no lookback clamp skipping it forward."""
+        mock_camera.get_file_list = AsyncMock(return_value=[])
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._sync_files_from_camera()
+        first_start = mock_camera.get_file_list.call_args.kwargs["start_time"]
+        assert (datetime.now() - first_start).days >= 364
+
+        watermark = datetime.now() - timedelta(days=25)
+        await poller._update_latest_processed_time(watermark)
+        await poller._sync_files_from_camera()
+        resumed = mock_camera.get_file_list.call_args.kwargs["start_time"]
+
+        # Seconds-resolution round-trip through camera_state.json.
+        assert abs((resumed - watermark).total_seconds()) <= 1, (
+            "a 25-day-old watermark must be honoured, not clamped forward"
+        )
+
+    @pytest.mark.asyncio
+    async def test_abandoned_download_stops_blocking_the_watermark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """A recording the camera no longer has would otherwise pin the
+        watermark — and every later game with it — forever."""
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        group = await self._write_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            [
+                ("gone.dav", base, "download_failed"),
+                ("later.dav", base + timedelta(hours=2), "complete"),
+            ],
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+        assert await poller._get_latest_processed_time() is None
+
+        # DownloadProcessor gives up and records the terminal outcome.
+        dir_state = DirectoryState(group)
+        await dir_state.update_file_state(
+            os.path.join(group, "gone.dav"), status="abandoned"
+        )
+
+        await poller._advance_completion_watermark()
+        assert await poller._get_latest_processed_time() == base + timedelta(hours=2)

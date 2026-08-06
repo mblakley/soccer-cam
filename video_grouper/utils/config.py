@@ -111,17 +111,15 @@ class AppConfig(BaseModel):
     timezone: str = "America/New_York"
     github_repo: str = "mblakley/soccer-cam"
     storage_path: str | None = None
-    max_lookback_hours: int = 48
     max_files_per_poll: int = 50
     recording_end_date: str | None = None
-    # Reconciliation pass lookback. The incremental sync only queries a
-    # forward-moving window (max_lookback_hours back from now), so a game
-    # that ages past that window before it was fully captured is never
-    # re-queried and is lost. When the download queue is idle, the poller
-    # runs a full reconcile over this much larger window and re-queues any
-    # camera file that is missing/short/incomplete on disk — regardless of
-    # the high-water mark. 14 days covers a typical multi-week gap between
-    # plugging the camera in.
+    # Reconciliation pass lookback. When the download queue is idle, the
+    # poller re-scans this window and re-queues any camera file that is
+    # missing/short/incomplete on disk, healing downloads that died partway.
+    # Bounded below by the watermark, so it only ever asks that question about
+    # recordings we still owe work on — behind the watermark a game is
+    # *supposed* to be missing locally once it has been archived.
+    # 14 days covers a typical multi-week gap between plugging the camera in.
     reconcile_lookback_days: int = 14
     # Auto-upgrade settings. auto_update=true (Chrome-style) silently installs
     # detected updates once the pipeline is quiescent; =false stops after

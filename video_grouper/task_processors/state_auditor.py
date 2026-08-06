@@ -41,6 +41,9 @@ _DOWNLOAD_DONE_STATUSES = frozenset(
         "pipeline_complete",
         "complete",
         "not_a_game",
+        # Uploaded and moved off local disk. Its files are *supposed* to be
+        # missing locally; re-fetching them would undo the archive.
+        "archived",
     }
 )
 
