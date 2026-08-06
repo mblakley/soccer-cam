@@ -74,6 +74,26 @@ class StorageConfig(BaseModel):
     min_free_gb: float = 2.0
 
 
+class ArchiveConfig(BaseModel):
+    """Move published games off the working drive once they are safely uploaded.
+
+    Off by default: deleting local footage is destructive, so it must be an
+    explicit choice. When enabled, a group is copied to ``path``, verified
+    file-by-file with SHA-256, recorded as ``archived``, and only then
+    removed locally — in that order, so an interrupted run leaves a group
+    that is plainly finished rather than one that looks half-processed and
+    gets picked up for reprocessing.
+    """
+
+    enabled: bool = False
+    # Destination root. Per-game subdirectories are named from match_info.
+    path: str = ""
+    # Set false to copy and verify but keep the local copy — useful for a
+    # first run, when you want to confirm the archive looks right before
+    # anything is deleted.
+    delete_after_verify: bool = True
+
+
 class RecordingConfig(BaseModel):
     min_duration: int = 60
     max_duration: int = 3600
@@ -398,6 +418,7 @@ class SetupConfig(BaseModel):
 class Config(BaseModel):
     cameras: list[CameraConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(alias="STORAGE")
+    archive: ArchiveConfig = Field(alias="ARCHIVE", default_factory=ArchiveConfig)
     recording: RecordingConfig = Field(alias="RECORDING")
     processing: ProcessingConfig = Field(alias="PROCESSING")
     logging: LoggingConfig = Field(alias="LOGGING")

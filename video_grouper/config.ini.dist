@@ -47,6 +47,25 @@ backup_count = 30
 check_interval_seconds = 60
 timezone = America/New_York
 
+[ARCHIVE]
+# Move games off this drive once they are safely uploaded to YouTube.
+# Off by default: it deletes local footage, so it has to be chosen.
+#
+# A game is copied to `path`, verified file-by-file with SHA-256, recorded
+# as archived, and only then removed locally — in that order, so an
+# interrupted run leaves a group that plainly reads as finished rather than
+# one that looks half-processed and gets reprocessed.
+#
+# A game is never archived before the camera poller has finished with its
+# recordings, or the poller would rediscover it as new and download it again.
+enabled = false
+# Destination root. Per-game subdirectories are named from match_info:
+#   <path>/<my_team_name>/<date> - vs <opponent> (home|away)/
+path =
+# Set false to copy and verify but keep the local copy — useful for a first
+# run, to confirm the archive looks right before anything is deleted.
+delete_after_verify = true
+
 [TEAMSNAP]
 # Set to true to enable TeamSnap integration
 enabled = false

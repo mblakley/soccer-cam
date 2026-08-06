@@ -7,6 +7,7 @@ from video_grouper.api_integrations.command_executor import CommandExecutor
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
 from video_grouper.api_integrations.ttt_reporter import TTTReporter
 from video_grouper.task_processors import (
+    ArchiveProcessor,
     CameraPoller,
     ClipDiscoveryProcessor,
     ClipProcessor,
@@ -103,9 +104,17 @@ class VideoGrouperApp:
         # Get poll interval from config
         self.poll_interval = config.app.check_interval_seconds
 
-        # Instantiate shared processors in dependency order
-        self.upload_processor = UploadProcessor(
+        # Instantiate shared processors in dependency order.
+        # Archive runs after upload: a group is only safe to reclaim locally
+        # once its videos are on YouTube. Its own queue keeps the hashing of
+        # tens of GB off the upload path.
+        self.archive_processor = ArchiveProcessor(
             storage_path=self.storage_path, config=self.config
+        )
+        self.upload_processor = UploadProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            archive_processor=self.archive_processor,
         )
         self.video_processor = VideoProcessor(
             storage_path=self.storage_path,
@@ -664,6 +673,11 @@ class VideoGrouperApp:
             poll_interval=self.poll_interval,
             ntfy_processor=self.ntfy_processor,
         )
+        # Recovery net for archiving: the upload task pushes finished groups
+        # onto the archive queue directly, so this only catches groups that
+        # missed that path (a crash between upload and enqueue, or a group
+        # completed by a build that predates archiving).
+        self.state_auditor.archive_processor = self.archive_processor
 
         # Auto-upgrade poller. Lives in the service (always running)
         # so headless installs still update. The quiescence callable
@@ -686,6 +700,7 @@ class VideoGrouperApp:
             [
                 self.video_processor,
                 self.upload_processor,
+                self.archive_processor,
             ]
         )
         if self.ntfy_processor:
