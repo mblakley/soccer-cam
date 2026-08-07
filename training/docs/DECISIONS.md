@@ -1907,9 +1907,20 @@ year, since neither camera backend can list "everything" and both return `[]` if
 Retries that exhaust now mark the file `abandoned` via a new `on_item_permanently_failed` hook, so
 one recording the camera has deleted cannot pin the watermark and every later game behind it.
 
-Archiving becomes a real pipeline step (`ArchiveProcessor`, post-`complete`, opt-in `[ARCHIVE]`)
-rather than an ad-hoc script: copy → verify SHA-256 → record `archived` → delete, in that order,
-with `state.json` deleted last. The ordering is the point. The ad-hoc version deleted first and
+Archiving becomes a real pipeline step (`ArchiveProcessor`, post-`complete`, `[ARCHIVE]`) rather
+than an ad-hoc script: copy → verify SHA-256 → record `archived` → delete, in that order, with
+`state.json` deleted last.
+
+The setting is a **disposition**, `after_upload = keep | copy | move | discard`, not a
+copy-to-a-second-location flag with a delete toggle. Mark's correction: "archiving to a separate
+location should be a configurable option, not a requirement for everyone." The first design forced a
+two-location model, so a single-drive install — the one most likely to fill up — could not use the
+feature at all. The two real questions are independent: keep a second copy (`path`), and reclaim the
+working drive. `discard` answers the single-drive case (YouTube is the archive) and refuses unless
+the group carries a recorded YouTube video id, since those files are then the only copy. `copy`/`move`
+without a `path` is a config-load hard failure rather than a silent no-op. The earlier name
+`delete_after_verify` was rejected for encoding an invariant as an option — we never delete without
+verifying, so the name implied a `delete_before_verify` mode that must not exist. The ordering is the point. The ad-hoc version deleted first and
 recorded nothing; interrupted by a dropped remote session it left a group whose `state.json` still
 said `combined`, which the pipeline read as mid-processing — it blanked `match_info.ini` to a stub
 and would have re-rendered and re-uploaded an already-published game. The step also **hard-refuses**

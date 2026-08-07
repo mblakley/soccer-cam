@@ -78,13 +78,17 @@ class ArchiveProcessor(QueueProcessor):
             return
 
         archive_cfg = self.config.archive
-        if not archive_cfg.enabled:
-            logger.debug("ARCHIVE: disabled; skipping %s", item.group_dir)
+        if archive_cfg.after_upload == "keep":
+            logger.debug(
+                "ARCHIVE: [ARCHIVE] after_upload = keep; leaving %s alone.",
+                item.group_dir,
+            )
             return
 
         ok = await item.execute(
             archive_root=archive_cfg.path,
-            delete_after_verify=archive_cfg.delete_after_verify,
+            make_second_copy=archive_cfg.makes_second_copy,
+            reclaim_local_space=archive_cfg.reclaims_local_space,
             watermark=self._read_watermark(),
         )
         if not ok:

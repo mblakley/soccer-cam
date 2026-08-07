@@ -5,7 +5,13 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, RootModel, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    RootModel,
+    field_validator,
+    model_validator,
+)
 
 from video_grouper.pipeline.config import PipelineConfig
 
@@ -75,23 +81,51 @@ class StorageConfig(BaseModel):
 
 
 class ArchiveConfig(BaseModel):
-    """Move published games off the working drive once they are safely uploaded.
+    """What happens to a game's local files once it is safely on YouTube.
 
-    Off by default: deleting local footage is destructive, so it must be an
-    explicit choice. When enabled, a group is copied to ``path``, verified
-    file-by-file with SHA-256, recorded as ``archived``, and only then
-    removed locally — in that order, so an interrupted run leaves a group
-    that is plainly finished rather than one that looks half-processed and
-    gets picked up for reprocessing.
+    Two independent questions, not one: keep a second copy somewhere, and
+    reclaim the working drive. Copying to a second location is one answer,
+    not the shape of the feature — plenty of installs have a single drive
+    and no archive volume, and those are exactly the ones that fill up.
+
+        after_upload   second copy at `path`?   local files reclaimed?
+        ------------   ----------------------   ----------------------
+        keep           no                       no   (default)
+        copy           yes                      no
+        move           yes                      yes
+        discard        no                       yes
+
+    Verification is never a choice. Nothing is removed until the archive
+    copy's SHA-256 matches file-by-file (``copy``/``move``), or until the
+    group carries a recorded YouTube video id (``discard``). ``keep`` is the
+    default because deleting footage must be asked for, never assumed.
     """
 
-    enabled: bool = False
-    # Destination root. Per-game subdirectories are named from match_info.
+    after_upload: Literal["keep", "copy", "move", "discard"] = "keep"
+    # Destination root for `copy`/`move`. Per-game subdirectories are named
+    # from match_info. Unused by `keep` and `discard`.
     path: str = ""
-    # Set false to copy and verify but keep the local copy — useful for a
-    # first run, when you want to confirm the archive looks right before
-    # anything is deleted.
-    delete_after_verify: bool = True
+
+    @model_validator(mode="after")
+    def _path_required_for_second_copy(self) -> ArchiveConfig:
+        # Hard-fail rather than silently degrading to a no-op: an operator who
+        # asked for a second copy and got none would find out only when the
+        # working drive was already gone.
+        if self.after_upload in ("copy", "move") and not self.path.strip():
+            raise ValueError(
+                f"[ARCHIVE] after_upload = {self.after_upload} needs a `path` "
+                "to copy games to. Set one, or use `discard` to reclaim local "
+                "space without a second copy, or `keep` to do nothing."
+            )
+        return self
+
+    @property
+    def makes_second_copy(self) -> bool:
+        return self.after_upload in ("copy", "move")
+
+    @property
+    def reclaims_local_space(self) -> bool:
+        return self.after_upload in ("move", "discard")
 
 
 class RecordingConfig(BaseModel):

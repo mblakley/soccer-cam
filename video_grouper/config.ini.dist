@@ -48,23 +48,29 @@ check_interval_seconds = 60
 timezone = America/New_York
 
 [ARCHIVE]
-# Move games off this drive once they are safely uploaded to YouTube.
-# Off by default: it deletes local footage, so it has to be chosen.
+# What happens to a game's local files once it is safely on YouTube.
 #
-# A game is copied to `path`, verified file-by-file with SHA-256, recorded
-# as archived, and only then removed locally — in that order, so an
-# interrupted run leaves a group that plainly reads as finished rather than
-# one that looks half-processed and gets reprocessed.
+#   keep     leave them alone (default)
+#   copy     copy to `path`, keep the local files too
+#   move     copy to `path`, then reclaim the local files
+#   discard  reclaim the local files; YouTube holds the only copy
 #
-# A game is never archived before the camera poller has finished with its
+# A second location is one answer, not a requirement — a single-drive
+# install uses `discard` and still gets its space back.
+#
+# Verification is never optional. `copy`/`move` compare SHA-256 file by file
+# before anything is removed, and `discard` refuses unless the group has a
+# recorded YouTube video id. The group is marked archived BEFORE any delete,
+# so an interrupted run leaves a game that plainly reads as finished instead
+# of one that looks half-processed and gets reprocessed.
+#
+# Nothing is reclaimed before the camera poller has finished with the game's
 # recordings, or the poller would rediscover it as new and download it again.
-enabled = false
-# Destination root. Per-game subdirectories are named from match_info:
+after_upload = keep
+# Destination root for `copy`/`move`; unused by `keep`/`discard`. Per-game
+# subdirectories are named from match_info:
 #   <path>/<my_team_name>/<date> - vs <opponent> (home|away)/
 path =
-# Set false to copy and verify but keep the local copy — useful for a first
-# run, to confirm the archive looks right before anything is deleted.
-delete_after_verify = true
 
 [TEAMSNAP]
 # Set to true to enable TeamSnap integration
