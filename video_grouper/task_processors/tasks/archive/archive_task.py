@@ -76,13 +76,27 @@ class ArchiveTask(BaseTask):
     def deserialize(cls, data: dict[str, Any]) -> "ArchiveTask":
         return cls(group_dir=str(data["group_dir"]))
 
-    def destination(self, archive_root: str) -> str:
-        """Where this group's archive copy belongs.
+    def team_name(self) -> str:
+        """This group's ``my_team_name``, used to pick its archive root."""
+        match_info = MatchInfo.from_file(os.path.join(self.group_dir, "match_info.ini"))
+        return match_info.my_team_name if match_info else ""
 
-        Named from ``match_info.ini`` rather than from the group directory,
-        which is only a camera timestamp. Falls back to the directory name
-        when match info is missing, so a game is never archived to a path
-        built from empty strings.
+    def destination(self, team_root: str) -> str:
+        """Where this group's archive copy belongs, inside its team's root.
+
+        ``team_root`` is already team-specific (see ``[ARCHIVE.PER_TEAM]``) —
+        no team component is appended here. The root name cannot be derived
+        from the team name anyway: a team recorded as "Guzzetta" archives to
+        ``Heat_2012s``, and one account can hold several age groups that must
+        not be mixed.
+
+        The game folder is named from ``match_info.ini`` rather than the group
+        directory, which is only a camera timestamp:
+
+            <team_root>/2026.07.12 - vs Niagara Falls Soccer Club (away)
+
+        Falls back to the raw group name when match info is unusable, so a
+        game is never archived to a path built from empty strings.
         """
         group_name = os.path.basename(self.group_dir.rstrip("\\/"))
         match_info = MatchInfo.from_file(os.path.join(self.group_dir, "match_info.ini"))
@@ -92,7 +106,7 @@ class ArchiveTask(BaseTask):
                 "raw group name.",
                 group_name,
             )
-            return os.path.join(archive_root, group_name)
+            return os.path.join(team_root, group_name)
 
         date_part = group_name[:10]
         home_away = "home" if match_info.location.strip().lower() == "home" else "away"
@@ -100,8 +114,7 @@ class ArchiveTask(BaseTask):
             f"{date_part} - vs "
             f"{_safe_component(match_info.opponent_team_name)} ({home_away})"
         )
-        team = _safe_component(match_info.my_team_name)
-        return os.path.join(archive_root, team, name)
+        return os.path.join(team_root, name)
 
     async def execute(
         self,
