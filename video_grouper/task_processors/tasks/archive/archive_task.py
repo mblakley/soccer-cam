@@ -106,12 +106,18 @@ class ArchiveTask(BaseTask):
     async def execute(
         self,
         archive_root: str = "",
-        delete_after_verify: bool = True,
+        make_second_copy: bool = True,
+        reclaim_local_space: bool = True,
         watermark: datetime | None = None,
     ) -> bool:
-        """Run the archive. Returns True when the group is fully archived.
+        """Run the archive. Returns True when the group has been dealt with.
 
-        ``watermark`` is the camera poller's high-water mark. Archiving a
+        The two flags are independent, matching ``[ARCHIVE] after_upload``:
+        keep a second copy at ``archive_root``, and/or reclaim the local
+        files. An install with a single drive sets no ``archive_root`` at all
+        and still reclaims space -- YouTube is its archive.
+
+        ``watermark`` is the camera poller's high-water mark. Reclaiming a
         group the watermark has not yet passed is unsafe: the poller's query
         window still covers those recordings, and every "do we have this?"
         test it can run -- ``is_file_in_state`` against the group's
@@ -120,7 +126,7 @@ class ArchiveTask(BaseTask):
         again. So this is a hard refusal, not a warning: the task fails, is
         retried later, and succeeds once the watermark catches up.
         """
-        if not archive_root:
+        if make_second_copy and not archive_root:
             logger.error("ARCHIVE: no archive path configured; refusing to run.")
             return False
 
@@ -132,31 +138,60 @@ class ArchiveTask(BaseTask):
             )
             return True
 
-        newest = max(
-            (
-                f.end_time
-                for f in dir_state.files.values()
-                if isinstance(getattr(f, "end_time", None), datetime)
-            ),
-            default=None,
-        )
-        if newest is not None and (watermark is None or watermark < newest):
-            logger.error(
-                "ARCHIVE: refusing to archive %s -- the camera watermark (%s) "
-                "has not passed its newest recording (%s). Archiving now would "
-                "let the poller rediscover this game as new and re-download it. "
-                "Will retry once the watermark advances.",
-                os.path.basename(self.group_dir),
-                watermark,
-                newest,
+        if reclaim_local_space:
+            newest = max(
+                (
+                    f.end_time
+                    for f in dir_state.files.values()
+                    if isinstance(getattr(f, "end_time", None), datetime)
+                ),
+                default=None,
             )
-            return False
+            if newest is not None and (watermark is None or watermark < newest):
+                logger.error(
+                    "ARCHIVE: refusing to reclaim %s -- the camera watermark "
+                    "(%s) has not passed its newest recording (%s). Deleting "
+                    "now would let the poller rediscover this game as new and "
+                    "re-download it. Will retry once the watermark advances.",
+                    os.path.basename(self.group_dir),
+                    watermark,
+                    newest,
+                )
+                return False
 
-        dest = self.destination(archive_root)
-        os.makedirs(dest, exist_ok=True)
+            if not make_second_copy:
+                # `discard`: the local files are the only copy we hold, so
+                # YouTube has to actually have the game before we drop them.
+                # The group reaching `complete` is not proof on its own --
+                # recorded video ids are.
+                uploaded = dir_state.get_uploaded_videos()
+                if not uploaded:
+                    logger.error(
+                        "ARCHIVE: refusing to discard %s -- no uploaded video "
+                        "id recorded for it, so YouTube is not known to hold a "
+                        "copy and these are the only files that exist.",
+                        os.path.basename(self.group_dir),
+                    )
+                    return False
+                logger.info(
+                    "ARCHIVE: %s is on YouTube (%s); reclaiming local files "
+                    "without a second copy.",
+                    os.path.basename(self.group_dir),
+                    ", ".join(f"{k}={v}" for k, v in sorted(uploaded.items())),
+                )
+
+        dest = self.destination(archive_root) if make_second_copy else ""
 
         # ---- copy + verify ------------------------------------------------
+        # `verified` doubles as the delete list, so for `discard` (no second
+        # copy) it is simply every file in the group.
         verified: list[str] = []
+        if not make_second_copy:
+            for root, _dirs, files in os.walk(self.group_dir):
+                verified.extend(os.path.join(root, name) for name in files)
+            return await self._finalize(dir_state, verified, reclaim_local_space, dest)
+
+        os.makedirs(dest, exist_ok=True)
         for root, _dirs, files in os.walk(self.group_dir):
             for name in files:
                 src = os.path.join(root, name)
@@ -196,20 +231,32 @@ class ArchiveTask(BaseTask):
             os.path.basename(self.group_dir),
             dest,
         )
+        return await self._finalize(dir_state, verified, reclaim_local_space, dest)
 
-        # ---- record BEFORE deleting ---------------------------------------
-        # See the module docstring: this is what makes an interrupted delete
-        # recoverable instead of a game that reprocesses itself.
+    async def _finalize(
+        self,
+        dir_state: DirectoryState,
+        verified: list[str],
+        reclaim_local_space: bool,
+        dest: str,
+    ) -> bool:
+        """Record the group as archived, then optionally reclaim its files.
+
+        Shared by every disposition so the ordering can only be written once.
+        See the module docstring: recording BEFORE deleting is what makes an
+        interrupted run recoverable instead of a game that reprocesses itself.
+        """
         await dir_state.update_group_status("archived")
 
-        if not delete_after_verify:
+        if not reclaim_local_space:
             logger.info(
-                "ARCHIVE: delete_after_verify is off; keeping the local copy of %s.",
+                "ARCHIVE: %s copied to %s; local files kept.",
                 os.path.basename(self.group_dir),
+                dest,
             )
             return True
 
-        # ---- delete, by explicit path, only what verified -----------------
+        # Delete by explicit path, only files that were accounted for.
         state_file = dir_state.state_file_path
         for path in verified:
             if os.path.abspath(path) == os.path.abspath(state_file):
@@ -233,8 +280,8 @@ class ArchiveTask(BaseTask):
             return False
 
         logger.info(
-            "ARCHIVE: %s archived to %s and reclaimed locally.",
+            "ARCHIVE: %s reclaimed locally%s.",
             os.path.basename(self.group_dir),
-            dest,
+            f" (archived to {dest})" if dest else " (YouTube holds the copy)",
         )
         return True

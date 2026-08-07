@@ -186,14 +186,16 @@ class TestArchiveOrdering:
         assert os.path.getsize(archived) == 4096
 
     @pytest.mark.asyncio
-    async def test_delete_after_verify_off_keeps_the_local_copy(
+    async def test_copy_disposition_keeps_the_local_copy(
         self, temp_storage, archive_root
     ):
+        """`copy`: a second copy exists, the working drive is untouched."""
         group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
 
         ok = await ArchiveTask(group_dir=group_dir).execute(
             archive_root=archive_root,
-            delete_after_verify=False,
+            make_second_copy=True,
+            reclaim_local_space=False,
             watermark=datetime(2026, 7, 12, 10, 35, 15),
         )
 
@@ -279,7 +281,7 @@ class TestWatermarkGuard:
 class TestArchiveIsOptIn:
     @pytest.mark.asyncio
     async def test_disabled_by_default_does_nothing(self, temp_storage, archive_config):
-        assert archive_config.archive.enabled is False
+        assert archive_config.archive.after_upload == "keep"
         processor = ArchiveProcessor(temp_storage, archive_config)
         task = Mock(spec=ArchiveTask)
         task.group_dir = os.path.join(temp_storage, "grp")
@@ -295,8 +297,101 @@ class TestArchiveIsOptIn:
         group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
 
         ok = await ArchiveTask(group_dir=group_dir).execute(
-            archive_root="", watermark=datetime(2026, 7, 12, 10, 35, 15)
+            archive_root="",
+            make_second_copy=True,
+            watermark=datetime(2026, 7, 12, 10, 35, 15),
         )
 
         assert ok is False
         assert os.path.exists(os.path.join(group_dir, "game.mp4"))
+
+
+class TestSingleDriveDiscard:
+    """`discard`: reclaim local space with no second location.
+
+    The case the earlier design ignored. An install with one drive has
+    nowhere to copy to, and is exactly the one that fills up — YouTube is
+    its archive.
+    """
+
+    @pytest.mark.asyncio
+    async def test_discard_reclaims_space_without_an_archive_path(self, temp_storage):
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+        dir_state = DirectoryState(group_dir)
+        dir_state.record_uploaded_video("processed", "8zQkiP3vHYk")
+
+        ok = await ArchiveTask(group_dir=group_dir).execute(
+            archive_root="",
+            make_second_copy=False,
+            reclaim_local_space=True,
+            watermark=datetime(2026, 7, 12, 10, 35, 15),
+        )
+
+        assert ok
+        assert not os.path.exists(group_dir)
+
+    @pytest.mark.asyncio
+    async def test_discard_refuses_without_a_recorded_youtube_id(self, temp_storage):
+        """These are the only files that exist. Reaching `complete` is not
+        proof YouTube has the game — a recorded video id is."""
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+
+        ok = await ArchiveTask(group_dir=group_dir).execute(
+            archive_root="",
+            make_second_copy=False,
+            reclaim_local_space=True,
+            watermark=datetime(2026, 7, 12, 10, 35, 15),
+        )
+
+        assert ok is False
+        assert os.path.exists(os.path.join(group_dir, "game.mp4"))
+
+    @pytest.mark.asyncio
+    async def test_discard_still_respects_the_watermark(self, temp_storage):
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+        dir_state = DirectoryState(group_dir)
+        dir_state.record_uploaded_video("processed", "8zQkiP3vHYk")
+
+        ok = await ArchiveTask(group_dir=group_dir).execute(
+            archive_root="",
+            make_second_copy=False,
+            reclaim_local_space=True,
+            watermark=datetime(2026, 7, 12, 9, 0, 0),
+        )
+
+        assert ok is False
+        assert os.path.exists(os.path.join(group_dir, "game.mp4"))
+
+
+class TestDispositionConfig:
+    def test_keep_is_the_default(self):
+        cfg = ArchiveConfig()
+        assert cfg.after_upload == "keep"
+        assert not cfg.makes_second_copy
+        assert not cfg.reclaims_local_space
+
+    @pytest.mark.parametrize(
+        "mode,second_copy,reclaims",
+        [
+            ("keep", False, False),
+            ("copy", True, False),
+            ("move", True, True),
+            ("discard", False, True),
+        ],
+    )
+    def test_disposition_matrix(self, mode, second_copy, reclaims):
+        cfg = ArchiveConfig(after_upload=mode, path="F:/archive")
+        assert cfg.makes_second_copy is second_copy
+        assert cfg.reclaims_local_space is reclaims
+
+    @pytest.mark.parametrize("mode", ["copy", "move"])
+    def test_second_copy_without_a_path_is_refused_at_config_load(self, mode):
+        """Hard-fail rather than degrade to a no-op: an operator who asked for
+        a second copy and silently got none finds out only once the working
+        drive is already gone."""
+        with pytest.raises(ValueError, match="needs a `path`"):
+            ArchiveConfig(after_upload=mode)
+
+    @pytest.mark.parametrize("mode", ["keep", "discard"])
+    def test_pathless_dispositions_are_valid(self, mode):
+        assert ArchiveConfig(after_upload=mode).path == ""
