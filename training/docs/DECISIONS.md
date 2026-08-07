@@ -1918,7 +1918,15 @@ two-location model, so a single-drive install — the one most likely to fill up
 feature at all. The two real questions are independent: keep a second copy (`path`), and reclaim the
 working drive. `discard` answers the single-drive case (YouTube is the archive) and refuses unless
 the group carries a recorded YouTube video id, since those files are then the only copy. `copy`/`move`
-without a `path` is a config-load hard failure rather than a silent no-op. The earlier name
+with nowhere to put games is a config-load hard failure rather than a silent no-op.
+
+Archive roots are **per-team** and configured, never derived: `[ARCHIVE.PER_TEAM]` maps
+`my_team_name` to a root. Verified against the live layout 2026-08-07 — `F:\Heat_2012s`,
+`F:\Heat_2013s`, `F:\Flash_2013s`, holding `2026.07.12 - vs Niagara Falls Soccer Club (away)`.
+The root is not derivable from the team name (match_info says "Guzzetta", the root is `Heat_2012s`),
+and one account carries two Heat age groups that must not be mixed, so a game whose team has no root
+(and no `path` fallback) is refused rather than filed under another team's archive. Lookup is
+case-insensitive because configparser lowercases option keys. The earlier name
 `delete_after_verify` was rejected for encoding an invariant as an option — we never delete without
 verifying, so the name implied a `delete_before_verify` mode that must not exist. The ordering is the point. The ad-hoc version deleted first and
 recorded nothing; interrupted by a dropped remote session it left a group whose `state.json` still

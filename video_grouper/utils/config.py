@@ -99,25 +99,58 @@ class ArchiveConfig(BaseModel):
     copy's SHA-256 matches file-by-file (``copy``/``move``), or until the
     group carries a recorded YouTube video id (``discard``). ``keep`` is the
     default because deleting footage must be asked for, never assumed.
+
+    Archives are per-team, and a team's root is NOT derivable from its name.
+    A team recorded in match_info as "Guzzetta" archives to ``Heat_2012s``,
+    and one account can carry several age groups (``Heat_2012s`` and
+    ``Heat_2013s``) that must never be mixed. So the mapping is supplied,
+    not guessed::
+
+        [ARCHIVE.PER_TEAM]
+        Guzzetta = F:\\Heat_2012s
+        Flash = F:\\Flash_2013s
+
+    ``path`` is the fallback for teams with no entry, and is enough on its
+    own for a single-team install. Per-game subdirectories are named from
+    match_info: ``<root>/<date> - vs <opponent> (home|away)``.
     """
 
     after_upload: Literal["keep", "copy", "move", "discard"] = "keep"
-    # Destination root for `copy`/`move`. Per-game subdirectories are named
-    # from match_info. Unused by `keep` and `discard`.
+    # Fallback destination root for `copy`/`move`, used for teams with no
+    # PER_TEAM entry. Unused by `keep` and `discard`.
     path: str = ""
+    # my_team_name -> archive root. Wins over `path`.
+    per_team: dict[str, str] = Field(default_factory=dict, alias="PER_TEAM")
+
+    model_config = {"populate_by_name": True}
 
     @model_validator(mode="after")
-    def _path_required_for_second_copy(self) -> ArchiveConfig:
+    def _second_copy_needs_somewhere_to_go(self) -> ArchiveConfig:
         # Hard-fail rather than silently degrading to a no-op: an operator who
         # asked for a second copy and got none would find out only when the
         # working drive was already gone.
-        if self.after_upload in ("copy", "move") and not self.path.strip():
+        if self.after_upload in ("copy", "move") and not (
+            self.path.strip() or self.per_team
+        ):
             raise ValueError(
-                f"[ARCHIVE] after_upload = {self.after_upload} needs a `path` "
-                "to copy games to. Set one, or use `discard` to reclaim local "
-                "space without a second copy, or `keep` to do nothing."
+                f"[ARCHIVE] after_upload = {self.after_upload} needs somewhere "
+                "to put games: set `path`, or map teams to roots under "
+                "[ARCHIVE.PER_TEAM]. Use `discard` to reclaim local space "
+                "without a second copy, or `keep` to do nothing."
             )
         return self
+
+    def root_for_team(self, team_name: str) -> str:
+        """Archive root for *team_name*, or "" when it has nowhere to go.
+
+        Matched case-insensitively and ignoring surrounding whitespace:
+        configparser lowercases option keys, and match_info is hand-edited.
+        """
+        wanted = (team_name or "").strip().casefold()
+        for name, root in self.per_team.items():
+            if name.strip().casefold() == wanted:
+                return root.strip()
+        return self.path.strip()
 
     @property
     def makes_second_copy(self) -> bool:
@@ -517,6 +550,14 @@ def load_config(config_path: Path) -> Config:
     if "YOUTUBE.PLAYLIST_MAP" in config_dict:
         config_dict.setdefault("YOUTUBE", {})["playlist_map"] = (
             YouTubePlaylistMapConfig(config_dict.pop("YOUTUBE.PLAYLIST_MAP"))
+        )
+
+    # `[ARCHIVE.PER_TEAM]` -> dict of my_team_name -> archive root. Archives
+    # are per-team and the root is not derivable from the name (match_info
+    # "Guzzetta" -> Heat_2012s), so the mapping has to come from config.
+    if "ARCHIVE.PER_TEAM" in config_dict:
+        config_dict.setdefault("ARCHIVE", {})["PER_TEAM"] = config_dict.pop(
+            "ARCHIVE.PER_TEAM"
         )
 
     # Handle BALL_TRACKING sub-sections (provider configs + per-team overrides).

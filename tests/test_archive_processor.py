@@ -35,6 +35,14 @@ from video_grouper.utils.config import (
 )
 from video_grouper.utils.paths import get_camera_state_path
 
+# The live archive roots, as they exist on the server (verified 2026-08-07).
+# Raw strings: these are literal Windows paths, and "F:\Heat_2012s" would be
+# read as an escape sequence.
+HEAT_2012 = r"F:\Heat_2012s"
+HEAT_2013 = r"F:\Heat_2013s"
+FLASH_2013 = r"F:\Flash_2013s"
+FALLBACK = r"F:\archive"
+
 
 @pytest.fixture(autouse=True)
 def real_filesystem(mock_file_system):
@@ -180,7 +188,7 @@ class TestArchiveOrdering:
         assert ok
         assert not os.path.exists(group_dir)
         archived = os.path.join(
-            archive_root, "Heat", "2026.07.12 - vs Kenmore (away)", "game.mp4"
+            archive_root, "2026.07.12 - vs Kenmore (away)", "game.mp4"
         )
         assert os.path.exists(archived)
         assert os.path.getsize(archived) == 4096
@@ -380,7 +388,7 @@ class TestDispositionConfig:
         ],
     )
     def test_disposition_matrix(self, mode, second_copy, reclaims):
-        cfg = ArchiveConfig(after_upload=mode, path="F:/archive")
+        cfg = ArchiveConfig(after_upload=mode, path="F:/archive")  # noqa: E501
         assert cfg.makes_second_copy is second_copy
         assert cfg.reclaims_local_space is reclaims
 
@@ -389,9 +397,84 @@ class TestDispositionConfig:
         """Hard-fail rather than degrade to a no-op: an operator who asked for
         a second copy and silently got none finds out only once the working
         drive is already gone."""
-        with pytest.raises(ValueError, match="needs a `path`"):
+        with pytest.raises(ValueError, match="needs somewhere to put games"):
             ArchiveConfig(after_upload=mode)
+
+    @pytest.mark.parametrize("mode", ["copy", "move"])
+    def test_per_team_map_alone_satisfies_the_requirement(self, mode):
+        """A per-team map is somewhere to put games; no `path` needed."""
+        cfg = ArchiveConfig(after_upload=mode, PER_TEAM={"Guzzetta": HEAT_2012})
+        assert cfg.root_for_team("Guzzetta") == HEAT_2012
 
     @pytest.mark.parametrize("mode", ["keep", "discard"])
     def test_pathless_dispositions_are_valid(self, mode):
         assert ArchiveConfig(after_upload=mode).path == ""
+
+
+class TestPerTeamArchiveRoots:
+    """Archives are per-team, and the root is not derivable from the name.
+
+    Verified against the live layout on 2026-08-07: Heat_2012s, Heat_2013s
+    and Flash_2013s under F:, holding folders named
+    "2026.07.12 - vs Niagara Falls Soccer Club (away)". The team recorded in
+    match_info is "Guzzetta" while its root is Heat_2012s, and the two Heat
+    age groups must never be mixed — so the mapping is configured, not
+    inferred.
+    """
+
+    def test_team_maps_to_its_own_root(self):
+        cfg = ArchiveConfig(
+            after_upload="move",
+            PER_TEAM={
+                "Guzzetta": HEAT_2012,
+                "Heat 2013": HEAT_2013,
+                "Flash": FLASH_2013,
+            },
+        )
+        assert cfg.root_for_team("Guzzetta") == HEAT_2012
+        assert cfg.root_for_team("Heat 2013") == HEAT_2013
+        assert cfg.root_for_team("Flash") == FLASH_2013
+
+    def test_lookup_survives_configparser_lowercasing_and_stray_whitespace(self):
+        """configparser lowercases option keys, and match_info is hand-edited."""
+        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"guzzetta": HEAT_2012})
+        assert cfg.root_for_team("  Guzzetta  ") == HEAT_2012
+
+    def test_unmapped_team_falls_back_to_path(self):
+        cfg = ArchiveConfig(
+            after_upload="move", path=FALLBACK, PER_TEAM={"Flash": FLASH_2013}
+        )
+        assert cfg.root_for_team("Someone Else") == FALLBACK
+
+    def test_unmapped_team_with_no_fallback_has_nowhere_to_go(self):
+        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"Flash": FLASH_2013})
+        assert cfg.root_for_team("Guzzetta") == ""
+
+    @pytest.mark.asyncio
+    async def test_game_lands_directly_in_its_team_root(
+        self, temp_storage, archive_root
+    ):
+        """Matches the existing layout: <root>/<date> - vs <opponent> (away),
+        with NO team component appended — the root is already team-specific."""
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+
+        assert ArchiveTask(group_dir=group_dir).destination(
+            archive_root
+        ) == os.path.join(archive_root, "2026.07.12 - vs Kenmore (away)")
+
+    @pytest.mark.asyncio
+    async def test_processor_refuses_a_team_with_no_root(
+        self, temp_storage, archive_config
+    ):
+        """Filing a game under another team's root is not something a later
+        pass can untangle, so refuse instead of guessing."""
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+        archive_config.archive.after_upload = "move"
+        archive_config.archive.path = ""
+        archive_config.archive.per_team = {"Flash": FLASH_2013}
+
+        processor = ArchiveProcessor(temp_storage, archive_config)
+        with pytest.raises(RuntimeError, match="no archive root for team 'Heat'"):
+            await processor.process_item(ArchiveTask(group_dir=group_dir))
+
+        assert os.path.exists(os.path.join(group_dir, "game.mp4"))
