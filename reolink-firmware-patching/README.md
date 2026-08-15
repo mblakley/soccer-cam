@@ -69,6 +69,8 @@ reolink-firmware-patching/
 │   ├── build_soccercam_v2.sh        # + free-space reserve + netstate v2 (stub cleanup)
 │   ├── build_soccercam_comprehensive.sh  # + power-cut recovery (video+audio)
 │   └── BUILD_LOG.md                 # artifact tracker (sha256 / CRC / contents)
+├── flash/                           # flash a built pak without the web UI
+│   └── flash_pak.py                 # chunked HTTP upload + local CRC pre-check
 ├── recover/                         # power-cut recovery (compiled into the comprehensive build)
 │   ├── recover_mp4.c                # static aarch64 reindexer (rebuilds a moov-less mdat)
 │   └── helix/                       # AAC audio recovery (Helix decoder, fetched locally)
@@ -143,7 +145,11 @@ sudo bash builds/build_bitrate_cap.sh \
     /path/to/patched_out.pak \
     20480
 
-# 3. Flash via the camera's web UI:
+# 3. Flash it -- either scripted (verifies the CRC before uploading, then
+#    waits for the reboot):
+python flash/flash_pak.py /path/to/patched_out.pak
+
+#    ...or via the camera's web UI:
 #    Settings -> Maintenance -> Local Upgrade -> select patched_out.pak
 #    Wait for reboot (1-3 min).
 

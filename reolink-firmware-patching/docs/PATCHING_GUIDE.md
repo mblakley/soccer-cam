@@ -236,6 +236,22 @@ bit-for-bit). It must end in `PASS`.
 
 ## Step 5 — Flash the patched .pak
 
+### Option A — scripted (recommended when iterating)
+
+```bash
+python flash/flash_pak.py /path/to/output_patched.pak
+```
+
+This verifies the pak's Reolink CRC **locally before uploading anything**, then
+performs the same chunked upload the web UI does and waits for the camera to
+come back. It always passes `restoreCfg: 0`, i.e. it never resets your config.
+
+Note you cannot simply POST the whole pak: the camera's nginx sets
+`client_max_body_size 512k`, so a single ~25 MB request returns **HTTP 413**.
+The script slices the upload into the same ~38 KB parts the web UI uses.
+
+### Option B — web UI
+
 1. Open the camera's web UI in your browser: `http://<CAMERA_IP>`.
 2. Log in as admin.
 3. Navigate to: **Settings → Maintenance → Local Upgrade**.
