@@ -951,7 +951,8 @@ output rate.
 | Path | r_frame_rate | avg_frame_rate |
 |---|---|---|
 | Stock / bitrate+http patched | 20/1 | 19.92 fps |
-| `movz w1,#0x14` patched to 30 (build 4908) | **50/3** | **16.67 fps** |
+| `movz w1,#0x14` patched to 30 (build 4908) | 50/3 | **16.67 fps** (worse) |
+| `movz w1,#0x14` patched to **21** (build 4909) | **21/1** | 21 fps, 0 drops |
 
 Asking for 30 makes throughput **worse** than asking for 20. This is *not*
 sensor limiting — see section 15, which supersedes the earlier reading of this
@@ -1252,6 +1253,81 @@ but not for fps. Reducing rows read out of the sensor attacks the actual
 constraint.
 
 Neither has been tested.
+
+### The sensor timing model (and how to get 21 fps)
+
+Parsed from `os08c10_mode_1` in `nvt_sen_os08c10.ko` (`.data+0xdd0`, 656 entries
+of `{u32 addr, u32 len, u32 val, u32 pad}`):
+
+| register | value | meaning |
+|---|---|---|
+| `0x3800..0x3807` | x 0..3871, y 0..2191 | readout window (3872 x 2192) |
+| `0x3808/0x3809` | 3840 | output width |
+| `0x380a/0x380b` | 2162 | output height |
+| `0x380c/0x380d` | **2592** | HTS |
+| `0x380e/0x380f` | **2314** | VTS |
+| `0x3814/0x3815` | 0x11 / 0x11 | no binning, no skipping |
+
+```
+fps = PCLK / (HTS * VTS)
+```
+
+The measured 20.00 fps implies **PCLK = 20 x 2592 x 2314 = 119.96 MHz**, i.e.
+exactly 120 MHz. `sen_chg_fps_os08c10` derives VTS from the requested rate, so
+the requested fps is what ultimately sets VTS.
+
+VTS cannot fall below the readout height (~2170 for 2162 rows), so at full
+height the hard ceiling is:
+
+```
+120e6 / (2592 * 2170) = 21.33 fps
+```
+
+**This is why 30 was never reachable — it is arithmetically impossible at full
+height, not a software clamp.** 21 fps *is* reachable, and works end to end:
+patch `device+0x8bb1c` to `movz w1, #21`, giving `VIDEOCAP` a steady 21/s with
+zero drops and `VIDEOENC IN` at 21/21. Verified with a real recording
+(7680x2160 HEVC, `r_frame_rate = 21/1`).
+
+Caveat: AE will hold the delivered rate lower whenever exposure exceeds the
+frame period — a 1/20 s exposure pins output at 20 fps regardless. Full daylight
+is needed to actually see 21.
+
+### Going past 21 requires fewer rows — and the ISP blocks it
+
+Since `HTS` and `PCLK` are fixed, the only lever is VTS, and VTS is floored by
+the readout height. Windowing the sensor therefore raises the ceiling:
+
+| window rows | VTS floor | max fps |
+|---|---|---|
+| 2160 | 2168 | **21.3** |
+| 1440 | 1448 | 32.0 |
+| 1080 | 1088 | 42.5 |
+| 720 | 728 | 63.6 |
+
+Patching both `nvt_sen_os08c10.ko` and `nvt_sen_os08c10_slave.ko` to a
+3840x720 window (`0x3802/0x3803` = 720, `0x3806/0x3807` = 1471,
+`0x380a/0x380b` = 722, `0x380e/0x380f` = 772) **does reconfigure the sensors** —
+`VIDEOCAP` produced 25 fps. But no usable video comes out, because the ISP is
+still set up for the old geometry:
+
+```
+ERR: ctl_ipp_int_ime_path_adj() p0 scl_size (3840, 2160) != in_size (3840, 720)
+ERR: ctl_ipp_process_raw() vdoprc0 ime adj fail
+```
+
+Every frame is rejected at the IME path adjust for both `vdoprc0` and
+`vdoprc1`; `Snap` times out because no frame is ever produced. The sensor mode's
+advertised dimensions in `mode_basic_param` (`.data+0x30` = 2162,
+`.data+0x40` = 2160) were patched too and were **not** enough — `device`
+configures the videoproc scaler from its own resolution table, not from what the
+sensor driver advertises.
+
+So a windowed high-fps mode needs `device`'s per-resolution geometry changed to
+match (the `size="78"` code in `/mnt/para/0_0_enc.cfg` and the associated
+7680x2160 stitch dimensions), plus a regenerated stitch LUT for the new source
+height. That is unfinished work, not a dead end — but it is considerably more
+than a sensor-register patch.
 
 ### Reproducing
 
