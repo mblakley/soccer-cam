@@ -990,3 +990,73 @@ testable.
    the length mismatch but keeps 32 379 dereferences per boot. It should not be
    flashed as-is. Restore a narrow filter (`(v >> 32) == 0x7f`) *and* the length
    fix before any further tracing.
+
+---
+
+## 13. Outcome — recovered 2026-08-16, verdict confirmed
+
+The camera was **never bricked**. §12 step 1 was executed and answered on the
+first try. Everything below is observed on the live device, not inferred.
+
+### The prediction held
+
+Root shell on `192.168.0.3:2323`, uid 0, MAC `EC:71:DB:44:56:12`. `ps` showed
+**every** daemon running — `router`, `recorder`, `alarmcenter`, `netserver`,
+`netclient`, `upgrade`, `cloud`, `push`, `factory`, `rtsp`, `ftp`, `onvif`,
+`cgiserver.cgi` — with `device` the sole absentee, and `device` is the process
+`start_app:109` had wrapped in `LD_PRELOAD=/lib/ioctllog.so`. Fourteen hours of
+"no response" were fourteen hours of probing `192.168.86.200`, an address
+nothing was ever going to answer on.
+
+### What recovery taught us that the analysis did not
+
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | `device` cannot be started by hand without the app dir on the library path | `./device: error while loading shared libraries: libbase.so`. `start_app:3` exports `LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$APP_WORK_PATH"`. Correct invocation: `cd /mnt/app && export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/mnt/app" && ./device` |
+| 2 | On a direct PC link `device` never finishes bring-up | it loops on `udhcpc: broadcasting discover` forever; no DHCP server, no lease, no HTTP. Recovery needs the camera on a real network |
+| 3 | nginx has a build-host prefix compiled in | `open() "/home/lzq/nginx_all/trunk_new/trunk/source/_install/logs/error.log" failed`. Needs `-p <writable dir>`; `/mnt/app` is read-only squashfs so `mkdir() ".../proxy_temp" failed (30: Read-only file system)`. Support files (`mime.types`, `fastcgi_params`, …) must be copied from `/mnt/app/nginx_conf/conf/` |
+| 4 | The generated HTTP vhost is **localhost-only by design** | `/mnt/tmp/nginx.conf`: `if ( $remote_addr != 127.0.0.1 ) { set $http_flag 1001; }` then `if ( $http_flag = "1001" ) { return 500; }`. Neutralise for a bench session by making the remote branch set `100` |
+| 5 | There is no `443` server block at all in the generated conf | `grep -n 'listen' /mnt/tmp/nginx.conf` yields only `127.0.0.1:1935` and `80`. HTTPS was never going to bind; the missing `/mnt/para/*.crt` is a symptom, not the cause |
+| 6 | **A pending factory reset fired.** The reset button is handled by `device`; the 2026-08-16 button attempt sat pending until `device` finally ran, then reset all of `/mnt/para` at 13:20 | every file in `/mnt/para` stamped `Aug 16 13:20`; `usr_v2.cfg` → `pwd="0000"` and an **empty** admin password logs in |
+| 7 | The reset is why HTTP stayed down — **not** the missing SD card | `/mnt/para/service.cfg`: `<web port="80" enable_http="0" https_port="443" enable_https="0" …/>`, plus `<rtsp enable="0">` and `<onvif enable="0">`. With no service enabled, `device` never starts nginx. Setting `enable_http="1"` and rebooting brought port 80 straight up |
+| 8 | `SetUser` is not supported on this firmware | `{"cmd":"Unknown","error":{"detail":"not support","rspCode":-9}}`. Password restoration is a web-UI job |
+| 9 | **`/etc/soccercam_build` is unreliable** — it still reads `pak=…4907…` on a camera running 4909 | confirms §11's stale-stamp finding. Identify the running image by hashing files instead |
+| 10 | Calibration survived the reset intact | `sp` (mtd9) md5 `32542b85a52e89168c072539ace080e6`, byte-identical to the pre-session archive |
+
+### Available on-camera tooling (busybox 1.36.0)
+
+Present: `dd`, `nandwrite`, `nanddump`, `md5sum`, `wget`.
+**Absent**: `nc`, `flash_erase`, `setsid`, `nohup`, `timeout`, `curl`.
+`which` lies about applets — test by running them.
+
+### Verification that the reflash took
+
+4909 was uploaded over the restored HTTP path (665 parts, 47 s) and the camera
+rebooted unattended. Identity confirmed by hash, since the build stamp cannot be
+trusted:
+
+```
+                        live camera                        4909 image
+S36_StitchProbe   fb7d3ce2e7dc3ba21c7f8a8c44ae2c66   fb7d3ce2e7dc3ba21c7f8a8c44ae2c66
+start_app         40d13ccc6f1402dea249b0192440d30e   40d13ccc6f1402dea249b0192440d30e
+S99_NetState      ae619472a5ed952cc230074be3e9c12f   ae619472a5ed952cc230074be3e9c12f
+```
+
+`start_app` contains zero `LD_PRELOAD` lines and `/lib/ioctllog.so` is gone.
+`GetEnc` reports `7680*2160 @ 21fps h265`.
+
+### Post-recovery state
+
+Config is at reset defaults: **admin password empty**, bitrate 10240 kbps (the
+build intends 20480), HTTPS/RTMP/ONVIF off. HTTP and RTSP were re-enabled by
+editing `service.cfg` directly; the rest is a web-UI task.
+
+### One workstation trap worth recording
+
+Both `New-NetIPAddress` and `netsh interface ipv4 add address` **silently switch
+a Windows adapter from DHCP to static**. Adding a `192.168.0.10/24` helper
+address to reach the fallback subnet therefore breaks the adapter's real
+connectivity, and removing the address afterwards leaves it with none. Restore
+with `Set-NetIPInterface -Dhcp Enabled` plus `Set-DnsClientServerAddress
+-ResetServerAddresses`. Prefer putting the camera on a real network over
+adding helper addresses.
