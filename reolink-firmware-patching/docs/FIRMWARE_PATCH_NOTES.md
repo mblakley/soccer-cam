@@ -1357,10 +1357,37 @@ Ruled out as the source of that geometry:
 - The `"OS08C10"` / `"IMX415"` strings have **no** pointer references, so there
   is no sensor-profile table keyed by name — they are inline comparisons.
 
-The remaining candidate is the u16 resolution arrays around `0x3240b0..0x324220`
-in `device` (they contain 7680, 4096, 2160, 2560, 1920, 1536, 432, 720 …), but
-the width/height array boundaries were not conclusively resolved, so no patch
-was attempted there.
+Two further candidates were found, patched, flashed and **falsified**. Both
+looked correct statically; neither changed the runtime geometry. Record them so
+nobody burns the cycles again:
+
+1. **The u16 resolution arrays.** Solved exactly — three known code→resolution
+   mappings (70→1536x432, 78→7680x2160, 81→2560x720) give a unique base for
+   each array: `width[]` at file `0x3240ae`, `height[]` at `0x32416a`, indexed
+   by size code, so `height[78]` is at file `0x324206`. Patching it 2160→720
+   had **no effect**. These arrays feed reporting/validation only.
+2. **`Na_sensor_get_resolution` (`FUN_0048a420`).** A switch on
+   `*(param_1 + 0x2814)` writing width→`*param_2`, height→`*param_3`, called by
+   `Na_video_encoder_start`. Case `0x4e` (=78) holds
+   `movz w3,#7680` @ `0x8a7f4` and `movz w3,#2160` @ `0x8a7fc`. Patching that
+   height had no effect; patching **all four** `movz w3,#2160` sites in the
+   function (`0x8a768`, `0x8a7fc`, `0x8a86c`, `0x8ab64`) also had **no effect** —
+   the stream stayed 7680x2160 with the ISP still erroring. So this function is
+   not on the runtime configuration path either, or the live resolution index is
+   none of those cases.
+
+One useful positive from that work: `*(param_1 + 0x2884)`, the runtime fps
+clamp, has exactly **one writer** — `movz w1,#0x14` / `str w1,[x19,#10372]` at
+file `0x8bb1c`/`0x8bb20`. It is the same constant the fps patch already changes,
+so no second cap needs lifting.
+
+**Recommendation: stop hunting constants.** Four independently-plausible
+candidates have now been patched with zero runtime effect, which means the
+geometry reaches the drivers by a path static analysis has not revealed.
+`device` is dynamically linked, so the direct way to see it is to `LD_PRELOAD`
+an `ioctl()` logger and record the actual bring-up sequence — every
+`(fd, cmd, struct)` the ISF layer receives. That both identifies the exact call
+carrying 2160 and doubles as the specification for replacing `device` outright.
 
 **Practical consequence: on this firmware 21 fps is the hard ceiling**, because
 the sensor must produce 2160 rows for the ISP to bind, and 2160 rows caps VTS at
