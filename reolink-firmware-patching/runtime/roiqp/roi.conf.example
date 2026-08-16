@@ -1,0 +1,57 @@
+# Encoder ROI window — one region of the 7680x2160 main stream gets a QP bias.
+#
+# Copy to /mnt/sda/soccercam/roi.conf on the camera. S37_RoiQp re-reads it
+# within 30 s of any change; no reboot and no reflash. The same file baked into
+# the pak at /etc/soccercam_roi.conf.default is used when roi.conf is absent.
+#
+# Format: one "key=value" per line, integers only, '#' comments, blank lines OK.
+# ANY malformed line, unknown key, missing key or out-of-range value rejects the
+# WHOLE file — the encoder is left at (or returned to) stock behaviour. Nothing
+# is partially applied.
+#
+# Only ONE window is settable (see docs/ENCODER_ROI_QP.md): the kernel command
+# always writes window 0 and zeroes the other nine.
+#
+# ---------------------------------------------------------------------------
+# enable   0 = no ROI (stock bit allocation), 1 = apply the window below
+# path     encode path index. 0 = main stream (confirmed on this unit: the live
+#          /proc/hdal/venc/info shows out 0 = H265 7680x2160, out 1 = 1536x432,
+#          out 3 = 2560x720, out 7 = JPEG snapshot). Re-check any time the
+#          stream layout changes:
+#            cat /proc/hdal/venc/info
+#          That same file is how you confirm a window actually landed — the ROI
+#          table is empty on stock firmware and gains a row once one is set.
+# x,y,w,h  the window. UNITS ARE NOT YET CONFIRMED ON HARDWARE — the kernel
+#          struct stores them as u16, which admits either pixels or CTUs. The
+#          values below assume PIXELS. The prove-out in docs/ENCODER_ROI_QP.md
+#          settles it: if the effect shows up at 1/64 the requested size in the
+#          top-left corner, the units are 64x64 CTUs and every number here must
+#          be divided by 64.
+# qp       QP bias. Negative = lower QP inside the window = MORE bits = the
+#          thing we want over the pitch. Range depends on mode (below).
+#          Keep it small. The live encoder state (dumps/probe2/venc_info.txt)
+#          shows the main stream running CBR with I/P QP clamped to 25..51, and
+#          AQ already spending +/-8 QP of its own with JND on top. A delta much
+#          past -5 is likely to saturate against the RC floor and buy nothing.
+# mode     0..3. Mode 3 makes qp an ABSOLUTE QP (0..51). Modes 0/1/2 make it a
+#          DELTA (-32..31); the difference between 0, 1 and 2 is not documented
+#          in anything we have decompiled. Start with mode=1 and a small delta.
+# frame_w  frame size used for the "window must fit inside the frame" check.
+# frame_h  Defaults 7680x2160; change only if the stream geometry changes.
+# ---------------------------------------------------------------------------
+#
+# The band below is the playing surface on the Spencerport framing: the pitch
+# occupies roughly y=760..1660 across the full width, with sky above and the
+# spectator foreground below. Re-measure per field — the camera is aimed
+# differently at each one, which is the whole reason this is a config file.
+
+enable=1
+path=0
+x=0
+y=760
+w=7680
+h=900
+qp=-6
+mode=1
+frame_w=7680
+frame_h=2160

@@ -808,10 +808,18 @@ picks these up.
 | `builds/build_netstate.sh` | + auto-toggle recording daemon (v1). `… <kbps> <user> <pass> <home_mac> [more]`. |
 | `builds/build_soccercam_v2.sh` | + free-space reserve (Patch v20 truncation fix) + netstate **v2** (stub cleanup). `… <kbps> <user> <pass> <reserve_gb> <home_mac> [more]`. |
 | `builds/build_soccercam_comprehensive.sh` | + boot-time power-cut recovery (`recover_mp4` + `S35_RecRecover`, video + best-effort AAC). `… <kbps> <user> <pass> <reserve_gb> <home_mac> [more]`. |
+| `builds/build_roi_qp.sh` | Encoder ROI / per-region QP bias, driven per game from a config file on the SD card (§16). `bash builds/build_roi_qp.sh <base.pak> <out.pak> [roi.conf]`. `rootfs`-only, so it layers on any of the above. **Built, not proven on hardware.** |
 | `builds/BUILD_LOG.md` | Artifact tracker: each built `.pak`'s sha256, CRC, and exact contents. |
 
 Each builder `assert`s the stock byte fingerprint at every patch site before
 writing, so a wrong firmware version fails loudly with the offending offset.
+
+Only `build_roi_qp.sh` additionally asserts that `loader`, `fdt`, `atf`,
+`uboot`, `kernel`, `ai` and `app` are byte-identical to the base pak, deleting
+its output on any difference. The other builders rely on `pak_repack.py` only
+touching the sections it is handed, which is a reason to believe the property
+rather than a guard that enforces it — they should be back-filled with the same
+check (see `ENCODER_ROI_QP.md` §8).
 
 The fps-dropdown patch was investigated and rejected as non-functional (it
 only lies in the dropdown — the encoder clamps to 20 fps at 16MP regardless).
@@ -830,6 +838,8 @@ See section 11 for why. No fps patch builder is committed.
 | `runtime/set_exposure.sh <mode> [shutter] [gain]` | Set ISP exposure mode via `SetIsp`. Modes: `auto`, `antismear`, `lownoise`, `manual`. |
 | `runtime/check_isp.sh` | Print current ISP state (exposure/shutter/gain/etc.). Use to confirm persistence after reboot. |
 | `runtime/probe_isp.sh` | Dump full GetIsp action=1 response (state + ranges). Use for discovery. |
+| `runtime/roiqp/S37_RoiQp` | Init fragment (needs the §16 flash): reads `/mnt/sda/soccercam/roi.conf` and applies the encoder ROI window. Fail-closed — a bad config leaves the encoder at stock. |
+| `runtime/roiqp/roi.conf.example` | The per-game ROI config format, commented. |
 
 ### Verification (`verify/`)
 | Script | What it checks |
@@ -839,6 +849,7 @@ See section 11 for why. No fps patch builder is committed.
 | `verify/get_performance.sh` | Poll GetPerformance to watch live codec bitrate, CPU, net throughput. |
 | `verify/fetch_and_analyze.sh [tag]` | Download latest recording via the unlocked HTTP path + ffprobe analysis. **The end-to-end validator** — proves what the encoder actually emits. |
 | `verify/test_recover_mp4.sh <good_recording.mp4> [chop_bytes]` | Build `recover_mp4` + round-trip a recording through clean-orphan and power-cut-orphan recovery; asserts byte-exact tables, bit-identical audio PCM, and clean decode. **The recovery correctness gate** — run before trusting a comprehensive build. |
+| `verify/roi_qp_heatmap.py <before.mp4> <after.mp4>` | Per-64×64-block detail-energy ratio between two recordings, rendered as a PNG. The A/B measurement for the ROI window (§16) — and the test that settles whether its coordinates are pixels or CTUs. |
 
 ### External dependencies
 - **WSL Ubuntu** 24.04 with `squashfs-tools` (`sudo apt install squashfs-tools`).
@@ -1426,6 +1437,33 @@ top -b -n 1 | head -5                                          # confirm CPU is 
 ffprobe -v error -select_streams v:0 -count_frames \
         -show_entries stream=nb_read_frames,duration,r_frame_rate -of default=nw=1 rec.mp4
 ```
+
+---
+
+## 16. Encoder ROI / per-region QP bias (STATIC ANALYSIS ONLY — see `ENCODER_ROI_QP.md`)
+
+Half the encoded bits go to the treeline and the foreground spectators; the ball
+and the players are starved. The encoder has ten ROI windows with per-window QP
+offsets, and **nothing in the stock userspace ever sets them** — `device`'s
+`hd_videoenc_set` (`FUN_005cd150`) has a working `case 0xc` (`OUT_ROI`) arm but
+no call site anywhere passes 0xc, and `netserver` / `cgiserver.cgi` / `router`
+contain no ROI string at all. So there is no config path to reuse.
+
+The reachable lever is the kernel module's own debug command,
+`echo vdoenc setroi <PathId> <RoiIndex> <Enable> <QP> <QPMode> <X> <Y> <W> <H>
+> /proc/hdal/venc/cmd`, which reaches `NMR_VdoEnc_SetROI` directly and bypasses
+`device` and HDAL entirely. That command is **broken on stock firmware**: its
+nine `%d` conversions write 4-byte ints into a struct whose `qp`/`qp_mode` are
+1 byte each, so the final `Height` write always zeroes them and the window
+requests no bit reallocation. `builds/build_roi_qp.sh` fixes it with a 26-byte,
+same-length format-string replacement inside `kflow_videoenc.ko`, and installs
+`S37_RoiQp`, which applies a per-game window from `/mnt/sda/soccercam/roi.conf`.
+
+**None of this has run on hardware** — the camera was bricked and offline
+throughout. `ENCODER_ROI_QP.md` carries the full evidence (structs, offsets,
+decompiled call sites), the route comparison, the open questions (coordinate
+units are *not* established), and the prove-out sequence including its negative
+controls.
 
 ---
 
