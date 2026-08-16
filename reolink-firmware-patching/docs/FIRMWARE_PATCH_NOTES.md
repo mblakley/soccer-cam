@@ -956,10 +956,13 @@ output rate.
 ### Frame rate
 | Path | r_frame_rate | avg_frame_rate |
 |---|---|---|
-| Any (stock or patched) | 20/1 | 19.92 fps |
+| Stock / bitrate+http patched | 20/1 | 19.92 fps |
+| `movz w1,#0x14` patched to 30 (build 4908) | 50/3 | **16.67 fps** (worse) |
+| `movz w1,#0x14` patched to **21** (build 4909) | **21/1** | 21 fps, 0 drops |
 
-Sensor-limited at 20 fps regardless of patch state. The dropdown can be
-made to lie (show 25/30) but the encoder ignores the request.
+Asking for 30 makes throughput **worse** than asking for 20. This is *not*
+sensor limiting — see section 15, which supersedes the earlier reading of this
+table.
 
 ---
 
@@ -1009,13 +1012,13 @@ question moot.
   (dropdown shows 25/30) but the encoder silently clamps to 20 fps at
   16MP. No `cmp w_, #0x14` hardcoded cap exists in any app binary
   (cgi/router/device/recorder) NOR in kdrv_h26x.ko / kdrv_videocapture.ko.
-  The 20 fps limit is therefore either a **computed pipeline bandwidth
-  ceiling** (the dual-OS08C10-stitch-to-7680x2160 pipeline at
-  497 Mpix/s seems system-bound) OR a clamp deep in the encoder/capture
-  chain that the one-shot kernel-module scan didn't find.
-  **Patching further would require rootfs partition modification, which
-  is higher risk and requires UART recovery capability.** Not
-  recommended without explicit need.
+  **RESOLVED 2026-08-15 — see section 15.** It is the first option: a
+  throughput ceiling in the **capture front-end** (sensor readout + SIE/ISP for
+  two 3840x2160 streams), not in the encoder. The requested capture rate is
+  freely settable (patching `0x8bb1c` to 30 gives `VIDEOCAP frc = 30/1`), but
+  `VIDEOCAP` then only *produces* ~17 fps and the pipeline delivers 16.67 fps —
+  worse than leaving it at 20. Raising fps therefore requires reducing pixels
+  per frame, not requesting more frames.
 - **Sub-stream improvements** — patches focused on main stream. Sub stream
   bitrate range is `[256, 512, 1024, 1536, 2048]` (max 2 Mbps); separately
   capped, untouched.
@@ -1134,15 +1137,281 @@ Found via `rootfs_extracted/lib/modules/5.10.168/hdal/sen_os08c10/nvt_sen_os08c1
 - **Mode table**: `os08c10_mode_1` — 10496-byte register-write sequence
   for the sensor's single supported mode in this firmware
 
-The 20 fps cap on 16MP composite is enforced in layers:
-1. **Userspace cap**: a hardcoded `movz w1, #0x14` in `device`
-   `Na_video_encoder_build_basic` (`FUN_0048b630`, file offset `0x8bb1c`) —
-   patched to 25 in build 4888. See section 3.
+The 20 fps behaviour at 16MP comes from:
+1. **`device`'s hardcoded rate**: `movz w1, #0x14` in `Na_video_encoder_build_basic`
+   (`FUN_0048b630`, file offset `0x8bb1c`). **This sets the capture (VI) frame
+   rate, not merely an encoder cap** — see section 15.
 2. **UI dropdown cap**: `router` `FUN_00465584` at file offset `0x6565c` —
    patched to 25. Lets the web UI offer 25 fps at 7680×2160.
-3. **Encoder ASIC ceiling**: ~330 Mpix/s pixel throughput. Cannot sustain
-   25 fps at 16MP; drops ~20% of frames. This is hardware, not firmware —
-   not patchable. Confirmed via bitrate-invariance test (see section 3).
+3. **A real ceiling of roughly 330 Mpix/s, in the capture front-end.** The
+   number is right; the earlier attribution to the *encoder ASIC* is not
+   supported by direct measurement. Section 15 shows `VIDEOCAP` itself
+   producing only ~17 fps when asked for 30, so the encoder never had the
+   frames to drop.
+
+---
+
+## 15. Where the 20 fps ceiling actually is (measured on-camera, 2026-08-15)
+
+Earlier sections concluded "sensor-limited at 20 fps" and "encoder ASIC drops
+~20% of frames". Both were inferred from the *outside* — nobody had a shell, so
+the only observable was the fps of the resulting recording. With on-camera
+access to `/proc/hdal/{vcap,vprc,venc}/info` the picture is different.
+
+### The capture rate is not sensor-locked
+
+`movz w1, #0x14` at `device` file offset `0x8bb1c` is **the capture frame rate**,
+not a clamp on a value sourced from config. Patched to 30 (build 4908):
+
+```
+VIDEOCAP 0 IN:  3840x2160 RAW12  frc = 30/1     (was 20/1)
+```
+
+The sensor and VI reconfigured to 30 fps without complaint, which disproves
+"sensor-limited". It is also unconditional: `/mnt/para/0_0_enc.cfg`'s
+`framerate="20"` was ignored while the patch was in place — capture stayed at
+30/1 until the firmware was reverted. `0_0_enc.cfg`'s `framerate` drives encoder
+rate control, not capture.
+
+### But the pipeline cannot sustain 30 at 16MP
+
+Actual recording, 7680×2160 H.265, `ffprobe -count_frames`:
+
+```
+nb_read_frames = 1442      duration = 86.513 s      ->  16.67 fps
+r_frame_rate   = 50/3      avg_frame_rate = 721000/43269
+```
+
+**Requesting 30 yields 16.67 fps — worse than the 19.92 fps you get by
+requesting 20.** Over-committing degrades total throughput rather than
+saturating it, which is the signature of buffer/bandwidth contention, not of a
+hard rate limiter.
+
+Achieved pixel rates: 19.92 fps × 16.6 Mpix = **330 Mpix/s** at the 20 fps
+setting, versus 277 Mpix/s at the 30 fps setting. The ~330 Mpix/s ceiling in
+section 14 is real; asking for more than it can deliver costs ~16%.
+
+### The front-end never produced 30 fps
+
+The counters in `/proc/hdal/*/info` are **rolling per-second rates**, not
+cumulative totals (two samples 10 s apart read identically). Read that way, at
+the 30 setting:
+
+| stage | rate |
+|---|---|
+| `VIDEOCAP 0` OUT NEW/PROC/PUSH | **17 /s** |
+| `VIDEOPROC 2` (VSP stitcher) IN PUSH | 33 /s (= both sensors) |
+| `VIDEOENC 0` IN frc | **16/16** |
+
+Capture only ever produced ~17 fps; everything downstream simply follows it.
+For contrast, at the stock 20 setting `VIDEOCAP 0 OUT NEW` reads exactly `20`.
+
+So the limit is in the **capture front-end** — sensor readout plus SIE/ISP for
+two 3840x2160 streams — not in the stitcher, the encoder, or the userspace
+hand-off.
+
+> **Do not use `VIDEOPROC 2 USER WORK STATUS` drops as evidence of a
+> bottleneck.** That counter reflects whether a userspace consumer is pulling
+> the stitched main stream. With recording disabled it reads e.g.
+> `PULL 35, drop 34` on a perfectly healthy camera running 20 fps, because
+> nothing is consuming out[0].
+
+CPU is not the constraint either: 57-77% idle across both cores, `device` at
+0-7%, with `ctl_sie_isp_tsk` / `ctl_ipp_buf_tsk` sitting in `D` state waiting on
+hardware. Adding consumer threads to a producer-limited pipeline cannot help.
+
+### Exposure was ruled out
+
+The first 16.67 fps reading was suspicious because it is exactly 60.0 ms/frame,
+which looks like an exposure limit. It is not:
+
+- `exposure: Manual`, `shutter {min:100,max:100}`, `gain {min:62,max:62}` → 16/16
+- `exposure: Auto` in a well-lit room → still 16/16
+
+Delivered rate did not move, so frame time is not being set by integration time.
+
+### The API's 20 fps cap is separate, and is pure policy
+
+`GetEnc action=1` offers `frameRate: [20,18,16,15,12,10,8,6,4]` for the main
+stream **and** `[20,15,10,7,4]` for the 1536×432 sub-stream. A 0.66 Mpix H.264
+stream is nowhere near any throughput limit, so that list is a policy table, not
+a measurement. Do not read the API's 20 as evidence of a hardware ceiling.
+
+### What this means for raising fps
+
+Raising `movz w1,#0x14` alone makes things *worse*. Because the ceiling behaves
+like ~330 Mpix/s of pipeline throughput, buying frame rate requires **reducing
+pixels per frame**, not just asking for more frames. Untested candidates, in
+increasing order of effort:
+
+- **Crop the stitched output** (`HD_VIDEOPROC_PARAM_OUT_CROP` on `VIDEOPROC 2`
+  out[0], currently `OFF:{0,0,0,0}`). Exposed as `GetCrop`/`SetCrop` in
+  `cgiserver.cgi` but gated behind the `videoClip` ability, which this model
+  reports as `{"permit":0,"ver":0}`.
+- **Windowed sensor readout** — fewer rows via `sen_chg_fps_os08c10`
+  (VTS registers `0x380E/0x380F/0x3840`). The OS08C10 does 4K60 natively. This
+  changes source geometry, so the stitch calibration must move with it.
+
+Only the second can help. Because the constraint is in the **capture
+front-end**, cropping the *stitched output* reduces work downstream of the
+bottleneck and will not buy frame rate — it is worth doing for bit allocation,
+but not for fps. Reducing rows read out of the sensor attacks the actual
+constraint.
+
+Neither has been tested.
+
+### The sensor timing model (and how to get 21 fps)
+
+Parsed from `os08c10_mode_1` in `nvt_sen_os08c10.ko` (`.data+0xdd0`, 656 entries
+of `{u32 addr, u32 len, u32 val, u32 pad}`):
+
+| register | value | meaning |
+|---|---|---|
+| `0x3800..0x3807` | x 0..3871, y 0..2191 | readout window (3872 x 2192) |
+| `0x3808/0x3809` | 3840 | output width |
+| `0x380a/0x380b` | 2162 | output height |
+| `0x380c/0x380d` | **2592** | HTS |
+| `0x380e/0x380f` | **2314** | VTS |
+| `0x3814/0x3815` | 0x11 / 0x11 | no binning, no skipping |
+
+```
+fps = PCLK / (HTS * VTS)
+```
+
+The measured 20.00 fps implies **PCLK = 20 x 2592 x 2314 = 119.96 MHz**, i.e.
+exactly 120 MHz. `sen_chg_fps_os08c10` derives VTS from the requested rate, so
+the requested fps is what ultimately sets VTS.
+
+VTS cannot fall below the readout height (~2170 for 2162 rows), so at full
+height the hard ceiling is:
+
+```
+120e6 / (2592 * 2170) = 21.33 fps
+```
+
+**This is why 30 was never reachable — it is arithmetically impossible at full
+height, not a software clamp.** 21 fps *is* reachable, and works end to end:
+patch `device+0x8bb1c` to `movz w1, #21`, giving `VIDEOCAP` a steady 21/s with
+zero drops and `VIDEOENC IN` at 21/21. Verified with a real recording
+(7680x2160 HEVC, `r_frame_rate = 21/1`).
+
+Caveat: AE will hold the delivered rate lower whenever exposure exceeds the
+frame period — a 1/20 s exposure pins output at 20 fps regardless. Full daylight
+is needed to actually see 21.
+
+### Going past 21 requires fewer rows — and the ISP blocks it
+
+Since `HTS` and `PCLK` are fixed, the only lever is VTS, and VTS is floored by
+the readout height. Windowing the sensor therefore raises the ceiling:
+
+| window rows | VTS floor | max fps |
+|---|---|---|
+| 2160 | 2168 | **21.3** |
+| 1440 | 1448 | 32.0 |
+| 1080 | 1088 | 42.5 |
+| 720 | 728 | 63.6 |
+
+Patching both `nvt_sen_os08c10.ko` and `nvt_sen_os08c10_slave.ko` to a
+3840x720 window (`0x3802/0x3803` = 720, `0x3806/0x3807` = 1471,
+`0x380a/0x380b` = 722, `0x380e/0x380f` = 772) **does reconfigure the sensors** —
+`VIDEOCAP` produced 25 fps. But no usable video comes out, because the ISP is
+still set up for the old geometry:
+
+```
+ERR: ctl_ipp_int_ime_path_adj() p0 scl_size (3840, 2160) != in_size (3840, 720)
+ERR: ctl_ipp_process_raw() vdoprc0 ime adj fail
+```
+
+Every frame is rejected at the IME path adjust for both `vdoprc0` and
+`vdoprc1`; `Snap` times out because no frame is ever produced. The sensor mode's
+advertised dimensions in `mode_basic_param` (`.data+0x30` = 2162,
+`.data+0x40` = 2160) were patched too and were **not** enough — `device`
+configures the videoproc scaler from its own resolution table, not from what the
+sensor driver advertises.
+
+**`mode_basic_param` carries three size pairs, not one.** The first attempt
+patched only two and the sensor stayed slow. The full set, per driver:
+
+| offset | stock | meaning |
+|---|---|---|
+| `+0x02c` / `+0x030` | 3840 / 2162 | readout size |
+| `+0x03c` / `+0x040` | 3840 / 2160 | output size |
+| `+0x074` / `+0x078` | 3840 / 2160 | **third pair — easily missed** |
+| `+0x080` | 2592 | HTS |
+| `+0x088` | 2314 | VTS |
+
+Patching **all three pairs plus VTS** in both `nvt_sen_os08c10.ko` and
+`nvt_sen_os08c10_slave.ko` took `VIDEOCAP` from 25 to **50 fps produced**. So
+the sensor side is fully solvable.
+
+### What still blocks it: `device` fixes the stream geometry
+
+Even with the sensors at 720 rows and 50 fps, `VIDEOPROC` and `VIDEOENC` stay at
+3840x2160 / 7680x2160 and the ISP keeps rejecting frames. `device` decides the
+stream geometry independently of what the sensor driver advertises, and the IME
+`p0` path requires `scl_size == in_size`, so a 720-row input against a
+2160-row requested output can never bind.
+
+Ruled out as the source of that geometry:
+
+- **The `size` code in `/mnt/para/0_0_enc.cfg` is ignored for the main stream.**
+  Changing it from `78` (7680x2160) to `81` (2560x720) and rebooting left the
+  stream at 7680x2160 with zero effect — same as `framerate`, this model has it
+  fixed.
+- `device` holds no `(3840,2160)` or `(7680,2160)` constant pair, u16 or u32, so
+  the dimensions are computed rather than tabulated.
+- The `"OS08C10"` / `"IMX415"` strings have **no** pointer references, so there
+  is no sensor-profile table keyed by name — they are inline comparisons.
+
+Two further candidates were found, patched, flashed and **falsified**. Both
+looked correct statically; neither changed the runtime geometry. Record them so
+nobody burns the cycles again:
+
+1. **The u16 resolution arrays.** Solved exactly — three known code→resolution
+   mappings (70→1536x432, 78→7680x2160, 81→2560x720) give a unique base for
+   each array: `width[]` at file `0x3240ae`, `height[]` at `0x32416a`, indexed
+   by size code, so `height[78]` is at file `0x324206`. Patching it 2160→720
+   had **no effect**. These arrays feed reporting/validation only.
+2. **`Na_sensor_get_resolution` (`FUN_0048a420`).** A switch on
+   `*(param_1 + 0x2814)` writing width→`*param_2`, height→`*param_3`, called by
+   `Na_video_encoder_start`. Case `0x4e` (=78) holds
+   `movz w3,#7680` @ `0x8a7f4` and `movz w3,#2160` @ `0x8a7fc`. Patching that
+   height had no effect; patching **all four** `movz w3,#2160` sites in the
+   function (`0x8a768`, `0x8a7fc`, `0x8a86c`, `0x8ab64`) also had **no effect** —
+   the stream stayed 7680x2160 with the ISP still erroring. So this function is
+   not on the runtime configuration path either, or the live resolution index is
+   none of those cases.
+
+One useful positive from that work: `*(param_1 + 0x2884)`, the runtime fps
+clamp, has exactly **one writer** — `movz w1,#0x14` / `str w1,[x19,#10372]` at
+file `0x8bb1c`/`0x8bb20`. It is the same constant the fps patch already changes,
+so no second cap needs lifting.
+
+**Recommendation: stop hunting constants.** Four independently-plausible
+candidates have now been patched with zero runtime effect, which means the
+geometry reaches the drivers by a path static analysis has not revealed.
+`device` is dynamically linked, so the direct way to see it is to `LD_PRELOAD`
+an `ioctl()` logger and record the actual bring-up sequence — every
+`(fd, cmd, struct)` the ISF layer receives. That both identifies the exact call
+carrying 2160 and doubles as the specification for replacing `device` outright.
+
+**Practical consequence: on this firmware 21 fps is the hard ceiling**, because
+the sensor must produce 2160 rows for the ISP to bind, and 2160 rows caps VTS at
+~21.3 fps. Unlocking the windowed modes needs `device`'s stream geometry
+cracked first; the sensor work is already done and reversible.
+
+### Reproducing
+
+```bash
+# on-camera (needs a shell; stock firmware has none -- see section 5d)
+grep -A2 "VIDEOCAP 0  IN FRAME"        /proc/hdal/vcap/info   # requested rate
+grep -A2 "VIDEOCAP 0  OUT WORK STATUS" /proc/hdal/vcap/info   # ACTUAL produced /s
+grep -A3 "VIDEOENC 0  IN FRAME"        /proc/hdal/venc/info   # delivered to encoder
+top -b -n 1 | head -5                                          # confirm CPU is idle
+# off-camera, against a fetched recording
+ffprobe -v error -select_streams v:0 -count_frames \
+        -show_entries stream=nb_read_frames,duration,r_frame_rate -of default=nw=1 rec.mp4
+```
 
 ---
 
