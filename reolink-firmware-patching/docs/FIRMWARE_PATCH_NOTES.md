@@ -1323,11 +1323,49 @@ advertised dimensions in `mode_basic_param` (`.data+0x30` = 2162,
 configures the videoproc scaler from its own resolution table, not from what the
 sensor driver advertises.
 
-So a windowed high-fps mode needs `device`'s per-resolution geometry changed to
-match (the `size="78"` code in `/mnt/para/0_0_enc.cfg` and the associated
-7680x2160 stitch dimensions), plus a regenerated stitch LUT for the new source
-height. That is unfinished work, not a dead end — but it is considerably more
-than a sensor-register patch.
+**`mode_basic_param` carries three size pairs, not one.** The first attempt
+patched only two and the sensor stayed slow. The full set, per driver:
+
+| offset | stock | meaning |
+|---|---|---|
+| `+0x02c` / `+0x030` | 3840 / 2162 | readout size |
+| `+0x03c` / `+0x040` | 3840 / 2160 | output size |
+| `+0x074` / `+0x078` | 3840 / 2160 | **third pair — easily missed** |
+| `+0x080` | 2592 | HTS |
+| `+0x088` | 2314 | VTS |
+
+Patching **all three pairs plus VTS** in both `nvt_sen_os08c10.ko` and
+`nvt_sen_os08c10_slave.ko` took `VIDEOCAP` from 25 to **50 fps produced**. So
+the sensor side is fully solvable.
+
+### What still blocks it: `device` fixes the stream geometry
+
+Even with the sensors at 720 rows and 50 fps, `VIDEOPROC` and `VIDEOENC` stay at
+3840x2160 / 7680x2160 and the ISP keeps rejecting frames. `device` decides the
+stream geometry independently of what the sensor driver advertises, and the IME
+`p0` path requires `scl_size == in_size`, so a 720-row input against a
+2160-row requested output can never bind.
+
+Ruled out as the source of that geometry:
+
+- **The `size` code in `/mnt/para/0_0_enc.cfg` is ignored for the main stream.**
+  Changing it from `78` (7680x2160) to `81` (2560x720) and rebooting left the
+  stream at 7680x2160 with zero effect — same as `framerate`, this model has it
+  fixed.
+- `device` holds no `(3840,2160)` or `(7680,2160)` constant pair, u16 or u32, so
+  the dimensions are computed rather than tabulated.
+- The `"OS08C10"` / `"IMX415"` strings have **no** pointer references, so there
+  is no sensor-profile table keyed by name — they are inline comparisons.
+
+The remaining candidate is the u16 resolution arrays around `0x3240b0..0x324220`
+in `device` (they contain 7680, 4096, 2160, 2560, 1920, 1536, 432, 720 …), but
+the width/height array boundaries were not conclusively resolved, so no patch
+was attempted there.
+
+**Practical consequence: on this firmware 21 fps is the hard ceiling**, because
+the sensor must produce 2160 rows for the ISP to bind, and 2160 rows caps VTS at
+~21.3 fps. Unlocking the windowed modes needs `device`'s stream geometry
+cracked first; the sensor work is already done and reversible.
 
 ### Reproducing
 
