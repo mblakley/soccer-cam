@@ -1395,6 +1395,20 @@ an `ioctl()` logger and record the actual bring-up sequence — every
 `(fd, cmd, struct)` the ISF layer receives. That both identifies the exact call
 carrying 2160 and doubles as the specification for replacing `device` outright.
 
+**Done, 2026-08-15/16 — see `ISF_PARAM_MAP.md`.** The `LD_PRELOAD` capture was
+taken (two traces, 231 k and 440 k ioctls) and the Novatek ISF protocol behind
+`/dev/isf_flow0` decoded from the shipped `.ko` files. The call carrying 2160 is
+`ioctl(0xc0204905, {path_id = 0x00910000, param_id = 0x00001011, ptr, len = 16})` —
+VideoProc 0 out[0] `VDO_SIZE`, payload `{dir, pxlfmt, width, height}` — plus its
+twin on `0x00920000`; the 7680×2160 main stream is the same param on
+`0x00930000` (VideoProc 2 out[0]) and `0x01110080` (VideoEnc in[0]). That param
+is handled entirely inside `kflow_common.ko`, which is why searching
+`kflow_videoprocess.ko` for geometry handling found nothing. **The payload
+itself is still unknown** — it travels behind a userspace pointer and the
+tracer logged only the 32-byte ioctl struct, so no dimension appears anywhere in
+either trace. `ISF_PARAM_MAP.md` §7 lists the single-command captures needed on
+the next camera visit, `cat /proc/hdal/flow` first.
+
 **Practical consequence: on this firmware 21 fps is the hard ceiling**, because
 the sensor must produce 2160 rows for the ISP to bind, and 2160 rows caps VTS at
 ~21.3 fps. Unlocking the windowed modes needs `device`'s stream geometry
