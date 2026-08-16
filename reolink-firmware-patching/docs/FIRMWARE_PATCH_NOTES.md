@@ -1005,11 +1005,11 @@ question moot.
   (dropdown shows 25/30) but the encoder silently clamps to 20 fps at
   16MP. No `cmp w_, #0x14` hardcoded cap exists in any app binary
   (cgi/router/device/recorder) NOR in kdrv_h26x.ko / kdrv_videocapture.ko.
-  **RESOLVED 2026-08-15 — see section 15.** It is the first option: a pipeline
-  throughput ceiling of roughly 330 Mpix/s, with the frames lost at the
-  stitcher's output-pull boundary in `device`, not in the encoder. The capture
-  rate itself is freely settable (patching `0x8bb1c` to 30 gives
-  `VIDEOCAP frc = 30/1`), but the pipeline then delivers only 16.67 fps —
+  **RESOLVED 2026-08-15 — see section 15.** It is the first option: a
+  throughput ceiling in the **capture front-end** (sensor readout + SIE/ISP for
+  two 3840x2160 streams), not in the encoder. The requested capture rate is
+  freely settable (patching `0x8bb1c` to 30 gives `VIDEOCAP frc = 30/1`), but
+  `VIDEOCAP` then only *produces* ~17 fps and the pipeline delivers 16.67 fps —
   worse than leaving it at 20. Raising fps therefore requires reducing pixels
   per frame, not requesting more frames.
 - **Sub-stream improvements** — patches focused on main stream. Sub stream
@@ -1136,10 +1136,11 @@ The 20 fps behaviour at 16MP comes from:
    rate, not merely an encoder cap** — see section 15.
 2. **UI dropdown cap**: `router` `FUN_00465584` at file offset `0x6565c` —
    patched to 25. Lets the web UI offer 25 fps at 7680×2160.
-3. **A real pipeline ceiling of roughly 330 Mpix/s.** The number is right; the
-   earlier attribution to the *encoder ASIC* is not supported by direct
-   measurement. Section 15 shows the frame loss happening at the stitcher's
-   output-pull boundary, with the encoder never seeing the dropped frames.
+3. **A real ceiling of roughly 330 Mpix/s, in the capture front-end.** The
+   number is right; the earlier attribution to the *encoder ASIC* is not
+   supported by direct measurement. Section 15 shows `VIDEOCAP` itself
+   producing only ~17 fps when asked for 30, so the encoder never had the
+   frames to drop.
 
 ---
 
@@ -1183,23 +1184,34 @@ Achieved pixel rates: 19.92 fps × 16.6 Mpix = **330 Mpix/s** at the 20 fps
 setting, versus 277 Mpix/s at the 30 fps setting. The ~330 Mpix/s ceiling in
 section 14 is real; asking for more than it can deliver costs ~16%.
 
-### The frames are lost at the stitcher's output pull
+### The front-end never produced 30 fps
 
-Work-status counters while running at 30/1 (`/proc/hdal/vprc/info`):
+The counters in `/proc/hdal/*/info` are **rolling per-second rates**, not
+cumulative totals (two samples 10 s apart read identically). Read that way, at
+the 30 setting:
 
-| stage | counters | drops |
-|---|---|---|
-| `VIDEOCAP 0` OUT | NEW/PROC/PUSH 17 | **0** |
-| `VIDEOPROC 0` (left ISP) IN and OUT | 17 | **0** |
-| `VIDEOPROC 2` (VSP stitcher) IN | PUSH 33, REL 33 | **0** |
-| `VIDEOPROC 2` OUT[0] + OUT[1] | NEW/PROC/PUSH 17 | **0** |
-| `VIDEOPROC 2` **USER** PULL out[0] | PULL 23 | **6–7** |
+| stage | rate |
+|---|---|
+| `VIDEOCAP 0` OUT NEW/PROC/PUSH | **17 /s** |
+| `VIDEOPROC 2` (VSP stitcher) IN PUSH | 33 /s (= both sensors) |
+| `VIDEOENC 0` IN frc | **16/16** |
 
-Sensors, both ISP paths and the stitcher itself drop nothing. Everything is lost
-at the **USER PULL** boundary on the stitched output — i.e. `device`'s own
-`bc_stitch_main` consumer thread cannot pull and hand off stitched 7680×2160
-frames fast enough. The encoder never sees those frames, so it cannot be the one
-dropping them.
+Capture only ever produced ~17 fps; everything downstream simply follows it.
+For contrast, at the stock 20 setting `VIDEOCAP 0 OUT NEW` reads exactly `20`.
+
+So the limit is in the **capture front-end** — sensor readout plus SIE/ISP for
+two 3840x2160 streams — not in the stitcher, the encoder, or the userspace
+hand-off.
+
+> **Do not use `VIDEOPROC 2 USER WORK STATUS` drops as evidence of a
+> bottleneck.** That counter reflects whether a userspace consumer is pulling
+> the stitched main stream. With recording disabled it reads e.g.
+> `PULL 35, drop 34` on a perfectly healthy camera running 20 fps, because
+> nothing is consuming out[0].
+
+CPU is not the constraint either: 57-77% idle across both cores, `device` at
+0-7%, with `ctl_sie_isp_tsk` / `ctl_ipp_buf_tsk` sitting in `D` state waiting on
+hardware. Adding consumer threads to a producer-limited pipeline cannot help.
 
 ### Exposure was ruled out
 
@@ -1233,17 +1245,22 @@ increasing order of effort:
   (VTS registers `0x380E/0x380F/0x3840`). The OS08C10 does 4K60 natively. This
   changes source geometry, so the stitch calibration must move with it.
 
-Neither has been tested. What *is* established is that the limit sits between
-the stitcher output and the encoder feed, so any fix has to reduce the work on
-that path.
+Only the second can help. Because the constraint is in the **capture
+front-end**, cropping the *stitched output* reduces work downstream of the
+bottleneck and will not buy frame rate — it is worth doing for bit allocation,
+but not for fps. Reducing rows read out of the sensor attacks the actual
+constraint.
+
+Neither has been tested.
 
 ### Reproducing
 
 ```bash
 # on-camera (needs a shell; stock firmware has none -- see section 5d)
-grep -A2 "VIDEOCAP 0  IN FRAME" /proc/hdal/vcap/info
-grep -A3 "VIDEOENC 0  IN FRAME" /proc/hdal/venc/info
-sed -n "/VIDEOPROC 2  USER WORK STATUS/,+3p" /proc/hdal/vprc/info
+grep -A2 "VIDEOCAP 0  IN FRAME"        /proc/hdal/vcap/info   # requested rate
+grep -A2 "VIDEOCAP 0  OUT WORK STATUS" /proc/hdal/vcap/info   # ACTUAL produced /s
+grep -A3 "VIDEOENC 0  IN FRAME"        /proc/hdal/venc/info   # delivered to encoder
+top -b -n 1 | head -5                                          # confirm CPU is idle
 # off-camera, against a fetched recording
 ffprobe -v error -select_streams v:0 -count_frames \
         -show_entries stream=nb_read_frames,duration,r_frame_rate -of default=nw=1 rec.mp4
