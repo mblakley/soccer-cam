@@ -54,6 +54,7 @@ reolink-firmware-patching/
 ├── _camera_env.sh                   # sourced by runtime/verify scripts
 ├── .gitignore                       # excludes *.pak, secrets, artifacts
 ├── docs/
+│   ├── APP_REPLACEMENT_DESIGN.md    # design: replace app/device, keep kernel+ISP+drivers
 │   ├── FIRMWARE_PATCH_NOTES.md      # complete reference (RE recipes + byte offsets)
 │   └── PATCHING_GUIDE.md            # step-by-step stock -> flashed -> verified
 ├── pak/                             # .pak container toolchain (Python)
