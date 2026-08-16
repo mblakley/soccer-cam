@@ -28,7 +28,7 @@ so you can pick the highest-tier build for your needs:
 - **`build_netstate.sh`** = HTTP unlock + bitrate cap + auto-toggle daemon.
 - **`build_soccercam_v2.sh`** = the above **+ netstate v2 (stub cleanup) + free-space reserve**. Fixes the full-card mid-game truncation (the raised reserve makes the camera's own recycler keep a full segment's headroom free).
 - **`build_soccercam_comprehensive.sh`** = `v2` **+ boot-time power-cut recovery** (`recover_mp4` + `S35_RecRecover`, video + best-effort AAC audio). **Recommended for the soccer-cam use case.** Audio recovery needs the Helix AAC source fetched locally (see `recover/helix/README.md`); without it the build falls back to video-only recovery automatically.
-- **`build_fps_cap.sh`** = HTTP unlock + bitrate cap + fps dropdown lift. Available for experimentation; daily-driver use is **not** recommended (the h.265 ASIC drops ~20% of frames at 16MP@25fps so recorded output stays around 20 fps anyway, with added jitter).
+- **`build_fps_cap.sh`** = HTTP unlock + bitrate cap + fps dropdown lift. Available for experimentation; daily-driver use is **not** recommended. Raising the rate makes recorded fps *worse*, not better: at a 30 fps setting the camera delivers a measured **16.67 fps**, against 19.92 fps at the stock 20 setting. The pipeline is throughput-bound at roughly 330 Mpix/s and over-committing it costs ~16%. See `docs/FIRMWARE_PATCH_NOTES.md` section 15.
 
 The recovery binary has its own repeatable correctness gate:
 `bash verify/test_recover_mp4.sh <a_good_recording.mp4>` builds `recover_mp4`,
