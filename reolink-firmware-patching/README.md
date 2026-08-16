@@ -200,11 +200,11 @@ After flashing:
   `/mnt/sda/netstate/override` file — daemon yields, you control via UI/API.
 - Update the home-MAC list without re-flashing by writing to
   `/mnt/sda/netstate/home_macs.txt` (one MAC per line). There is **no
-  arbitrary-file web UI** on these cameras — write these files over `telnet`
-  (the patched firmware leaves `telnetd` running, started in `S25_Net`) or by
-  pulling the microSD card and editing it on a PC. For a hands-off setup, prefer
-  baking the home MAC in at build time (the builders already do this) rather
-  than relying on a runtime file.
+  arbitrary-file web UI** on these cameras and **no shell** — `S25_Net` calls
+  `telnetd`, but this firmware's busybox is built without that applet, so port
+  23 never opens. Write these files by pulling the microSD card and editing it
+  on a PC. For a hands-off setup, prefer baking the home MAC in at build time
+  (the builders already do this) rather than relying on a runtime file.
 
 ## Quickstart — comprehensive soccer-cam build (recommended)
 

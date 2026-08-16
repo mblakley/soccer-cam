@@ -362,9 +362,11 @@ self-test in Step 4, option C against any good recording.
 ## Updating the netstate config without re-flashing
 
 The daemon respects two runtime files on the SD card. There is **no
-arbitrary-file web UI** on these cameras — create them over `telnet` (`telnetd`
-is left running by `S25_Net`) or by pulling the microSD card and editing it on a
-PC (any method that places files under `/mnt/sda/` works):
+arbitrary-file web UI** on these cameras, and **no shell** — `S25_Net` calls
+`telnetd`, but this firmware's busybox is built without that applet, so port 23
+never opens (see `FIRMWARE_PATCH_NOTES.md` §5d). Create these files by pulling
+the microSD card and editing it on a PC (any method that places files under
+`/mnt/sda/` works):
 
 | file | purpose |
 |---|---|

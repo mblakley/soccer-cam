@@ -714,8 +714,14 @@ on the daemon running — but if it fails, recording stays on (the safe directio
 - HTTP `/downloadfile/` is nginx static-serve baked into `device`, so downloads
   work even if `recorder` never starts.
 - There is **no arbitrary-file SD web UI**: runtime files under `/mnt/sda/...`
-  go via `telnet` (`telnetd` is left running by `S25_Net`) or by pulling the
-  card; config is otherwise baked at build time.
+  are placed by **pulling the microSD card**; config is otherwise baked at
+  build time.
+- **There is no shell on the camera.** `S25_Net` ends with a bare `telnetd`
+  line, but the busybox in this firmware is built **without the `telnetd`
+  applet** (327 applets, none named `telnetd`), so that line fails silently and
+  port 23 never opens — verified with a port scan against a running camera.
+  busybox *does* include `tcpsvd`, `inetd` and `sh`, so a shell service can be
+  added in a custom rootfs build if you need one; nothing here ships that.
 
 ### Plan B (deferred, riskier): firmware record-at-home gate — *never writes* the stub
 
