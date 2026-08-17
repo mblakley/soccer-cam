@@ -42,7 +42,14 @@ class StitchProfile:
 
     @classmethod
     def from_dict(cls, d: dict) -> StitchProfile:
-        anchors = [(int(a[0]), int(a[1])) for a in d["dx_anchors"]]
+        # round(), not int(): a v2 calibration carries sub-pixel anchors (the
+        # camera's warp mesh is quarter-pixel), and int() truncates toward
+        # zero. Truncation would bias every non-integer anchor toward the
+        # seam by up to a pixel *before* build_dx_lookup does its own
+        # rounding -- a silent under-correction on exactly the small objects
+        # at the seam this module exists to help. Rounding here matches what
+        # build_dx_lookup does downstream, so the two agree.
+        anchors = [(round(float(a[0])), round(float(a[1]))) for a in d["dx_anchors"]]
         return cls(
             source_width=int(d["source_width"]),
             source_height=int(d["source_height"]),
@@ -57,6 +64,226 @@ class StitchProfile:
             "seam_x": self.seam_x,
             "dx_anchors": [list(a) for a in self.dx_anchors],
         }
+
+
+SCHEMA_V2 = "seam_calibration/2"
+
+# Who owns the correction. Exactly one surface does; the others contribute
+# nothing. See docs/STITCH_CALIBRATION.md 3.1 for why summing them is a trap:
+# the camera's mesh is runtime state that dies on reboot, so a split
+# correction silently becomes a partial one at the next power cycle and
+# nothing in the video says so. A single owner degrades to *no* correction,
+# which is detectable.
+CORRECTION_OWNERS = frozenset(
+    {
+        "camera_mesh",
+        "camera_scalars",
+        "camera_scalars+downstream",
+        "downstream",
+    }
+)
+
+# Only these two author a per-row curve. `camera_scalars` alone cannot express
+# a shear at all -- it is three whole-frame integers -- so a curve stored under
+# it would be a curve nothing applies.
+CURVE_OWNERS = frozenset({"camera_mesh", "camera_scalars+downstream", "downstream"})
+
+
+class SeamCalibrationError(ValueError):
+    """A calibration artifact that must not be written or applied."""
+
+
+def read_dx_anchors(obj: object) -> list[tuple[float, float]]:
+    """Pull the `[y, dx]` curve out of whatever shape the producer emitted.
+
+    Deliberately permissive on the way in and strict on the way out, because
+    two independent producers write this curve -- the interactive tool and the
+    automatic solver -- and pinning them to one envelope would couple them for
+    no benefit. Accepted:
+
+      * a bare list of pairs, ``[[y, dx], ...]``
+      * any mapping carrying ``dx_anchors`` (v1 profile, v2 profile, or the
+        solver's ``{"dx_anchors": [...], "metadata": {...}}``)
+
+    Values stay floats. The mesh is quarter-pixel and the downstream corrector
+    is whole-pixel; rounding is the consumer's business, not the reader's.
+    """
+    raw: object = obj
+    if isinstance(obj, dict):
+        if "dx_anchors" not in obj:
+            raise SeamCalibrationError("no dx_anchors in calibration payload")
+        raw = obj["dx_anchors"]
+    if not isinstance(raw, list | tuple) or not raw:
+        raise SeamCalibrationError(f"dx_anchors must be a non-empty list, got {raw!r}")
+
+    anchors: list[tuple[float, float]] = []
+    for pair in raw:
+        if not isinstance(pair, list | tuple) or len(pair) != 2:
+            raise SeamCalibrationError(f"anchor must be a [y, dx] pair, got {pair!r}")
+        try:
+            anchors.append((float(pair[0]), float(pair[1])))
+        except (TypeError, ValueError) as exc:
+            raise SeamCalibrationError(f"non-numeric anchor {pair!r}") from exc
+
+    if any(b[0] <= a[0] for a, b in zip(anchors, anchors[1:], strict=False)):
+        # np.interp (and therefore build_dx_lookup, and therefore the camera's
+        # composer) silently produces nonsense for unsorted x. Refuse instead.
+        raise SeamCalibrationError(f"anchor rows must strictly increase: {anchors}")
+    return anchors
+
+
+def validate_v2_profile(d: dict) -> None:
+    """Raise unless the artifact is internally consistent.
+
+    These are the anti-double-correction rules of STITCH_CALIBRATION.md 3.2,
+    and they are refusals rather than warnings on purpose: the one failure
+    this format cannot afford is a profile that names the camera as owner
+    while also carrying a downstream payload, because then the correction is
+    applied twice and the seam ends up worse than uncorrected.
+
+    A legacy v1 profile -- no ``schema``, no ``correction_owner`` -- is not
+    checked here at all. It means ``downstream`` and applies as it always has.
+    """
+    if d.get("schema") != SCHEMA_V2:
+        return
+
+    owner = d.get("correction_owner")
+    if owner not in CORRECTION_OWNERS:
+        raise SeamCalibrationError(
+            f"correction_owner {owner!r} is not one of {sorted(CORRECTION_OWNERS)}"
+        )
+
+    anchors = read_dx_anchors(d)
+    nonzero = any(dx != 0.0 for _y, dx in anchors)
+
+    if owner not in CURVE_OWNERS and nonzero:
+        raise SeamCalibrationError(
+            f"correction_owner is {owner!r}, which cannot express a per-row "
+            "shear, but dx_anchors is non-zero. A curve nothing applies is a "
+            "packaging bug, not a calibration."
+        )
+
+    stages = d.get("stages") or []
+    applied = {
+        s.get("surface") for s in stages if s.get("state") in ("applied", "would_set")
+    }
+    if "downstream" in owner and "camera_mesh" in applied:
+        raise SeamCalibrationError(
+            "correction_owner names downstream but a camera_mesh stage is "
+            "recorded as applied. That is the double-correction, and it is "
+            "the one case that must never be a warning."
+        )
+
+    if d.get("dy_anchors") is not None and "downstream" in owner:
+        # The downstream corrector is horizontal-only by construction. Dropping
+        # a field silently is how calibrations become mysterious.
+        if "dy_anchors" not in (d.get("dropped") or []):
+            raise SeamCalibrationError(
+                "dy_anchors is set but the downstream surface cannot apply it; "
+                'record the loss explicitly with "dropped": ["dy_anchors"]'
+            )
+
+
+def build_v2_profile(
+    anchors: list[tuple[float, float]],
+    *,
+    correction_owner: str,
+    calibration_id: str,
+    source_width: int = 7680,
+    source_height: int = 2160,
+    seam_x: int = 3840,
+    blend_w: int = 128,
+    scalars: dict | None = None,
+    factory_scalars: dict | None = None,
+    stages: list[dict] | None = None,
+    validation: dict | None = None,
+    calibrated_for: dict | None = None,
+    provenance: dict | None = None,
+) -> dict:
+    """Build the on-disk calibration artifact.
+
+    Not a new format wrapping the old one: this **is** a `StitchProfile` JSON
+    with optional keys added, and `StitchProfile.from_dict` ignores every one
+    of them. A v1 consumer keeps working with no code change, which is the
+    whole reason the schema is shaped this way.
+
+    The `sense` block is not decoration. It is the one paragraph that stops a
+    sign error, and a sign error here applies the misregistration twice rather
+    than removing it.
+    """
+    if correction_owner not in CORRECTION_OWNERS:
+        raise SeamCalibrationError(
+            f"correction_owner {correction_owner!r} is not one of "
+            f"{sorted(CORRECTION_OWNERS)}"
+        )
+    half = blend_w
+    profile = {
+        # v1 core -- read by the shipped downstream corrector, unchanged.
+        "source_width": source_width,
+        "source_height": source_height,
+        "seam_x": seam_x,
+        "dx_anchors": [[float(y), round(float(dx), 4)] for y, dx in anchors],
+        # v2 additions -- ignored by v1 readers.
+        "schema": SCHEMA_V2,
+        "calibration_id": calibration_id,
+        "correction_owner": correction_owner,
+        "sense": {
+            "dx_means": (
+                "px the RIGHT half must move right, at row y, to register with the left"
+            ),
+            "downstream_moves": "right_half",
+            "camera_mesh_moves": "left_half_with_opposite_sense",
+        },
+        "geometry": {
+            "panorama": [source_width, source_height],
+            "half": [source_width // 2, source_height],
+            "blend_w": blend_w,
+            "blend_window": [seam_x - half, seam_x + half],
+            "warped_half": "left",
+            "mesh": {"n": 257, "stride": 260, "frac_bits": 2},
+        },
+        "dy_anchors": None,
+        "calibrated_for": calibrated_for
+        or {
+            "subject_distance_m": None,
+            "basis": None,
+            "fb_px_m": None,
+            "residual_px_at": {},
+        },
+        "stages": stages
+        if stages is not None
+        else _default_stages(correction_owner, scalars, factory_scalars),
+        "validation": validation or {},
+        "provenance": provenance or {},
+    }
+    validate_v2_profile(profile)
+    return profile
+
+
+def _default_stages(
+    owner: str, scalars: dict | None, factory: dict | None
+) -> list[dict]:
+    """The `stages[]` witness for a calibration that has not been applied yet."""
+    stages: list[dict] = []
+    if scalars is not None or factory is not None:
+        stages.append(
+            {
+                "surface": "camera_scalars",
+                "state": "baseline",
+                "values": scalars,
+                "factory": factory,
+            }
+        )
+    if owner == "camera_mesh":
+        stages.append({"surface": "camera_mesh", "state": "pending", "vpe_id": 0})
+        stages.append(
+            {
+                "surface": "downstream",
+                "state": "disabled",
+                "reason": "owned by camera_mesh",
+            }
+        )
+    return stages
 
 
 def load_profile(path: str | Path) -> StitchProfile | None:

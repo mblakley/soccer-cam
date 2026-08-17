@@ -8,11 +8,23 @@
 # onnxruntime/cv2/av to its excludes because it only drives the autocam (GUI)
 # step and must stay light.
 
+# The seam-calibration tool at /stitch reaches the firmware-side toolkit
+# (seam_metric, stitch_apply, lut2d, camsh) by path rather than by import --
+# `reolink-firmware-patching/` is excluded from the wheel and from mypy because
+# it is firmware territory, not application code. Carrying the two directories
+# in as data keeps that separation while letting the installed service run the
+# calibration UI; `stitch_calibration._vpe_dir()` looks for them under
+# sys._MEIPASS, and stitch_apply's own `parents[1]/"runtime"` lookup lands
+# correctly given this layout. Service spec only: the tray excludes cv2/av, so
+# these modules could not import there anyway.
 a = Analysis(
     ['video_grouper\\service\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('reolink-firmware-patching\\vpe', 'vpe'),
+        ('reolink-firmware-patching\\runtime', 'runtime'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

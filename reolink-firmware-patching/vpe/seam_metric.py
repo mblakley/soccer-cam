@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 
 import cv2
@@ -267,7 +268,60 @@ def _fit(xs: np.ndarray, ys: np.ndarray) -> tuple[float, float, float]:
     return float(m), float(c), rms
 
 
-def seam_continuity_residual(
+def interp_dx_anchors(anchors: Sequence[tuple[float, float]], y: float) -> float:
+    """Linear interpolation of `[y, dx]` anchors, clamped outside their range.
+
+    `np.interp`, deliberately: it is what the shipped downstream corrector uses
+    (`stitch_remap.build_dx_lookup`) and what `lut2d.interp_dx` reproduces for
+    the camera. One anchor list has to mean one curve on every surface, or the
+    number an operator tunes against is not the number that gets applied.
+    """
+    if not anchors:
+        return 0.0
+    ys = [float(a[0]) for a in anchors]
+    ds = [float(a[1]) for a in anchors]
+    return float(np.interp(y, ys, ds))
+
+
+@dataclass
+class ShoulderChains:
+    """Structures detected on each shoulder, kept so a *candidate* dx can be
+    scored without re-running the detector.
+
+    Detection is the whole cost of SCR -- linking per-column edge points into
+    chains is a Python loop over hundreds of columns and, on a noisy frame,
+    hundreds of points per column (13 s on a 7680x2160 still). Scoring a fitted
+    chain against a candidate dx is arithmetic on a handful of numbers.
+
+    That split is what makes an interactive tool possible: the operator drags,
+    and every candidate curve is scored against the SAME objective the solver
+    minimises, at interactive rates, because the expensive half was done once
+    when the frame was fetched.
+
+    The chains are stored as raw point arrays rather than as fitted lines
+    because a dx that varies with y *shears* a structure -- it changes the
+    slope, not just the intercept -- so the fit has to be redone against the
+    displaced points. `residual_from_chains` does exactly that.
+
+    What this cannot model: re-detection. A shear changes the gradient field
+    slightly, so a marginal structure could in principle appear or vanish. The
+    displaced-refit path holds the detected set fixed. See
+    `tests/test_seam_metric_incremental.py`, which pins the agreement against a
+    genuinely shifted image rather than asserting it.
+    """
+
+    left: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
+    right: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
+    y0: int = 0
+    y1: int = 0
+    seam_x: int = SEAM_X
+
+    @property
+    def band(self) -> tuple[int, int]:
+        return self.y0, self.y1
+
+
+def detect_shoulder_chains(
     image: np.ndarray,
     seam_x: int = SEAM_X,
     blend_w: int = BLEND_W,
@@ -275,34 +329,10 @@ def seam_continuity_residual(
     band: tuple[int, int] | None = None,
     min_strength: float = 3.0,
     max_slope: float = 0.35,
-    max_slope_diff: float = 0.06,
-    max_gap: float = 40.0,
-    max_fit_rms: float = 1.2,
     min_len: int = 60,
-) -> ScrResult:
-    """Fit near-horizontal structures on both shoulders, extrapolate, compare.
-
-    Only near-horizontal structures can be used, because a structure has to
-    span the whole blend window in x to be extrapolated to the seam from both
-    sides. That has a consequence worth stating: such a line is displaced
-    *vertically* by a horizontal misregistration, by `r_y = -m * dx` where m is
-    its slope. So a single line under-determines dx (a flat line sees nothing),
-    and the estimate comes from regressing r_y on m across lines of differing
-    slope. `implied_dx` is that regression; it is only meaningful when
-    `slope_spread` is non-trivial, which the caller must check.
-
-    SENSE, because it is the opposite of the artifact's and nothing else says
-    so. `implied_dx` here is the misregistration the right half currently
-    CARRIES -- positive means its content sits that many px too far right. The
-    profile's `dx_anchors` are the CORRECTION, "px the right half must move
-    right" (`stitch_remap.build_dx_lookup`, STITCH_CALIBRATION.md 4.4), so the
-    two are equal and opposite. `stitch_solver` fits the correction directly
-    rather than negating this, and `tests/test_stitch_solver.py` pins the
-    relationship so the trap stays visible.
-
-    `implied_dx` is also a single whole-frame number, not a curve: it assumes
-    one dx for every row. A per-row shear needs the joint fit in
-    `stitch_solver.solve`, which this deliberately is not.
+) -> ShoulderChains:
+    """The expensive half of SCR: find near-horizontal structures on both
+    shoulders. Chain x is absolute image column; chain y is relative to `y0`.
     """
     gray = to_gray(image)
     y0, y1 = band or default_band(gray.shape[0])
@@ -316,19 +346,57 @@ def seam_continuity_residual(
     right_xs = right_xs[(right_xs >= 0) & (right_xs < gray.shape[1])]
 
     max_step = max_slope * 1.5 + 1.0
-    left = _chains(grad, left_xs, min_strength, max_step, min_len)
-    right = _chains(grad, right_xs, min_strength, max_step, min_len)
+    return ShoulderChains(
+        left=_chains(grad, left_xs, min_strength, max_step, min_len),
+        right=_chains(grad, right_xs, min_strength, max_step, min_len),
+        y0=y0,
+        y1=y1,
+        seam_x=seam_x,
+    )
 
-    def usable(chs):
+
+def residual_from_chains(
+    chains: ShoulderChains,
+    dx_anchors: Sequence[tuple[float, float]] | None = None,
+    *,
+    max_slope: float = 0.35,
+    max_slope_diff: float = 0.06,
+    max_gap: float = 40.0,
+    max_fit_rms: float = 1.2,
+) -> ScrResult:
+    """The cheap half of SCR: fit, match across the seam, and summarise.
+
+    `dx_anchors` are `[y, dx]` in the coordinates of the image the chains were
+    detected on, with the sign convention of the whole project: **dx is the
+    number of pixels the RIGHT half must move right, at row y, to register with
+    the left**. Passing them scores the curve *as if* it had been applied,
+    which is what lets an operator see the objective move while dragging.
+
+    The displacement is applied to the right-hand chain points and the line is
+    refitted, not applied to the fitted intercept: a dx that varies with y is a
+    shear, and a shear rotates a sloped structure as well as translating it.
+    `y = m*x + c` sheared by `dx(y)` with local ramp `k` becomes
+    `m' = m/(1 + m*k)` -- a 1.3% slope change at the extremes of this camera's
+    range, small but free to get right.
+    """
+    y0, y1, seam_x = chains.y0, chains.y1, chains.seam_x
+
+    def fits(
+        chs: list[tuple[np.ndarray, np.ndarray]], displace: bool
+    ) -> list[tuple[float, float, float, int]]:
         out = []
         for xs, ys in chs:
+            if displace and dx_anchors:
+                xs = xs + np.array(
+                    [interp_dx_anchors(dx_anchors, float(y) + y0) for y in ys]
+                )
             m, c, rms = _fit(xs, ys)
             if abs(m) > max_slope or rms > max_fit_rms:
                 continue
             out.append((m, c, rms, len(xs)))
         return out
 
-    lfits, rfits = usable(left), usable(right)
+    lfits, rfits = fits(chains.left, False), fits(chains.right, True)
 
     obs: list[ScrObservation] = []
     taken: set[int] = set()
@@ -390,6 +458,66 @@ def seam_continuity_residual(
             w = np.clip(1.345 * scale / np.maximum(np.abs(resid), 1e-9), 0.0, 1.0)
         res.implied_dy, res.implied_dx = float(beta[0]), float(beta[1])
     return res
+
+
+def seam_continuity_residual(
+    image: np.ndarray,
+    seam_x: int = SEAM_X,
+    blend_w: int = BLEND_W,
+    shoulder_w: int = SHOULDER_W,
+    band: tuple[int, int] | None = None,
+    min_strength: float = 3.0,
+    max_slope: float = 0.35,
+    max_slope_diff: float = 0.06,
+    max_gap: float = 40.0,
+    max_fit_rms: float = 1.2,
+    min_len: int = 60,
+) -> ScrResult:
+    """Fit near-horizontal structures on both shoulders, extrapolate, compare.
+
+    Only near-horizontal structures can be used, because a structure has to
+    span the whole blend window in x to be extrapolated to the seam from both
+    sides. That has a consequence worth stating: such a line is displaced
+    *vertically* by a horizontal misregistration, by `r_y = -m * dx` where m is
+    its slope. So a single line under-determines dx (a flat line sees nothing),
+    and the estimate comes from regressing r_y on m across lines of differing
+    slope. `implied_dx` is that regression; it is only meaningful when
+    `slope_spread` is non-trivial, which the caller must check.
+
+    SENSE, because it is the opposite of the artifact's and nothing else says
+    so. `implied_dx` here is the misregistration the right half currently
+    CARRIES -- positive means its content sits that many px too far right. The
+    profile's `dx_anchors` are the CORRECTION, "px the right half must move
+    right" (`stitch_remap.build_dx_lookup`, STITCH_CALIBRATION.md 4.4), so the
+    two are equal and opposite. `stitch_solver` fits the correction directly
+    rather than negating this, and `tests/test_stitch_solver.py` pins the
+    relationship so the trap stays visible.
+
+    `implied_dx` is also a single whole-frame number, not a curve: it assumes
+    one dx for every row. A per-row shear needs the joint fit in
+    `stitch_solver.solve`, which this deliberately is not.
+
+    Detection and scoring are split (`detect_shoulder_chains` /
+    `residual_from_chains`) so an interactive caller can re-score a candidate
+    dx without paying for detection again; this function is the one-shot
+    composition of the two and is what every batch caller should use.
+    """
+    return residual_from_chains(
+        detect_shoulder_chains(
+            image,
+            seam_x=seam_x,
+            blend_w=blend_w,
+            shoulder_w=shoulder_w,
+            band=band,
+            min_strength=min_strength,
+            max_slope=max_slope,
+            min_len=min_len,
+        ),
+        max_slope=max_slope,
+        max_slope_diff=max_slope_diff,
+        max_gap=max_gap,
+        max_fit_rms=max_fit_rms,
+    )
 
 
 # -- acceptance --------------------------------------------------------------

@@ -137,6 +137,7 @@ form.inline { display: inline; margin-left: 0.5rem; }
 <nav style="margin: 0 0 1rem;">
 <a class="btn btn-ghost" href="/config">Configure</a>
 <a class="btn btn-ghost" href="/setup">Setup wizard</a>
+<a class="btn btn-ghost" href="/stitch">Seam calibration</a>
 </nav>
 
 __AUTH_FLAGS_BANNER__
@@ -880,6 +881,15 @@ def create_app(
         from video_grouper.web.setup.router import build_router as _build_setup
 
         app.include_router(_build_setup(config_path))
+
+        # And the stitch-seam calibration tool at /stitch/*. Same trigger
+        # again -- it reads the camera credentials out of config.ini and
+        # writes the calibration profile next to it.
+        from video_grouper.web.stitch_calibration import (
+            build_router as _build_stitch,
+        )
+
+        app.include_router(_build_stitch(config_path, storage))
 
     # Phase 4: master nodes expose the worker-coordination API.
     if node_role == "master":
