@@ -109,6 +109,16 @@ A third investigation was completed:
    ceiling at ~330 Mpix/s (16.6 Mpix × 19.83 fps). Typical for a Novatek
    NT9856x marketed as "4K60" (~500 Mpix/s peak, lower sustained).
 
+   > **CORRECTED 2026-08-17 — see [`FPS_CEILING.md`](FPS_CEILING.md).** The
+   > ~330 Mpix/s figure is right; attributing it to the **encoder** is not. The
+   > H.265 engine was later measured directly off `/proc/hdal/venc/top` at
+   > **≈465 Mpix/s** — four geometries, two codecs, two sessions, all within ~2 %
+   > — and it runs at 83 % duty, never binding. The 330 Mpix/s belongs to the
+   > **userspace frame pump** in `device`, which moves the main stream because
+   > `VIDEOENC 0 in[0]` is the one video path that is not kernel-bound. Shedding
+   > the sub stream to free encoder time changed delivered fps by −0.07,
+   > confirming the encoder was not the constraint.
+
    **What the patch is still worth despite the encoder ceiling:** the
    sensor's per-frame exposure window shrinks from 50 ms (at 20 fps) to 40
    ms (at 25 fps), giving ~20% less motion blur on each retained frame.
@@ -428,6 +438,14 @@ The lower-resolution profile (4096×1152) caps natively at 20 fps too. So:
 firmware are for single-sensor 1080p models that share the same code base.
 **Do not flash the fps patch as your daily driver** — it only lies in the
 dropdown without delivering frames.
+
+> **SUPERSEDED 2026-08-17 — see [`FPS_CEILING.md`](FPS_CEILING.md).** 20 fps is
+> not a hardware ceiling. It is where the **userspace frame pump** in `device`
+> saturates (~332 Mpix/s), with a 99 %-busy shared IPP engine behind it. Starving
+> the aux-stream inputs reaches **21.179 fps at 7680×2160** and **23.395 at
+> 4096×1152** — so 4096×1152 does not cap at 20 either. The advice not to flash
+> the fps dropdown patch on its own still stands, and for the reason given: it
+> changes the dropdown, not the delivery.
 
 The bitrate-only patch (build 4879) is the recommended daily build.
 
@@ -1023,7 +1041,13 @@ question moot.
   (dropdown shows 25/30) but the encoder silently clamps to 20 fps at
   16MP. No `cmp w_, #0x14` hardcoded cap exists in any app binary
   (cgi/router/device/recorder) NOR in kdrv_h26x.ko / kdrv_videocapture.ko.
-  **RESOLVED 2026-08-15 — see section 15.** It is the first option: a
+  **RESOLVED 2026-08-15 — see section 15**, and then
+  **[`FPS_CEILING.md`](FPS_CEILING.md), which supersedes section 15.** Two
+  corrections to the bullet above: `sen_chg_fps_os08c10` **does** have a clamp —
+  it lives one call down in `sen_calc_chgmode_vd_os08c10`, which silently resets
+  any request above 25.00 fps by forcing `VTS = VTS_base`. And the binding stages
+  are the userspace pump and a saturated shared IPP, not the capture front-end.
+  It is the first option: a
   throughput ceiling in the **capture front-end** (sensor readout + SIE/ISP for
   two 3840x2160 streams), not in the encoder. The requested capture rate is
   freely settable (patching `0x8bb1c` to 30 gives `VIDEOCAP frc = 30/1`), but
@@ -1170,6 +1194,28 @@ The 20 fps behaviour at 16MP comes from:
 ---
 
 ## 15. Where the 20 fps ceiling actually is (measured on-camera, 2026-08-15)
+
+> **SUPERSEDED 2026-08-17 — see [`FPS_CEILING.md`](FPS_CEILING.md).** This
+> section's *location* of the ceiling (the capture front-end rather than the
+> encoder) was right in spirit, but two of its load-bearing numbers are wrong and
+> its mechanism is wrong:
+>
+> - **PCLK is 150 MHz, not 120.** §15 infers 120 MHz from a *delivered* 20.00 fps.
+>   Delivered is not capture. `/proc/kflow_sen/info` reports `pclk 150000000`, the
+>   mode table closes on 149.95 MHz three independent ways, and the caveats block
+>   near line 128 of this same file already said 150 MHz. The full-height sensor
+>   ceiling is **26.7 fps, not 21.33**.
+> - **The 21 fps result was verified from `r_frame_rate = 21/1`** — the container
+>   header, which on this camera always reports the *requested* rate. The camera
+>   was delivering 19.86 fps at the time.
+> - **The mechanism is not "sensor readout plus SIE/ISP".** Capture is clean
+>   (25/s, zero drops on both sensors). The binding stages are a **userspace frame
+>   pump** in `device` and a **shared IPP engine at 99 %** starving the second
+>   sensor's pipe.
+>
+> §15's *remedy* — windowed sensor readout — is still correct, for a different
+> reason: it cuts ISP load, not sensor time. Best measured result to date is
+> **21.179 fps at 7680×2160**.
 
 Earlier sections concluded "sensor-limited at 20 fps" and "encoder ASIC drops
 ~20% of frames". Both were inferred from the *outside* — nobody had a shell, so
@@ -1426,6 +1472,12 @@ itself is still unknown** — it travels behind a userspace pointer and the
 tracer logged only the 32-byte ioctl struct, so no dimension appears anywhere in
 either trace. `ISF_PARAM_MAP.md` §7 lists the single-command captures needed on
 the next camera visit, `cat /proc/hdal/flow` first.
+
+> **SUPERSEDED 2026-08-17 — see [`FPS_CEILING.md`](FPS_CEILING.md).** The
+> paragraph below rests on §15's retired 120 MHz / VTS model. 2160 rows do not
+> cap VTS at ~21.3 fps; at the real 150 MHz PCLK the sensor's full-height ceiling
+> is 26.7 fps. What actually caps delivery is the userspace pump and a saturated
+> shared IPP.
 
 **Practical consequence: on this firmware 21 fps is the hard ceiling**, because
 the sensor must produce 2160 rows for the ISP to bind, and 2160 rows caps VTS at
