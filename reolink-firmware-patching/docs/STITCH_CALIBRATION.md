@@ -1022,6 +1022,78 @@ scalars; the §6.2 push plus §7 install for the mesh; nothing at all for downst
 re-fetches a fresh `Snap` and re-scores, so the operator sees the before/after numbers, not a
 promise.
 
+### 11.1 Two corrections to the above, from Mark, 2026-08-17
+
+Both change the shape of the tool, so they are recorded here rather than only in the code.
+
+**The client is a phone, at the pitch side.** *"I will connect to the camera from my phone while on
+the field, so setting this up in the camera manager app will work."* An earlier reading of this
+section assumed the field ruled out a live view and made the file door primary; that inference was
+wrong. The live `Snap` is the primary door and the loop is: tripod → aim → snap → adjust → apply →
+re-snap. Consequences, all implemented in `video_grouper/web/stitch_calibration.py`: touch gestures
+(axis-locked one-finger drag, pinch zoom, thumb-sized roll and nudge controls) rather than
+mouse-and-keyboard; a single-column layout for a 390 px viewport with everything secondary folded
+away, because a pair of 640×2160 strips and a tall curve widget do not fit by shrinking; no external
+font or CDN request; every score request bounded by a 9 s timeout, with numbers that go visibly
+stale the instant the curve moves and a backoff retry that recovers them. Reaching the app from a
+phone needs `[TTT] auth_server_bind` set to the machine's LAN address — the host allowlist is
+loopback plus that value, and `0.0.0.0` does not widen it **[R]**. A new `POST /stitch/aim` returns
+a 1/8-scale panorama (~35 KB) with the seam marked, cheap enough to press repeatedly while someone
+walks into position, and it never disturbs a scored session.
+
+**The calibration target is a person standing in the seam.** *"It's easy to see misregistration if
+there's a person in the seam."* This is the answer to the anomaly in §9.1: SCR fits **near-horizontal**
+structures and `r_y = -m·dx`, so a horizontal edge is *invariant* under the horizontal shift being
+tuned. On a sideline mount almost everything crossing the vertical seam runs horizontally — far
+touchline, treeline, painted banners — so a frame can produce dozens of observations, pass every
+coverage gate, and carry no information at all. Measured **[M]**:
+
+- On three games, of 11, 61 and 88 accepted structures, **0, 1 and 2** were steeper than |m| = 0.15;
+  restricting the dx sweep to the subset that can see dx moved p90 by **1.3%, 2.9% and 1.8%** — no
+  better than the full set. Re-weighting does not rescue these frames; only different structure does.
+- Across 87 frames of the archived set (`F:\archive\duo3_stitch\frames`), whole-band `|ln SSR|`
+  cannot distinguish a corridor with upright structure from one without (median **0.095** against
+  **0.088**), while the same metric restricted to the rows holding that structure separates them by
+  an order of magnitude (**1.889** against **0.170**). 48 of the 87 read below the 0.10 noise floor
+  whole-band — "a perfect seam" — and 16 of those have upright structure whose own rows read a median
+  of **1.49**.
+- On one frame with a player straddling the seam, whole-band `|ln SSR|` is **0.062** and the player's
+  rows read **1.180** (2.188 over the strongest band alone).
+
+So the UI makes standing in the seam a numbered **step**, shows where the seam falls before the snap
+so the operator can place the person, detects whether anything upright is actually in the corridor
+(`vpe/seam_vertical.py`, ~60 ms) and says *put a person in the seam* when nothing is, reports SCR's
+steerable subset beside the whole-set number rather than redefining it, and reports `|ln SSR|` over
+the target's rows as well as over the field band. Per §12.1 the person stands where play happens, not
+beside the tripod, and `calibrated_for.subject_distance_m` records which depth that was.
+
+**The eye is the instrument; the numbers are aids.** The automatic solver (#136) refuses on all 27
+archived games for the same geometric reason — median |slope| over 4239 observations is 0.034, so a
+10 px error moves the median observation 0.34 px, under its own ~1.3 px noise — and it establishes
+the part that bears on this UI: a person standing in the seam is *inside* the blend window, where
+the two sensors are already superposed, so there is no separated pair to extrapolate from and no
+shoulder-matching estimator can score them (12 vertical-structure-rich frames from one camera gave
+`implied_dx` spanning −55..+141 px, 4 of them producing no observations at all) **[M]**. What does
+work is a human looking at whether the body is continuous: with ±20 px injected the tearing is
+unmistakable at 4× and invisible to the metric **[M]**. The UI is therefore the path that works, not
+the fallback, and it says so — every number is presented as secondary to the picture.
+
+**This is a check-and-correct tool, and "nothing to change" is the common answer.** 52 of 96
+archived frames sit below the SSR noise floor (#136's sample; 48 of 87 in the independent sample
+above, same conclusion) and players straddling the seam look continuous, so it is not established
+that these placements are misregistered at all **[M]**. The job is the knocked
+tripod, the remount, the new field. The UI states that in the lede, and when `|ln SSR|` is at or
+below the noise floor it says so as a verdict in its own right rather than leaving an operator to
+hunt for a correction that is not there.
+
+Two honest limits. `|ln SSR|` on the target is raised by the object *existing* inside the window as
+well as by misregistration (§9.2 says the same of the 0.3 m live frame), so it is a before/after
+comparator on a fixed scene, not an absolute — the UI says so, and the separation figures above are
+evidence that the *metric responds to upright structure*, never evidence that those frames are
+broken. And note the deliberate difference from §10, which rejects players: that is the automatic
+solver accumulating observations across a game where players move and straddle unknown depths. A
+cooperating person standing still at a stated distance is the opposite case.
+
 ---
 
 ## 12. What this does not fix
