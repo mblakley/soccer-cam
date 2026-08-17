@@ -17,7 +17,8 @@ files from Reolink's portal yourself (see "Acquiring stock firmware" below).
 | Mid-game truncation on a full card | last 8K segment lost when the card fills | **free-space reserve 500 MiB → 20 GiB** so the recycler always keeps a full segment's headroom | `builds/build_soccercam_v2.sh` |
 | Home power-on stub recordings | a junk clip every home boot | **auto-deleted** (netstate v2 stub cleanup) | `builds/build_soccercam_v2.sh` |
 | Power-cut recording recovery | orphaned (moov-less) clip discarded | **rebuilt in place** — video + best-effort audio — at next boot | `builds/build_soccercam_comprehensive.sh` |
-| FPS dropdown cap (web UI) | 20 | 25 (encoder still ceilings ~20) | `builds/build_fps_cap.sh` |
+| FPS dropdown cap (web UI) | 20 | 25 — but the *delivered* rate is set elsewhere; see `docs/FPS_CEILING.md` | `builds/build_fps_cap.sh` |
+| Delivered frame rate @ 7680×2160 | 19.86 fps | **21.18 fps** (capture 25 + aux-stream inputs starved to 640×192) | `builds/build_fps_demo.sh` |
 | Shutter / exposure mode | AE only | full Auto / LowNoise / Anti-Smearing / Manual | runtime API only — `runtime/set_exposure.sh` |
 
 The `build_*.sh` scripts each carry the patches above them in this list,
@@ -28,7 +29,9 @@ so you can pick the highest-tier build for your needs:
 - **`build_netstate.sh`** = HTTP unlock + bitrate cap + auto-toggle daemon.
 - **`build_soccercam_v2.sh`** = the above **+ netstate v2 (stub cleanup) + free-space reserve**. Fixes the full-card mid-game truncation (the raised reserve makes the camera's own recycler keep a full segment's headroom free).
 - **`build_soccercam_comprehensive.sh`** = `v2` **+ boot-time power-cut recovery** (`recover_mp4` + `S35_RecRecover`, video + best-effort AAC audio). **Recommended for the soccer-cam use case.** Audio recovery needs the Helix AAC source fetched locally (see `recover/helix/README.md`); without it the build falls back to video-only recovery automatically.
-- **`build_fps_cap.sh`** = HTTP unlock + bitrate cap + fps dropdown lift. Available for experimentation; daily-driver use is **not** recommended. Raising the rate makes recorded fps *worse*, not better: at a 30 fps setting the camera delivers a measured **16.67 fps**, against 19.92 fps at the stock 20 setting. The pipeline is throughput-bound at roughly 330 Mpix/s and over-committing it costs ~16%. See `docs/FIRMWARE_PATCH_NOTES.md` section 15.
+- **`build_fps_cap.sh`** = HTTP unlock + bitrate cap + fps dropdown lift. Available for experimentation; daily-driver use is **not** recommended on its own. Lifting the dropdown alone makes recorded fps *worse*, not better: at a 30 fps setting the camera delivers a measured **16.67 fps**, against 19.92 fps at the stock 20 setting. The main stream is throughput-bound at roughly 330 Mpix/s and over-committing it costs ~16%.
+- **`build_fps_demo.sh`** = capture-fps + advertised-list + aux-stream geometry patches, and the builder behind the current best measured result: **21.18 fps at 7680×2160**, 23.40 at 4096×1152. It refuses aux geometries needing more than a 16× ISE downscale, and asserts the boot chain is SHA-256 identical to the base pak before writing the CRC. Read `docs/FPS_CEILING.md` before using it.
+- **`build_tge_retime.sh`** = SoC timing-generator retime (capture past 25 fps). **Built and verified but never flashed** — capture is not the binding stage, so the gain cannot surface until the ISP is freed. It also lacks the boot-chain assertion; back-fill that first. See `docs/FPS_CEILING.md` O3.
 
 The recovery binary has its own repeatable correctness gate:
 `bash verify/test_recover_mp4.sh <a_good_recording.mp4>` builds `recover_mp4`,
@@ -45,6 +48,11 @@ verified, daily-driver setup. Includes the exact firmware version
 byte-level patch recipes, encoder-bottleneck investigation, sensor
 characterization, and reasoning behind the daily-driver build choices.
 
+**What limits the frame rate, and what we actually achieved**: see
+`docs/FPS_CEILING.md` — the result up front, every measurement, and the
+hypotheses that were tried and falsified. It supersedes section 15 of the patch
+notes. Per-stage readings are in `docs/FPS_STAGE_EVIDENCE.md`.
+
 ## Directory layout
 
 ```
@@ -55,8 +63,14 @@ reolink-firmware-patching/
 ├── .gitignore                       # excludes *.pak, secrets, artifacts
 ├── docs/
 │   ├── APP_REPLACEMENT_DESIGN.md    # design: replace app/device, keep kernel+ISP+drivers
+│   ├── BRICK_POSTMORTEM.md          # the 4917 outage, and the recovery that confirmed it
+│   ├── ENCODER_ROI_QP.md            # per-region QP bias (static analysis)
 │   ├── FIRMWARE_PATCH_NOTES.md      # complete reference (RE recipes + byte offsets)
-│   └── PATCHING_GUIDE.md            # step-by-step stock -> flashed -> verified
+│   ├── FPS_CEILING.md               # what limits frame rate + what we achieved (read this first)
+│   ├── FPS_STAGE_EVIDENCE.md        # per-stage readings behind FPS_CEILING.md
+│   ├── ISF_PARAM_MAP.md             # the ISF ioctl protocol + param id map
+│   ├── PATCHING_GUIDE.md            # step-by-step stock -> flashed -> verified
+│   └── STITCH_CALIBRATION.md        # design: stitch-seam calibration tool
 ├── pak/                             # .pak container toolchain (Python)
 │   ├── pak.py                       # parse / inspect
 │   ├── extract.py                   # split into sections
@@ -66,7 +80,10 @@ reolink-firmware-patching/
 │   ├── build_http_unlock.sh
 │   ├── build_bitrate_cap.sh
 │   ├── build_fps_cap.sh
+│   ├── build_fps_demo.sh            # capture fps + aux geometry; boot-chain SHA-256 assert
+│   ├── build_tge_retime.sh          # TGE hd_period retime -- NOT flashed, see FPS_CEILING.md
 │   ├── build_netstate.sh
+│   ├── build_roi_qp.sh              # per-region QP bias
 │   ├── build_soccercam_v2.sh        # + free-space reserve + netstate v2 (stub cleanup)
 │   ├── build_soccercam_comprehensive.sh  # + power-cut recovery (video+audio)
 │   └── BUILD_LOG.md                 # artifact tracker (sha256 / CRC / contents)
@@ -78,13 +95,22 @@ reolink-firmware-patching/
 │       ├── README.md                # how to fetch + build Helix (RPSL, gitignored)
 │       ├── compat/                  # flat-memory stubs so Helix cross-compiles
 │       └── aac_split_test.c         # validates the frame splitter vs ground-truth stsz
+├── vpe/                             # 2-D warp mesh (VPE DCE) reader/writer
+│   ├── README.md                    # argument layout, liveness gate, on-camera use
+│   ├── lut2d.py                     # parse / validate / selftest the mesh
+│   └── lut2d_ioctl.c                # on-camera get/set client
 ├── runtime/                         # files installed into rootfs / live-API settings
 │   ├── set_exposure.sh              # exposure mode / shutter / gain (no flash)
 │   ├── check_isp.sh                 # verify current ISP state
 │   ├── probe_isp.sh                 # dump state + allowed ranges
+│   ├── camsh.py                     # camera shell client; refuses destructive commands
+│   ├── isfbind.c                    # freestanding ISF bind/get client (no libc)
 │   ├── netstate/
 │   │   ├── S99_NetState.template    # v1 daemon (build_netstate.sh)
 │   │   └── S99_NetState_v2.template # v2: home/away + power-on stub cleanup
+│   ├── roiqp/
+│   │   ├── S37_RoiQp                # ROI/QP init script
+│   │   └── roi.conf.example         # region definitions
 │   └── recover/
 │       └── S35_RecRecover           # boot-time recovery init script
 └── verify/                          # empirical checks
@@ -92,6 +118,9 @@ reolink-firmware-patching/
     ├── test_setenc.sh               # probe SetEnc at a target bitrate
     ├── get_performance.sh           # poll GetPerformance (live rate)
     ├── fetch_and_analyze.sh         # download latest recording + ffprobe
+    ├── measure_clip_fps.py          # DELIVERED fps (frames over PTS span) -- headers lie
+    ├── check_recording_default.sh   # gate a pak: must not record on the home network
+    ├── roi_qp_heatmap.py            # visualise the encoder's per-region QP
     └── test_recover_mp4.sh          # build + round-trip-validate the recovery binary
 ```
 
