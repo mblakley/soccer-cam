@@ -83,6 +83,30 @@ open("flat.bin", "wb").write(lut.to_bytes())
 Factory dumps live in `F:\archive\duo3_stitch\dumps\` — they are calibration data
 for one physical camera, not source, so they are not tracked here.
 
+## Reading the mesh — the argument layout that actually works
+
+```
+ioctl(fd, 0xc008760d, buf)     the argument IS the buffer, not a pointer to it
+buf[0] = vpe id
+buf[1] = n                     <- the mesh dimension
+buf[2..] = table, written by the driver
+```
+
+`n` goes in **`buf[1]`**. Put it anywhere else and the driver returns
+`align4(0)*0` entries **and still reports success** — a structurally perfect,
+entirely empty mesh. Every structural gate passes on that file by construction,
+which is why `selftest` now checks liveness before anything else.
+
+Established by sweeping calling conventions against the procfs oracle:
+
+```
+echo 'r get_2dlut_param 0' > /proc/hdal/vendor/vpe/cmd; cat /proc/hdal/vendor/vpe/cmd
+2dlut[0] = 0x  4200A0, x = 40, y = 16
+```
+
+Any correct response must contain that word. Confirmed live: 66 049 non-zero of
+66 049 control points, `x 4.25..3397.75  y 16.50..2154.75`, 19/19 gates.
+
 ## On-camera use
 
 ```

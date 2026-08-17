@@ -20,6 +20,12 @@ Each entry is the *source* pixel the destination control point samples from,
 in quarter-pixel units, so the representable range is 0 .. 16383.75 and every
 decodable coordinate is a multiple of 0.25.
 
+On-camera read layout, established by sweeping against the procfs oracle
+`get_2dlut_param`: `ioctl(fd, 0xc008760d, buf)` where the argument IS the
+buffer, `buf[0]` is the VPE id and **`buf[1]` is the mesh dimension n**.
+The driver writes `align4(n)*n` entries from `buf[2]`, so n=0 returns an
+empty table *and* reports success.
+
 CLI:
     python lut2d.py info     <lut.bin>
     python lut2d.py dump     <lut.bin> [row]
@@ -296,6 +302,28 @@ def selftest(fixture: str | None = None) -> int:
     print(f"\nfactory mesh gates ({fixture})")
     blob = open(fixture, "rb").read()
     lut = Lut2D.from_bytes(blob)
+
+    # Liveness FIRST. An all-zero table satisfies every structural invariant
+    # below by construction -- right size, zero padding, byte-identical
+    # round-trip, whole quarter-pixels -- so without this the suite blesses an
+    # empty read as a valid mesh. That is not hypothetical: the on-camera
+    # reader put the mesh dimension in the wrong argument word, the driver
+    # returned align4(0)*0 entries with a success code, and selftest reported
+    # 17/17 on a file containing nothing.
+    live = sum(1 for v in lut.entries if v)
+    expect = lut.n * lut.n
+    g.check(
+        "table is populated, not an empty read",
+        live >= expect * 0.99,
+        f"{live} non-zero of {expect} control points",
+    )
+    bx0, by0, bx1, by1 = lut.bounds()
+    g.check(
+        "mesh spans a real frame, not a single point",
+        (bx1 - bx0) > 100 and (by1 - by0) > 100,
+        f"span {bx1 - bx0:.1f} x {by1 - by0:.1f} px",
+    )
+
     g.check(
         "header located by padding invariant",
         True,
