@@ -77,9 +77,32 @@ Note that `seam_metric.ScrResult.implied_dx` is reported in the OPPOSITE sense
 half currently carries, not the correction for it. This module does not use it;
 `tests/test_stitch_solver.py` pins the relationship so the trap stays visible.
 
+MEASURED VERDICT ON THIS OBJECTIVE (27 archived Duo 3 games, 2026-08-17).
+
+It does not work on fused game footage, and the reason is structural rather than
+a matter of tuning. On a soccer field almost everything crossing a vertical seam
+runs horizontally, and a horizontal edge is invariant under a horizontal shift:
+over 4239 archived observations the median |slope| is 0.034, so a 10 px
+misregistration moves the median observation 0.34 px -- under its own noise. A
+structure has to span the blend window in x to be usable at all, which is
+exactly what forces it to be near-horizontal, so the admissible features and the
+informative features barely overlap.
+
+Swept on real frames, the objective moves 4-22% across +/-32 px, usually with
+its best score at a sweep endpoint, and on one frame a deliberate 32 px break
+scored BETTER than the untouched frame. Selecting frames rich in vertical
+structure at the seam does not help: a person at the seam sits INSIDE the blend
+window, where the two sensors' views are already superposed, so there is no
+left/right pair to extrapolate and compare. That information is real but it is
+an echo-separation problem, not this one. See docs/STITCH_CALIBRATION.md 10.2.
+
+Hence `sweep_dx` / `require_responsive_objective` below: no curve is trustworthy
+until the objective is shown to respond to the parameter being solved for, and
+no count-and-coverage gate can stand in for that.
+
 CLI:
     python stitch_solver.py <frame.jpg> [more.jpg ...] [--seam-x=N] [--json]
-                            [--validate]
+                            [--validate] [--sweep]
 Exit 0 on a fit, 1 on a refusal (with the measurement report), 2 on usage.
 """
 
@@ -87,6 +110,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -119,6 +143,24 @@ MIN_OBSERVATIONS = 8
 MIN_ROW_BANDS = 3
 MIN_HEIGHT_COVERAGE = 0.60
 
+# ...and one floor 9.3 does not have, added because 27 games of real footage
+# walked straight through the ones it does. `height_coverage` is a RANGE --
+# (y_max - y_min) / band -- so two stragglers at the extremes satisfy it while
+# every other observation sits in one place. Measured on the archive: range
+# coverage read 81-98% on 24 of 27 games while 73-98% of the observation MASS
+# was in the top row band, and the smallest band's share never exceeded 9.2%.
+# Leverage comes from mass, not from extremes, so the gate has to weigh mass.
+MIN_ROW_BAND_FRACTION = 0.10
+
+# Two frames minimum, so the estimate can be asked twice. The failure that
+# actually bites on game footage is not too little structure -- it is too much
+# false structure: `seam_metric`'s matcher pairs any left/right pair whose
+# extrapolations land within 40 px, and a crowd at mixed depths supplies plenty.
+# Those pass every count-and-coverage condition. They do NOT repeat across
+# frames, because they are re-drawn each time, so cross-frame agreement is the
+# cheap discriminator (see `_frame_consistency`).
+MIN_CONTRIBUTING_FRAMES = 2
+
 # `dx` enters every observation multiplied by the structure's slope, so with no
 # slope spread the translate term is collinear with the vertical offset. This
 # threshold only catches the degenerate case; the standard-error gate below
@@ -129,6 +171,11 @@ MIN_SLOPE_SPREAD = 0.02
 # The gate that matters. 10 stops iterating at `SCR p90 < 1.0 px`; a fit whose
 # own uncertainty exceeds the target it is aiming at has not measured anything.
 MAX_DX_STDERR_PX = 1.0
+
+# Each half of the cross-frame check carries about half the data, so allow it a
+# looser bar than the full fit -- but only a looser one. Past this the halves
+# are not estimates, and comparing them proves nothing (see `_frame_consistency`).
+MAX_HALF_STDERR_PX = 3.0
 
 # Sub-pixel edge localisation floor. `seam_metric._edge_positions` refines each
 # peak with a parabola through three samples, which is good to well under a
@@ -269,10 +316,16 @@ def coverage_of(
     return {
         "n": len(observations),
         "n_frames": n_frames,
-        "n_frames_contributing": sum(1 for c in per_frame if c),
+        # Counted from the observations themselves, not from the caller's
+        # per-frame tally: `solve` can be handed observations directly, and a
+        # gate that depends on a bookkeeping argument is a gate that can be
+        # satisfied by passing the right argument.
+        "n_frames_contributing": len({o.frame for o in observations}),
         "observations_per_frame": per_frame,
         "band": [int(y0), int(y1)],
         "row_band_counts": counts,
+        "row_band_fractions": [round(c / max(len(ys), 1), 4) for c in counts],
+        "min_row_band_fraction": min(counts) / max(len(ys), 1),
         "row_bands_covered": sum(1 for c in counts if c),
         "row_bands": MIN_ROW_BANDS,
         "height_coverage": float((ys.max() - ys.min()) / height)
@@ -332,6 +385,177 @@ def _irls(
     return beta, resid, w, scale
 
 
+def _constant_dx(
+    observations: list[Observation], residuals: np.ndarray | None = None
+) -> tuple[float, float] | None:
+    """Fit a single whole-frame `dx` to a subset: `r_y = dy + m*dx`.
+
+    Two parameters, so it needs slope spread but no y spread at all. That is
+    exactly what the split-half depth check needs: each half spans too few rows
+    to determine a shear, but each can say what the seam offset *is* over its
+    own rows. Returns `(dx, stderr)`, or None if the subset cannot support even
+    that.
+    """
+    if len(observations) < 4:
+        return None
+    m = np.array([o.slope for o in observations], dtype=float)
+    if float(m.max() - m.min()) <= MIN_SLOPE_SPREAD:
+        return None
+    a = np.column_stack([np.ones_like(m), m])
+    r = (
+        np.array([o.residual_y for o in observations], dtype=float)
+        if residuals is None
+        else np.asarray(residuals, dtype=float)
+    )
+    prior_w = np.array([1.0 / o.variance for o in observations], dtype=float)
+    try:
+        beta, _resid, w, scale = _irls(a, r, prior_w)
+        cov = max(scale * scale, 1.0) * np.linalg.inv(a.T @ (a * w[:, None]))
+    except np.linalg.LinAlgError:
+        return None
+    return float(beta[1]), float(np.sqrt(max(cov[1, 1], 0.0)))
+
+
+def _frame_consistency(
+    observations: list[Observation],
+    *,
+    b_scaled: float = 0.0,
+    y_ref: float = 0.0,
+    y_half: float = 1.0,
+) -> dict | None:
+    """Do independent halves of the footage agree on the seam offset?
+
+    The gate that catches the failure the coverage conditions cannot. On a busy
+    scene at mixed depths, `seam_metric`'s matcher pairs any left and right
+    structure whose extrapolations land within `max_gap` (40 px) of each other,
+    and a crowd, a treeline and a car park supply plenty of pairs that are not
+    the same structure. Those false observations pass every count-and-coverage
+    condition in 9.3 -- there are lots of them, they are spread over the
+    height, they have varied slopes -- and they are *noise dressed as data*.
+
+    Formal standard errors do not always catch that, because they are computed
+    against a noise model that assumes the pairings are real. Splitting by FRAME
+    does: false pairings are re-drawn independently in every frame, so their
+    contribution does not repeat, while a genuine seam offset is the same in
+    every frame of a fixed camera. Two subsets that disagree by more than their
+    error bars mean the estimate does not survive being asked twice.
+
+    This is 9.3 condition 4 -- "measured on held-out frames" -- applied to the
+    solve rather than only to the acceptance check, and it is why a single frame
+    is not enough to calibrate from.
+
+    A constant-`dx` fit is used per half: it needs slope spread but no y spread,
+    both halves see the same scene so the comparison is like for like, and it
+    cannot fail for want of leverage the way the three-parameter model can.
+    """
+    frames = sorted({o.frame for o in observations})
+    if len(frames) < 2:
+        return None
+    rank = {f: i for i, f in enumerate(frames)}
+
+    def half(parity):
+        sel = [o for o in observations if rank[o.frame] % 2 == parity]
+        # Remove the pooled shear before fitting a constant offset. Both halves
+        # see the same rows, so the bias would cancel in the difference anyway
+        # -- but leaving it in inflates each half's own robust scale, and the
+        # precision precondition below would then reject a perfectly consistent
+        # pair for a misfit the model already explains.
+        res = np.array(
+            [o.residual_y - b_scaled * o.slope * ((o.y - y_ref) / y_half) for o in sel],
+            dtype=float,
+        )
+        return sel, _constant_dx(sel, res)
+
+    even, a = half(0)
+    odd, b = half(1)
+    if a is None or b is None:
+        return {
+            "checked": False,
+            "why": "one half of the frames cannot support even a constant dx",
+            "n_even": len(even),
+            "n_odd": len(odd),
+        }
+    # Agreement between two numbers that are each unconstrained is not evidence
+    # of anything, and reporting it as agreement turns this gate into a rubber
+    # stamp. Measured on the archive: 22 of 23 games "agreed" while the two
+    # halves differed by up to 242 px, purely because their own error bars ran
+    # to +-100 px. So precision is a precondition for the comparison, not a
+    # separate concern.
+    if max(a[1], b[1]) > MAX_HALF_STDERR_PX:
+        return {
+            "checked": False,
+            "why": (
+                f"each half's own estimate is uncertain to "
+                f"+/-{max(a[1], b[1]):.1f} px (limit {MAX_HALF_STDERR_PX:.1f}); "
+                "two unconstrained numbers agree with each other by default"
+            ),
+            "even_dx_px": a[0],
+            "even_stderr_px": a[1],
+            "odd_dx_px": b[0],
+            "odd_stderr_px": b[1],
+            "n_even": len(even),
+            "n_odd": len(odd),
+        }
+    diff = a[0] - b[0]
+    se = float(np.hypot(a[1], b[1]))
+    return {
+        "checked": True,
+        "even_dx_px": a[0],
+        "even_stderr_px": a[1],
+        "even_n": len(even),
+        "odd_dx_px": b[0],
+        "odd_stderr_px": b[1],
+        "odd_n": len(odd),
+        "difference_px": diff,
+        "difference_stderr_px": se,
+        "agrees": bool(abs(diff) <= 3.0 * se + 1.0),
+    }
+
+
+def _depth_split(observations: list[Observation]) -> dict | None:
+    """What the seam offset is over the far rows, and over the near rows.
+
+    Section 10 asks for observations to be down-weighted by depth mismatch from
+    the field homography. There is no homography here, but on a sideline mount
+    row *is* a proxy for depth -- the far touchline near the top of the frame,
+    the near touchline metres from the lens at the bottom -- so splitting by row
+    gives the operator the two numbers a depth choice needs (12.1), computed
+    rather than guessed.
+
+    Informational only, and it must never be reported as evidence of parallax:
+    a genuine lens roll makes these two halves differ too, because that is
+    precisely what a shear is. The roll/parallax discriminator is `dy`, in
+    `solve`.
+
+    A constant-`dx` fit is used per half deliberately: two parameters need slope
+    spread but no y spread, and neither half spans enough rows to determine a
+    shear of its own.
+    """
+    if len(observations) < 12:
+        return None
+    ys = np.array([o.y for o in observations])
+    cut = float(np.median(ys))
+    far = [o for o in observations if o.y <= cut]
+    near = [o for o in observations if o.y > cut]
+    f, n = _constant_dx(far), _constant_dx(near)
+    if f is None or n is None:
+        return None
+    diff = n[0] - f[0]
+    se = float(np.hypot(f[1], n[1]))
+    return {
+        "cut_row": cut,
+        "far_dx_px": f[0],
+        "far_stderr_px": f[1],
+        "far_n": len(far),
+        "near_dx_px": n[0],
+        "near_stderr_px": n[1],
+        "near_n": len(near),
+        "difference_px": diff,
+        "difference_stderr_px": se,
+        "significant": bool(abs(diff) > 3.0 * se + 1.0),
+    }
+
+
 def solve(
     observations: list[Observation],
     *,
@@ -347,6 +571,8 @@ def solve(
     min_observations: int = MIN_OBSERVATIONS,
     min_row_bands: int = MIN_ROW_BANDS,
     min_height_coverage: float = MIN_HEIGHT_COVERAGE,
+    min_row_band_fraction: float = MIN_ROW_BAND_FRACTION,
+    min_contributing_frames: int = MIN_CONTRIBUTING_FRAMES,
     min_slope_spread: float = MIN_SLOPE_SPREAD,
     max_dx_stderr: float = MAX_DX_STDERR_PX,
     max_abs_dx: float = MAX_ABS_DX_PX,
@@ -370,6 +596,8 @@ def solve(
             "observations_per_frame": per_frame,
             "band": [int(band[0]), int(band[1])],
             "row_band_counts": [0] * MIN_ROW_BANDS,
+            "row_band_fractions": [0.0] * MIN_ROW_BANDS,
+            "min_row_band_fraction": 0.0,
             "row_bands_covered": 0,
             "row_bands": MIN_ROW_BANDS,
             "height_coverage": 0.0,
@@ -412,6 +640,27 @@ def solve(
         reasons.append(
             f"structures cover {cov_info['height_coverage'] * 100:.0f}% of the field "
             f"band, need {min_height_coverage * 100:.0f}%"
+        )
+    if (
+        cov_info["n"]
+        and cov_info["row_bands_covered"] >= min_row_bands
+        and cov_info["min_row_band_fraction"] < min_row_band_fraction
+    ):
+        reasons.append(
+            f"observations reach all {min_row_bands} row bands but are piled into "
+            f"one: shares {[f'{f * 100:.0f}%' for f in cov_info['row_band_fractions']]} "
+            f"(need every band above {min_row_band_fraction * 100:.0f}%). Leverage on "
+            "the shear comes from mass at differing heights, not from two stragglers "
+            "stretching the range"
+        )
+    if cov_info["n"] and cov_info["n_frames_contributing"] < min_contributing_frames:
+        reasons.append(
+            f"only {cov_info['n_frames_contributing']} frame(s) contributed "
+            f"observations (need {min_contributing_frames}). A single frame cannot "
+            "be cross-checked, and the failure that matters on game footage is "
+            "false structure pairings that look like data -- those are re-drawn "
+            "per frame, so agreement across frames is what separates them from a "
+            "real seam offset"
         )
     if cov_info["slope_spread"] <= min_slope_spread:
         reasons.append(
@@ -506,25 +755,87 @@ def solve(
             "emitted anchors are still the straight-line fit."
         )
 
-    # The roll cross-check, free from the same fit. 2: a relative roll theta
-    # displaces a point at (X, Y) by theta*(-Y, +X), so at the seam column
-    # X = source_width/4 from the half's optical centre the same theta that
-    # produces the shear must also produce a constant `dy = b * X`.
+    # WHAT CAUSED THE SHEAR, and why the answer is not in the curve.
+    #
+    # Two mechanisms produce a `dx` linear in y and the curve cannot tell them
+    # apart. Section 2's relative lens roll is one. The other is ground-plane
+    # parallax on a sideline mount: subject distance falls monotonically down
+    # the frame, and for a ground plane `f*b/d` is very nearly linear in row, so
+    # parallax wears the same shape. Section 12.1 has the parallax arithmetic
+    # but does not say it mimics the roll signature; it does, exactly.
+    #
+    # The vertical offset separates them, and it is free. The two lenses sit
+    # side by side, so their parallax is horizontal: it produces dx and NO dy.
+    # A roll `theta` displaces a point at (X, Y) by theta*(-Y, +X), so the same
+    # theta that shears dx must also produce `dy = b * X` at the seam column,
+    # X = source_width/4 from the half's optical centre. Which one the data
+    # supports changes what the calibration MEANS -- a roll correction is valid
+    # at every depth, a parallax correction only at the depth each row happens
+    # to image.
     x_seam_from_centre = source_width / 4.0
     dy_predicted = b_px_per_row * x_seam_from_centre
     dy_se = float(np.sqrt(max(cov_beta[0, 0], 0.0)))
-    if dy_se > 0 and abs(dy_px - dy_predicted) > 3.0 * dy_se + 1.0:
+    shear_px = b_px_per_row * (source_height - 1)
+    shear_se = float(np.sqrt(max(cov_beta[2, 2], 0.0))) / y_half * (source_height - 1)
+    split = _depth_split(observations)
+    consistency = _frame_consistency(
+        observations, b_scaled=b_scaled, y_ref=y_ref, y_half=y_half
+    )
+    mechanism = None
+    if abs(shear_px) > 3.0 * shear_se + 1.0:
+        if abs(dy_px - dy_predicted) <= 3.0 * dy_se + 1.0:
+            mechanism = "roll"
+            verdict = (
+                f"consistent with a relative lens roll, which predicts "
+                f"{dy_predicted:+.2f} px. A roll correction is valid at every depth."
+            )
+        elif abs(dy_px) <= 3.0 * dy_se + 1.0:
+            mechanism = "parallax"
+            verdict = (
+                f"consistent with PARALLAX, not roll: a roll of this shear would "
+                f"need {dy_predicted:+.2f} px of vertical offset and there is "
+                "none. The correction is then valid only at the depth each row "
+                "images -- a subject at a different depth in the same row is not "
+                "corrected. Set `calibrated_for.subject_distance_m` deliberately "
+                "and restrict `band` to the rows at that depth."
+            )
+        else:
+            mechanism = "mixed"
+            verdict = (
+                f"consistent with neither a pure roll ({dy_predicted:+.2f} px "
+                "predicted) nor pure horizontal parallax (0 px predicted); "
+                "relative pitch or a mixture contributes."
+            )
         findings.append(
-            f"the measured vertical offset ({dy_px:+.2f} px) disagrees with the "
-            f"{dy_predicted:+.2f} px a pure relative roll of this shear would "
-            "produce. Something other than roll contributes -- relative pitch, "
-            "or parallax at a depth away from the stitch calibration (12.1). "
-            "dx is still what the surfaces correct; dy is not emitted (4.2)."
+            f"dx varies by {shear_px:+.2f} +/-{shear_se:.2f} px from the top of "
+            f"the frame to the bottom. Roll and ground-plane parallax both produce "
+            f"a dx linear in y and the curve cannot separate them (2, 12.1); the "
+            f"vertical offset can. Measured dy {dy_px:+.2f} +/-{dy_se:.2f} px is "
+            f"{verdict} dy itself is not emitted (4.2)."
         )
 
     max_stderr = max(stderr)
     worst_dx = max(abs(d) for d in dx_q)
     late: list[str] = []
+    if consistency and consistency.get("checked") and not consistency["agrees"]:
+        late.append(
+            f"the footage does not agree with itself: alternate frames give seam "
+            f"offsets of {consistency['even_dx_px']:+.2f} "
+            f"+/-{consistency['even_stderr_px']:.2f} px "
+            f"({consistency['even_n']} obs) and {consistency['odd_dx_px']:+.2f} "
+            f"+/-{consistency['odd_stderr_px']:.2f} px ({consistency['odd_n']} obs), "
+            f"a {consistency['difference_px']:+.2f} px gap against a combined "
+            f"{consistency['difference_stderr_px']:.2f} px. A real seam offset is "
+            "the same in every frame of a fixed camera; a matcher pairing "
+            "unrelated structures across the seam is not"
+        )
+    elif consistency and not consistency.get("checked"):
+        late.append(
+            f"the cross-frame check could not run ({consistency['why']}), so the "
+            "estimate is unverified. On game footage the dominant failure is "
+            "false pairings that pass every coverage condition, and agreement "
+            "across frames is the only cheap thing that catches them"
+        )
     if max_stderr > max_dx_stderr:
         late.append(
             f"dx is uncertain to +/-{max_stderr:.2f} px at the anchor rows (limit "
@@ -565,6 +876,14 @@ def solve(
         "max_residual_px": float(np.max(np.abs(resid))),
         "n_downweighted": int(np.sum(w < 0.5 * prior_w)),
         "quadratic_term_sigma": quad_t,
+        "shear_px_top_to_bottom": shear_px,
+        "stderr_shear_px": shear_se,
+        "shear_mechanism": mechanism,
+        "frame_consistency": consistency,
+        # Informational, never a finding on its own: a genuine roll ALSO makes
+        # these two halves differ, because that is what a shear is. It is here so
+        # a depth choice can be made with numbers instead of a guess.
+        "depth_split": split,
     }
     meta = {
         **base,
@@ -721,6 +1040,141 @@ def _pool(measures: list[dict]) -> dict:
     }
 
 
+def sweep_dx(
+    frames: list[np.ndarray],
+    dx_values: Sequence[float] = (-32, -24, -16, -8, -4, 0, 4, 8, 16, 24, 32),
+    *,
+    source_width: int,
+    source_height: int,
+    seam_x: int = SEAM_X,
+    blend_w: int = BLEND_W,
+    shoulder_w: int = SHOULDER_W,
+) -> list[dict]:
+    """Apply each constant `dx` and re-measure. The objective, actually plotted.
+
+    Every gate above is computed from ONE detection pass, so all of them share
+    its assumptions. This does not: it shifts the pixels, re-detects, and asks
+    whether the score moves. If the metric is measuring registration, the curve
+    has a floor near the truth and rises on both sides. If it is measuring
+    something else, the curve is flat, or its minimum sits at whichever endpoint
+    the noise favoured.
+
+    That distinction cannot be inferred from coverage, and it is the one that
+    decides whether descending this objective means anything.
+    """
+    out = []
+    for dx in dx_values:
+        shifted = (
+            frames
+            if dx == 0
+            else [
+                apply_anchors_downstream(
+                    f,
+                    [(0, float(dx)), (source_height - 1, float(dx))],
+                    source_width=source_width,
+                    source_height=source_height,
+                    seam_x=seam_x,
+                )
+                for f in frames
+            ]
+        )
+        rs = [
+            seam_continuity_residual(
+                f, seam_x=seam_x, blend_w=blend_w, shoulder_w=shoulder_w
+            )
+            for f in shifted
+        ]
+        live = [r for r in rs if r.n]
+        out.append(
+            {
+                "dx": float(dx),
+                "n": sum(r.n for r in rs),
+                "p50": float(np.median([r.p50 for r in live]))
+                if live
+                else float("nan"),
+                "p90": float(np.median([r.p90 for r in live]))
+                if live
+                else float("nan"),
+            }
+        )
+    return out
+
+
+def assess_sweep(points: list[dict], *, min_depth_fraction: float = 0.25) -> dict:
+    """Does the swept objective have a real, interior minimum?
+
+    Three conditions, each of which a flat or noise-driven curve fails:
+
+    * the best score is not at an endpoint -- an endpoint argmin means the
+      curve is still falling when the sweep ran out, i.e. no minimum was found;
+    * the trough is deep relative to the value -- a 4% dip on a 37 px score is
+      noise, not a signal;
+    * the curve is single-troughed -- two minima mean the optimiser's answer
+      depends on where it started.
+
+    Thresholds are deliberately loose. This is meant to catch objectives that
+    say nothing, not to certify good ones.
+    """
+    p90 = np.array([p["p90"] for p in points], dtype=float)
+    dxs = [p["dx"] for p in points]
+    ok = np.isfinite(p90)
+    if ok.sum() < 5:
+        return {
+            "responds": False,
+            "why": "too few usable sweep points",
+            "points": points,
+        }
+    best = int(np.nanargmin(p90))
+    depth = float(np.nanmax(p90) - np.nanmin(p90))
+    frac = depth / float(np.nanmax(p90)) if np.nanmax(p90) > 0 else 0.0
+    interior = 0 < best < len(p90) - 1
+    # Count sign changes of the first difference: one trough means exactly one
+    # transition from falling to rising.
+    d = np.sign(np.diff(p90[ok]))
+    d = d[d != 0]
+    turns = int(np.sum(d[1:] != d[:-1]))
+    reasons = []
+    if not interior:
+        reasons.append(f"the best score is at the sweep endpoint dx={dxs[best]:+.0f}")
+    if frac < min_depth_fraction:
+        reasons.append(
+            f"the objective moves only {depth:.2f} px ({frac * 100:.0f}%) across the "
+            f"whole sweep (need {min_depth_fraction * 100:.0f}%)"
+        )
+    if turns > 1:
+        reasons.append(f"the curve has {turns + 1} troughs, not one")
+    return {
+        "responds": not reasons,
+        "why": "; ".join(reasons),
+        "best_dx": dxs[best],
+        "p90_min": float(np.nanmin(p90)),
+        "p90_max": float(np.nanmax(p90)),
+        "depth_px": depth,
+        "depth_fraction": frac,
+        "interior_minimum": interior,
+        "turning_points": turns,
+        "points": points,
+    }
+
+
+def require_responsive_objective(assessment: dict) -> None:
+    """Raise unless the swept objective actually responds to `dx`.
+
+    Separate from `solve` because it costs a re-detection per sweep point, but
+    it is the check with teeth: a curve that does not respond means any anchors
+    derived from it are noise wearing a calibration's clothes, however healthy
+    the coverage numbers looked.
+    """
+    if not assessment.get("responds"):
+        raise SolverRefused(
+            [
+                "the objective does not respond to dx: "
+                + assessment.get("why", "unknown")
+            ],
+            {"sweep": assessment},
+        )
+
+
 def validate_downstream(
     frames: list[np.ndarray],
     anchors: list[tuple[int, float]],
@@ -808,6 +1262,15 @@ def main(argv: list[str]) -> int:
         labels.append(Path(p).name)
 
     try:
+        if "--sweep" in flags:
+            # Cheapest way to be told the objective is worthless before reading
+            # anything else it says.
+            h, w = frames[0].shape[:2]
+            require_responsive_objective(
+                assess_sweep(
+                    sweep_dx(frames, source_width=w, source_height=h, seam_x=seam)
+                )
+            )
         result = solve_from_frames(frames, seam_x=seam, frame_labels=labels)
     except SolverRefused as exc:
         if "--json" in flags:

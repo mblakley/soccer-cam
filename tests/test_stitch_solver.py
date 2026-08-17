@@ -43,12 +43,16 @@ from stitch_solver import (  # noqa: E402
     MAX_DX_STDERR_PX,
     Observation,
     SolverRefused,
+    _frame_consistency,
     _observation_variance,
     apply_anchors_downstream,
+    assess_sweep,
     holdout_split,
     main,
+    require_responsive_objective,
     solve,
     solve_from_frames,
+    sweep_dx,
 )
 
 W, H = 1200, 800
@@ -183,26 +187,70 @@ def test_recovers_a_pure_translation_as_a_flat_curve():
     assert result.metadata["fit"]["b_px_per_row"] == pytest.approx(0.0, abs=0.0005)
 
 
-def test_the_vertical_offset_cross_checks_the_roll_model():
-    """A relative roll that shears dx must also produce a specific dy.
+# A shear big enough that the roll's predicted dy (= b * source_width/4) is
+# resolvable on this small fixture. At the real 7680-px panorama width X_seam is
+# 1920 rather than 300, so the discriminator is 6.4x more sensitive there than
+# it is here.
+B_SHEAR = 0.02
 
-    Section 2: a roll theta displaces a point at (X, Y) by theta*(-Y, +X), so
-    the same theta that gives `dx` its slope in y must give a constant vertical
-    offset of `theta * X_seam`, with X_seam = source_width/4 from the half's
-    optical centre. Injecting exactly that and confirming the solver finds it
-    is a free consistency check on the physics, not just on the algebra -- and
-    it is the check that fires when something other than a roll is present.
+
+def test_a_shear_with_the_matching_dy_is_diagnosed_as_a_lens_roll():
+    """Section 2: a roll theta displaces a point at (X, Y) by theta*(-Y, +X).
+
+    So the theta that gives `dx` its slope in y must ALSO give a constant
+    vertical offset of `theta * X_seam`, X_seam = source_width/4 from the
+    half's optical centre. The fit estimates dy anyway as a nuisance parameter,
+    so the check is free -- and it is a check on the physics, not the algebra.
     """
-    b = 0.006
-    result = _solve(frames(a=-4.0, b=b, dy=b * (W / 4.0)))
+    result = _solve(frames(a=-4.0, b=B_SHEAR, dy=B_SHEAR * (W / 4.0)))
     fit = result.metadata["fit"]
-    assert fit["dy_px"] == pytest.approx(fit["dy_predicted_from_roll_px"], abs=0.4)
-    assert not any("vertical offset" in f for f in result.metadata["findings"])
+    assert fit["dy_px"] == pytest.approx(fit["dy_predicted_from_roll_px"], abs=0.5)
+    assert fit["shear_mechanism"] == "roll"
+    assert any("relative lens roll" in f for f in result.metadata["findings"])
 
 
-def test_a_dy_inconsistent_with_the_roll_is_reported_as_a_finding():
-    result = _solve(frames(a=-4.0, b=0.006, dy=6.0))
-    assert any("vertical offset" in f for f in result.metadata["findings"])
+def test_a_shear_with_no_dy_is_diagnosed_as_parallax_not_roll():
+    """The correction that changed how this result must be read.
+
+    Ground-plane parallax on a sideline mount produces a dx that is very nearly
+    linear in row, because subject distance falls monotonically down the frame.
+    That is the SAME shape a lens roll produces, so the curve cannot tell them
+    apart -- and the design does not say so. The vertical offset can: the two
+    lenses sit side by side, so parallax is horizontal and carries no dy.
+
+    It matters because it changes what the calibration means. A roll correction
+    is valid at every depth; a parallax correction is valid only at the depth
+    each row happens to image.
+    """
+    result = _solve(frames(a=-4.0, b=B_SHEAR, dy=0.0))
+    assert result.metadata["fit"]["shear_mechanism"] == "parallax"
+    assert any("PARALLAX" in f for f in result.metadata["findings"])
+
+
+def test_a_dy_matching_neither_mechanism_is_reported_as_mixed():
+    result = _solve(frames(a=-4.0, b=B_SHEAR, dy=-9.0))
+    assert result.metadata["fit"]["shear_mechanism"] == "mixed"
+    assert any("neither" in f for f in result.metadata["findings"])
+
+
+def test_no_shear_means_no_mechanism_claim():
+    """With no shear to explain there is nothing for dy to discriminate."""
+    result = _solve(frames(a=-5.0, b=0.0))
+    assert result.metadata["fit"]["shear_mechanism"] is None
+
+
+def test_the_depth_split_is_reported_but_never_claimed_as_evidence():
+    """It is two numbers for choosing a calibration depth, not a diagnosis.
+
+    A genuine roll makes the near and far halves differ as well -- that is what
+    a shear is -- so a finding drawn from this split alone would fire on every
+    correctly-diagnosed roll.
+    """
+    result = _solve(frames(a=-4.0, b=B_SHEAR, dy=B_SHEAR * (W / 4.0)))
+    split = result.metadata["fit"]["depth_split"]
+    assert split["far_n"] > 0 and split["near_n"] > 0
+    assert split["near_dx_px"] != split["far_dx_px"]
+    assert not any("near rows" in f for f in result.metadata["findings"])
 
 
 # -- the sign, end to end through the shipped corrector ----------------------
@@ -301,6 +349,50 @@ def test_refuses_thin_row_coverage_which_is_the_case_the_live_frame_hits():
     cov = e.value.report["coverage"]
     assert cov["row_bands_covered"] == 1
     assert sum(cov["row_band_counts"]) == cov["n"]
+
+
+def test_refuses_when_all_three_bands_are_reached_but_the_mass_is_piled_in_one():
+    """The shape 27 archived games actually had, and the gate 9.3 was missing.
+
+    `height_coverage` is a RANGE -- (y_max - y_min) / band -- so two stragglers
+    at the extremes satisfy it while everything else sits in one place. On the
+    Duo 3 archive that is not a corner case, it is the norm: usable
+    near-horizontal structure lives on the far touchline and the crowd behind
+    it, and mid-field is grass. Range coverage read 81-98% on 24 of 27 games
+    while 73-98% of the observations were in the top band.
+
+    Leverage on a shear comes from mass at differing heights. Two points do not
+    provide it, however far apart they are.
+    """
+    var = _observation_variance(384, 0.3, BLEND)
+    obs = [
+        Observation(
+            y=y,
+            slope=-0.25 + 0.1 * k,
+            residual_y=(-0.25 + 0.1 * k) * -4.0,
+            span_px=384,
+            fit_rms=0.3,
+            variance=var,
+        )
+        # 18 observations on the far touchline, one straggler in each of the
+        # other two bands: 90% / 5% / 5%, which is the archive's median shape.
+        for y, n in ((200.0, 18), (500.0, 1), (760.0, 1))
+        for k in range(n)
+    ]
+    with pytest.raises(SolverRefused) as e:
+        solve(obs, source_width=W, source_height=H, seam_x=SEAM, blend_w=BLEND)
+    assert any("piled into" in r for r in e.value.reasons)
+    cov = e.value.report["coverage"]
+    assert cov["row_bands_covered"] == 3, "the old gate would have passed this"
+    assert cov["height_coverage"] > 0.60, "and so would the old coverage gate"
+    assert cov["min_row_band_fraction"] < 0.10
+
+
+def test_a_balanced_solve_reports_its_band_shares():
+    result = _solve(frames())
+    cov = result.metadata["coverage"]
+    assert min(cov["row_band_fractions"]) >= 0.10
+    assert sum(cov["row_band_fractions"]) == pytest.approx(1.0, abs=1e-3)
 
 
 def test_refuses_when_every_structure_shares_one_slope():
@@ -461,6 +553,9 @@ def _synthetic_obs(a: float, b: float, n_each: int = 6) -> list[Observation]:
                     span_px=384,
                     fit_rms=0.3,
                     variance=var,
+                    # Spread over frames: a solve from a single frame cannot be
+                    # cross-checked and the solver refuses it.
+                    frame=k % 3,
                 )
             )
     return obs
@@ -471,16 +566,18 @@ def test_the_robust_loss_survives_a_minority_of_wild_observations():
 
     Section 10 rejects players by policy, but a policy is not a filter -- some
     get through, and each one contributes a residual that has nothing to do
-    with the seam. Three corrupted observations in twelve must not move the
-    answer.
+    with the seam. Three corrupted observations in 27 must not move the answer.
+
+    One per frame, deliberately: the cross-frame check refuses when a third of
+    a half is corrupt, and it is right to -- so this test measures the robust
+    loss, not the accident of which frame a synthetic outlier landed in.
     """
     a, b = -4.0, 0.006
-    clean = _synthetic_obs(a, b)
+    clean = _synthetic_obs(a, b, n_each=9)
     dirty = list(clean)
-    for i, bad in zip(
-        (1, len(clean) // 2, len(clean) - 2), (14.0, -11.0, 9.0), strict=True
-    ):
+    for i, bad in zip((1, 12, 23), (14.0, -11.0, 9.0), strict=True):
         dirty[i] = Observation(**{**vars(clean[i]), "residual_y": bad})
+    assert len({dirty[i].frame for i in (1, 12, 23)}) == 3
 
     ref = solve(clean, source_width=W, source_height=H, seam_x=SEAM, blend_w=BLEND)
     got = solve(dirty, source_width=W, source_height=H, seam_x=SEAM, blend_w=BLEND)
@@ -491,6 +588,66 @@ def test_the_robust_loss_survives_a_minority_of_wild_observations():
     # wrecked by three wild points while the robust dispersion stays near 1.
     assert got.metadata["fit"]["chi2_per_dof"] > 10
     assert got.metadata["fit"]["robust_scale"] < 2.0
+
+
+def test_refuses_a_single_frame_because_it_cannot_be_cross_checked():
+    """The failure on game footage is too MUCH false structure, not too little.
+
+    `seam_metric`'s matcher pairs any left/right structures whose extrapolations
+    land within 40 px, and a crowd at mixed depths supplies plenty of pairs that
+    are not the same structure. Those pass every count-and-coverage condition in
+    9.3 -- there are many, spread over the height, with varied slopes. What they
+    do not do is repeat: they are re-drawn in every frame. So one frame is never
+    enough, however healthy its coverage numbers look.
+    """
+    obs = [Observation(**{**vars(o), "frame": 0}) for o in _synthetic_obs(-4.0, 0.006)]
+    with pytest.raises(SolverRefused) as e:
+        solve(obs, source_width=W, source_height=H, seam_x=SEAM, blend_w=BLEND)
+    assert any("frame(s) contributed" in r for r in e.value.reasons)
+
+
+def test_refuses_when_alternate_frames_disagree():
+    """A real seam offset is the same in every frame of a fixed camera."""
+    obs = _synthetic_obs(-4.0, 0.006)
+    poisoned = [
+        Observation(**{**vars(o), "residual_y": o.residual_y + 6.0 * o.slope})
+        if o.frame == 1
+        else o
+        for o in obs
+    ]
+    with pytest.raises(SolverRefused) as e:
+        solve(poisoned, source_width=W, source_height=H, seam_x=SEAM, blend_w=BLEND)
+    assert any("does not agree with itself" in r for r in e.value.reasons)
+
+
+def test_agreement_between_two_unconstrained_halves_is_not_agreement():
+    """The rubber-stamp failure, caught before it could ship.
+
+    Measured on the archive with the precision precondition absent: 22 of 23
+    games "agreed" while their two halves differed by up to 242 px, purely
+    because each half's own error bar ran to +-100 px. A cross-check that
+    passes on numbers it cannot constrain is worse than no cross-check, because
+    it appears in the artifact as evidence.
+    """
+    var = _observation_variance(384, 0.3, BLEND)
+    rng = np.random.default_rng(11)
+    obs = [
+        Observation(
+            y=400.0,
+            # Slope varies WITHIN each frame -- otherwise a half cannot fit at
+            # all and the check bails for the wrong reason.
+            slope=-0.012 + 0.008 * (k % 4),
+            residual_y=rng.normal(0.0, 12.0),
+            span_px=70,
+            fit_rms=1.0,
+            variance=var,
+            frame=k // 6,
+        )
+        for k in range(24)
+    ]
+    c = _frame_consistency(obs)
+    assert c["checked"] is False
+    assert "unconstrained" in c["why"]
 
 
 def test_holdout_split_is_deterministic_and_spans_the_footage():
@@ -542,3 +699,63 @@ def test_cli_refusal_json_carries_the_reasons(tmp_path, capsys):
 
 def test_cli_reports_usage_without_frames(capsys):
     assert main(["stitch_solver.py"]) == 2
+
+
+# -- the discriminative sweep ------------------------------------------------
+
+
+def test_the_swept_objective_has_a_real_minimum_when_the_seam_is_misregistered():
+    """The check with teeth, and the one no coverage number can stand in for.
+
+    Every other gate is computed from one detection pass and shares its
+    assumptions. This one shifts the pixels, re-detects, and asks whether the
+    score actually moves. On a fixture with a known 6 px misregistration it must
+    find an interior trough near it.
+    """
+    fs = list(frames(a=-6.0, b=0.0, n=2))
+    pts = sweep_dx(
+        fs,
+        (-12, -9, -6, -3, 0, 3, 6),
+        source_width=W,
+        source_height=H,
+        seam_x=SEAM,
+        blend_w=BLEND,
+        shoulder_w=SHOULDER,
+    )
+    a = assess_sweep(pts)
+    assert a["responds"], (
+        f"{a['why']}  curve={[(p['dx'], round(p['p90'], 2)) for p in pts]}"
+    )
+    assert a["best_dx"] == pytest.approx(-6.0, abs=3.5), (
+        f"trough at dx={a['best_dx']}, truth -6"
+    )
+    require_responsive_objective(a)  # must not raise
+
+
+def test_a_flat_swept_objective_is_refused():
+    """What 27 games of real footage produced, in one assertion.
+
+    Measured on the archive: p90 moved 4-22% across a +/-32 px sweep with the
+    best score usually at an endpoint, and on one frame deliberately breaking
+    the seam by 32 px made the score BETTER. A solver descending that returns a
+    confident curve made of noise.
+    """
+    flat = [
+        {"dx": dx, "n": 50, "p50": 12.0, "p90": 31.0 + 0.3 * (dx / 32.0)}
+        for dx in (-32, -24, -16, -8, 0, 8, 16, 24, 32)
+    ]
+    a = assess_sweep(flat)
+    assert not a["responds"]
+    assert "endpoint" in a["why"] or "moves only" in a["why"]
+    with pytest.raises(SolverRefused, match="does not respond"):
+        require_responsive_objective(a)
+
+
+def test_a_two_troughed_sweep_is_refused():
+    curve = [31.0, 24.0, 30.0, 25.0, 31.0, 33.0, 34.0, 35.0, 36.0]
+    pts = [
+        {"dx": dx, "n": 50, "p50": 12.0, "p90": v}
+        for dx, v in zip((-32, -24, -16, -8, 0, 8, 16, 24, 32), curve, strict=True)
+    ]
+    a = assess_sweep(pts)
+    assert not a["responds"] and "troughs" in a["why"]
