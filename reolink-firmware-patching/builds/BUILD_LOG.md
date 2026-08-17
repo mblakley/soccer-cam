@@ -33,6 +33,33 @@ Contents (layered on stock 4867):
 
 Build: `builds/build_soccercam_v2.sh` (driven by `/tmp` wrapper that carries creds/MAC from 4896).
 
+## "Stitchcal" firmware — comprehensive + the seam-calibration boot hook
+
+Build: `builds/build_stitchcal.sh`. Everything the comprehensive pak carries,
+plus `/usr/bin/lut2d_ioctl` (static aarch64: `get` / `set` / `compose`),
+`/etc/init.d/S98_StitchCal`, and `/etc/init.d/S36_RootShell`.
+
+The point of baking it once is that **a calibration is then a file drop, not a
+reflash**: `/mnt/sda/stitchcal/anchors.txt` is a few hundred bytes and the hook
+composes it onto whatever factory mesh the firmware generated that boot. With no
+`anchors.txt` the hook exits 0 and the mesh stays factory, so the pak is a safe
+no-op on an uncalibrated unit.
+
+Two gates run inside the builder and both refuse rather than warn: the boot chain
+(`loader`, `fdt`, `atf`, `uboot`, `kernel`) must be byte-identical to stock —
+enforced inside `pak_repack.repack()` before assembly and long before the CRC is
+computed — and `verify/check_recording_default.sh` must pass.
+
+| File | Notes |
+|---|---|
+| **`IPC_…4920…_stitchcal.pak`** | **CURRENT.** 4919 + **idempotent hook.** Re-running S98 within one boot composed the correction onto its *own output* and silently doubled the shear (3 px → 6 px) while the log read healthy. The hook now records a signature of what it wrote and, on recognising it, composes from the saved baseline instead. Verified on camera: three consecutive runs all produce mesh crc `0bf0934f`. |
+| `IPC_…4919…_stitchcal.pak` | superseded — first build whose hook actually ran. 4918 + **wait for `/mnt/sda` before reading config** + `S36_RootShell` restored. **On-camera validated:** S98 applied a ±3 px calibration 38 s into boot, read-back ok, and the correction was visible in a snapshot. |
+| `IPC_…4918…_stitchcal.pak` | superseded, and instructive. Gates passed, flashed clean — and the hook **did nothing, silently**. `rcS` does `mount -a` then runs `S*`, but `/mnt/sda` is `/dev/hd/sda1`, mounted later by the app; S98 checked for `anchors.txt` first, found none, and could not even log it because `/` is read-only squashfs. It also dropped `S36_RootShell` (the comprehensive builder never installed one), taking tcp/2323 with it. |
+
+Known gap: `commit=` in the manifest reads `unknown` unless `SOCCERCAM_COMMIT` is
+set, because `git rev-parse` refuses a `/mnt/c` worktree from WSL (dubious
+ownership). Pass it explicitly.
+
 ## "Comprehensive" firmware — ready to flash
 | File | sha256 | Notes |
 |---|---|---|
