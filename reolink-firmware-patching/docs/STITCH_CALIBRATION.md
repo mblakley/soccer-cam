@@ -753,11 +753,56 @@ crossing the seam and fit them:
 **Accumulate across the game, not within a frame.** A 90-minute game at 20 fps is ~108,000 frames;
 a few hundred good observations is plenty, and no single frame needs to be good.
 
-**Solve.** Weighted robust regression of `dx` on `y` over the accumulated observations: Huber loss,
-weights from fit quality and depth agreement. Fit a **line** first, because §2 says a lens roll is
-linear in y — then emit anchors by sampling that line at 5 rows. Record `r²` and the max residual
-(§5.2). Only if the residual is structured and large does a higher-order anchor curve become
-justified, and that fact goes in the artifact as a finding.
+**Solve.** ~~Weighted robust regression of `dx` on `y`~~ — **corrected in implementation
+(`../vpe/stitch_solver.py`, 2026-08-17): there is no per-observation `dx` to regress.** A structure
+must span the whole blend window in x to be extrapolated to the seam from both sides, so the usable
+ones are *near-horizontal*, and a near-horizontal line of slope `m` displaced horizontally by `dx`
+moves **vertically** at the seam:
+
+```
+r_y  =  dy  +  m * dx(y)
+```
+
+A flat line therefore sees nothing of `dx`, one line under-determines it, and `dx` is recoverable
+only **jointly**, from structures of differing slope. Substituting the linear-in-y model of §2,
+`dx(y) = a + b*(y − y_ref)`, gives one three-parameter fit over every accumulated observation, with
+design row `[1, m, m*(y − y_ref)]` and unknowns `(dy, a, b)`. Huber loss; weights are the inverse of
+each observation's extrapolation variance (below). Emit anchors by sampling the fitted line at 5
+rows. Record `r²` and the max residual (§5.2), and test a quadratic term — if it is significant, that
+is a finding about the camera and goes in the artifact, but the emitted curve stays straight until a
+human has looked at it. **[M]**
+
+What the fit can and cannot separate, stated so the artifact does not overclaim:
+
+- It **does** separate translate (`a`) from shear (`b`) — that needs spread in `m*(y − y_ref)`, i.e.
+  differing slopes at differing heights, which is a property of the *design matrix*, not of `n`.
+- It **does not** separate a rigid relative rotation from a linear-in-y shear (§2): both are `dx`
+  linear in y observed at one column. `roll_theta_rad` in the metadata is the roll *interpretation*
+  of `b`, not an independently measured angle.
+- It **does not** attribute the misregistration to a half. `dx` is relative, which is all either
+  surface needs.
+
+**Weights, and what the blend window costs.** Every observation is extrapolated from a shoulder
+across at least `blend_w/2 = 128` px of already-mixed pixels. For a chain of length `L` seeded at the
+blend edge, the fit's centroid is `D = 128 + L/2` from the seam, and the variance of a linear
+extrapolation is `sigma^2/L * (1 + 12 D^2 / L^2)` per side, doubled because `r_y` is a difference
+**[D]**. That is ~9× the in-span variance for a full 384-px chain and ~90× for a 96-px one, so
+weighting by it — rather than by chain length or fit quality alone — is what stops a handful of
+scraps outvoting the good data. It bounds *precision*, not correctness; what is irrecoverable is the
+ghosting already fused into the window, which is what SSR measures (§9.2).
+
+**Free consistency check.** §2 says the same roll `theta` that shears `dx` must also produce a
+constant `dy = theta * 1920` at the seam. The fit estimates `dy` anyway, as a nuisance parameter, so
+comparing it to `b * 1920` costs nothing and is a check on the *physics* rather than the algebra. A
+disagreement means something other than roll contributes — relative pitch, or parallax at a depth
+away from the calibration (§12.1) — and is reported as a finding. `dy` itself is still not emitted:
+the downstream surface cannot express it (§4.2, §12.2).
+
+**Sign, once more, because two modules disagree by design.** `seam_metric.ScrResult.implied_dx`
+models `r_y = dy − m*dx` and so reports the misregistration the right half currently *carries*; the
+artifact's `dx` is the *correction*, "px the right half must move right" (§4.4). Equal and opposite.
+The solver fits the correction directly rather than negating anything, and a test pins the
+relationship. **[M]**
 
 **Converge.** Apply → re-measure on held-out frames → iterate. Stop when `SCR p90 < 1.0 px`, or the
 improvement between iterations is `< 0.2 px`, or after 4 iterations. **Revert-on-regression**: if an
@@ -777,6 +822,25 @@ the seam sits mid-field, and mid-field is featureless grass. Handling, in order:
 4. Documented recovery: a **deliberate target**. Stand a high-contrast vertical edge — a taped board,
    or just walk the goal to the halfway line — so it straddles the seam at roughly the calibration
    depth, and grab a 10-second clip. One decisive observation set, ~2 minutes of a volunteer's time.
+
+**§9.3's counts are necessary but not sufficient — corrected in implementation.** The coverage
+conditions (`n ≥ 8`, ≥ 3 row bands, ≥ 60% of height) are all *proxies* for a design matrix that pins
+the curve, and a case exists that satisfies every one of them and is still unusable: structures
+spread over the full height and all three bands, but with slopes so shallow that `dx` — which enters
+only as `m*dx` — has almost no lever. Demonstrated with 18 observations across three bands over 70%
+of the height at slopes ±0.011, where the fitted `dx` is uncertain to ±1.35 px **[M]**. So the
+governing gate is the **standard error on `dx` at the anchor rows**, refused above 1.0 px, which is
+the target §10 stops iterating at: a fit whose own uncertainty exceeds the accuracy it is aiming for
+has not measured anything. The count and coverage conditions are kept as well, because they give a
+far better error message and because passing them means `check_acceptance` cannot later reject the
+same solve on coverage grounds. The solver reports **per-band observation counts** in every result,
+accepted or refused, so a caller can see which of these bit.
+
+**One unit trap, worth stating.** Anchors are in the pixel units of the frame they were measured on,
+and `build_dx_lookup` rescales them — so a profile solved on a downscaled still is correct, but its
+*integer* downstream projection is not free: `StitchProfile` stores `int` dx, so a profile solved at
+half resolution carries a ±0.5 px quantisation that becomes ±1.0 px after rescaling. Solve at full
+resolution where possible; the camera-mesh surface is unaffected (quarter-pixel, §5.1). **[D]**
 
 ---
 

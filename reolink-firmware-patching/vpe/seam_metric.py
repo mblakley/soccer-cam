@@ -290,6 +290,19 @@ def seam_continuity_residual(
     and the estimate comes from regressing r_y on m across lines of differing
     slope. `implied_dx` is that regression; it is only meaningful when
     `slope_spread` is non-trivial, which the caller must check.
+
+    SENSE, because it is the opposite of the artifact's and nothing else says
+    so. `implied_dx` here is the misregistration the right half currently
+    CARRIES -- positive means its content sits that many px too far right. The
+    profile's `dx_anchors` are the CORRECTION, "px the right half must move
+    right" (`stitch_remap.build_dx_lookup`, STITCH_CALIBRATION.md 4.4), so the
+    two are equal and opposite. `stitch_solver` fits the correction directly
+    rather than negating this, and `tests/test_stitch_solver.py` pins the
+    relationship so the trap stays visible.
+
+    `implied_dx` is also a single whole-frame number, not a curve: it assumes
+    one dx for every row. A per-row shear needs the joint fit in
+    `stitch_solver.solve`, which this deliberately is not.
     """
     gray = to_gray(image)
     y0, y1 = band or default_band(gray.shape[0])
