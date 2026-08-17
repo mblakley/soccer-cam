@@ -6,13 +6,27 @@ while the seam metric scores every candidate curve, and send the result back.
 The curve the operator authors **is** the calibration artifact -- there is no
 export step and no parameter that lives only in the UI.
 
-Two doors, one editor: a live `Snap` over HTTP, or a frame opened from a file
-or seeked out of a recording. The second is the one most calibrations will come
-through. Nobody stands at the touchline with a laptop mid-match, and a camera
-indoors on a bench is looking at a scene 0.3 m away, where parallax runs to
-tens of pixels and swamps the lens roll this exists to correct.
+**The client is a phone, held at the pitch side.** Mark's plan, in his words:
+*"I will connect to the camera from my phone while on the field, so setting
+this up in the camera manager app will work."* That is not a nice-to-have
+responsive pass over a desktop tool; it decides the layout, the gestures and
+the network behaviour. A pair of 640x2160 strips and a tall curve widget do not
+fit a 390 px viewport by shrinking, a mouse-only drag is unreachable, and the
+link at a field is whatever the field has. So: one primary canvas with pinch
+zoom and an axis-locked drag, a thumb-sized roll control, everything else
+folded away, every score request bounded by a timeout, and numbers that are
+visibly stale the instant the curve moves rather than silently wrong.
 
-Four things about this file are load-bearing and easy to get wrong.
+Reaching it from a phone at all needs ``[TTT].auth_server_bind`` set to the
+machine's LAN address -- the app's host allowlist is loopback plus that value
+(``web/auth_server.py``), and ``0.0.0.0`` deliberately does *not* widen it. The
+page says so where an operator will read it.
+
+**The live `Snap` is the primary door.** The field loop is: tripod, snap,
+adjust, apply, re-snap to confirm. Opening a frame from an archived game stays,
+because a calibration can also be recovered from footage after the fact.
+
+Six things about this file are load-bearing and easy to get wrong.
 
 **Only one half moves, and it is the LEFT one.** The camera's warp mesh lives
 in VPE 0, which warps the left half; measured on hardware (#135), a requested
@@ -36,6 +50,18 @@ the whole plausible dx range while the seam is visibly registered, and every
 coverage gate passes while it happens. So each frame is swept once and the
 verdict -- can this picture steer the calibration at all -- leads the panel,
 ahead of any number. See `_frame_quality`.
+
+**The calibration target is a person standing in the seam.** Mark: *"it's easy
+to see misregistration if there's a person in the seam."* That is the answer to
+the anomaly above, and the mechanism is in `seam_vertical`: the seam is a
+vertical line, SCR is built from *near-horizontal* structures, and a horizontal
+edge is invariant under a horizontal shift. Touchlines, treelines and painted
+banners therefore supply observation after observation carrying no information
+about the quantity being tuned. A person is upright -- torso, legs, head -- and
+is exactly what a horizontal error breaks. So "have someone stand in the seam"
+is a *step* in this interface, not a tip, the tool checks whether they actually
+are in it before believing any number, and the reported residual leads with the
+subset of structures that can see `dx` at all.
 
 **The picture is a fused JPEG, so parts of it are already a mixture.** The
 camera blends the two sensors over a 256-px window, so nothing inside it is
@@ -124,16 +150,21 @@ _toolkit_cache: dict[str, Any] = {}
 
 
 def load_toolkit() -> dict[str, Any]:
-    """Import `seam_metric` / `stitch_apply`, or explain why not.
+    """Import `seam_metric` / `seam_vertical` / `stitch_apply`, or explain why not.
 
-    Returns a dict with ``metric`` and ``camera`` (module or None) plus
-    ``errors``. The page degrades rather than 500s: the metric and the camera
-    surface fail independently, and an operator with neither can still read the
-    documentation the page carries.
+    Returns a dict with ``metric``, ``vertical`` and ``camera`` (module or None)
+    plus ``errors``. The page degrades rather than 500s: the metric and the
+    camera surface fail independently, and an operator with neither can still
+    read the documentation the page carries.
     """
     if _toolkit_cache:
         return _toolkit_cache
-    out: dict[str, Any] = {"metric": None, "camera": None, "errors": []}
+    out: dict[str, Any] = {
+        "metric": None,
+        "camera": None,
+        "vertical": None,
+        "errors": [],
+    }
     vpe = _vpe_dir()
     if vpe is None:
         out["errors"].append(
@@ -144,7 +175,11 @@ def load_toolkit() -> dict[str, Any]:
         return out
     if str(vpe) not in sys.path:
         sys.path.insert(0, str(vpe))
-    for key, name in (("metric", "seam_metric"), ("camera", "stitch_apply")):
+    for key, name in (
+        ("metric", "seam_metric"),
+        ("vertical", "seam_vertical"),
+        ("camera", "stitch_apply"),
+    ):
         try:
             out[key] = importlib.import_module(name)
         except Exception as exc:  # noqa: BLE001 -- any import failure degrades
@@ -185,6 +220,17 @@ class _Session:
     baseline: dict | None = None
     quality: dict | None = None
     last_apply: dict | None = None
+    # The aiming loop, which is cheap and runs ahead of the expensive one: a
+    # downscaled whole-panorama JPEG plus "is anything upright in the seam
+    # corridor". Kept separate from the calibration frame so pressing Aim
+    # repeatedly -- while someone walks into the seam -- never disturbs a
+    # session that is already scored.
+    scene: bytes = b""
+    scene_version: int = 0
+    scene_at: float = 0.0
+    scene_source: str = ""
+    scene_vertical: dict | None = None
+    vertical: dict | None = None
 
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -234,6 +280,83 @@ def _encode_halves(frame: Any, seam_x: int) -> dict[str, bytes]:
     return out
 
 
+#: The whole panorama, small enough to cross a field's worth of link. 960 px of
+#: a 7680 px frame is 1/8 scale -- useless for judging registration and exactly
+#: right for judging *aim*: where the seam falls in the scene, and whether the
+#: person you asked to stand in it is standing in it.
+SCENE_W = 960
+SCENE_QUALITY = 68
+
+
+def _encode_scene(frame: Any) -> bytes:
+    import cv2
+
+    h, w = frame.shape[:2]
+    small = cv2.resize(
+        frame, (SCENE_W, max(1, round(h * SCENE_W / w))), interpolation=cv2.INTER_AREA
+    )
+    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, SCENE_QUALITY])
+    if not ok:
+        raise HTTPException(500, "could not encode the scene overview")
+    return bytes(buf.tobytes())
+
+
+def _vertical_profile(frame: Any, seam_x: int) -> dict | None:
+    """Where upright structure crosses the seam corridor, if anywhere.
+
+    ~60 ms on a 7680x2160 frame against the 37-50 s SCR detection, which is why
+    it can run on every aiming snapshot: the operator finds out whether the
+    person is in the seam *before* committing to a measurement.
+    """
+    vertical = load_toolkit().get("vertical")
+    if vertical is None:
+        return None
+    try:
+        profile = vertical.vertical_structure(frame, seam_x=seam_x, blend_w=2 * BLEND_W)
+        return vertical.summarise(profile)
+    except Exception as exc:  # noqa: BLE001 -- an aiming aid never 500s
+        logger.warning("STITCH: vertical-structure scan failed: %s", exc)
+        return None
+
+
+def _target_band(
+    upright: dict | None, height: int, pad: int = 40
+) -> tuple[int, int] | None:
+    """The rows the calibration target actually occupies, padded.
+
+    SSR over the whole field band answers "is the seam damaged on average",
+    and mid-field average is grass, which a misregistration cannot damage
+    because there is nothing there to break. Measured on a real frame with a
+    player straddling the seam: |ln SSR| over the field band reads 0.062 --
+    below the 0.10 noise floor, i.e. indistinguishable from a perfect seam --
+    while over the 285 rows this function hands back for that player it reads
+    1.180, and over the strongest 183-row band alone 2.188. Across 87
+    frames sampled from the archived set, the whole-band figure cannot tell the
+    two cases apart at all (median 0.095 with upright structure in the corridor
+    against 0.088 without), while the banded figure separates them by an order
+    of magnitude (1.889 against 0.170).
+
+    One honest limit, and the UI states it: SSR is a ratio against a background
+    fitted on the *shoulders*, so an object that exists only inside the window
+    raises it whether or not it is misregistered (section 9.2 says the same of
+    the live frame at 0.3 m). This is therefore a before/after comparator on a
+    fixed scene -- the same person standing in the same place across an Apply
+    and a re-snap -- not an absolute measure of damage.
+    """
+    if not upright or not upright.get("rows"):
+        return None
+    best = upright.get("best_rows")
+    rows = [tuple(r) for r in upright["rows"]]
+    chosen = rows[0]
+    if best:
+        for r in rows:
+            if r[0] <= best[0] < r[1]:
+                chosen = r
+                break
+    lo, hi = max(0, chosen[0] - pad), min(height, chosen[1] + pad)
+    return (lo, hi) if hi - lo >= 64 else None
+
+
 def _detect_chains_async(session: _Session, version: int) -> None:
     """Run the expensive SCR detection off the request thread.
 
@@ -256,7 +379,17 @@ def _detect_chains_async(session: _Session, version: int) -> None:
         )
         scr = metric.residual_from_chains(chains)
         ssr = metric.seam_sharpness_ratio(frame, seam_x=seam, blend_w=2 * BLEND_W)
-        quality = _frame_quality(metric, chains, frame.shape[0])
+        with session.lock:
+            upright = session.vertical
+        band = _target_band(upright, frame.shape[0])
+        ssr_target = (
+            None
+            if band is None
+            else metric.seam_sharpness_ratio(
+                frame, seam_x=seam, blend_w=2 * BLEND_W, band=band
+            )
+        )
+        quality = _frame_quality(metric, chains, frame.shape[0], upright)
     except Exception as exc:  # noqa: BLE001 -- surfaced to the operator instead
         logger.warning("STITCH: baseline detection failed: %s", exc)
         with session.lock:
@@ -269,7 +402,7 @@ def _detect_chains_async(session: _Session, version: int) -> None:
             return
         session.chains = chains
         session.chains_state = "ready"
-        session.baseline = _score_payload(scr, ssr)
+        session.baseline = _score_payload(scr, ssr, ssr_target, band)
         session.quality = quality
 
 
@@ -285,8 +418,11 @@ _MATCH_GAP_PX = 40.0
 _MIN_USEFUL_GAIN = 0.20
 
 
-def _frame_quality(metric: Any, chains: Any, height: int) -> dict:
-    """Ask the frame whether it can constrain the calibration at all.
+def _frame_quality(
+    metric: Any, chains: Any, height: int, upright: dict | None = None
+) -> dict:
+    """Ask the frame whether it can constrain the calibration at all, and if
+    not, say what to change about the picture.
 
     This exists because of what real material does. On three separate Duo 3
     tripod placements -- an indoor dome and two outdoor pitches -- SCR reports
@@ -295,15 +431,23 @@ def _frame_quality(metric: Any, chains: Any, height: int) -> dict:
     coverage gate passes (40-69 structures, 3 row bands, 69-79% height), so
     nothing in the acceptance check flags it.
 
-    What is happening: the matcher pairs a left structure with any right
-    structure within 40 px at the seam, and a busy scene at mixed depths
-    offers plenty. The resulting "observations" are unrelated edges, and their
-    residuals describe the matching tolerance rather than the registration.
+    Two things are happening, and only the second one has a remedy.
 
-    So a number alone is not honest. Sweeping dx once per frame answers the
-    question the operator actually has -- *can this picture tell me anything*
-    -- and it is the same question the automatic solver has to answer before
-    it trusts a fit.
+    The matcher pairs a left structure with any right structure within 40 px at
+    the seam, and a busy scene at mixed depths offers plenty; those pairs are
+    unrelated edges whose residuals describe the matching tolerance.
+
+    And underneath that, the structures being paired are the wrong shape. SCR
+    fits *near-horizontal* lines, and `r_y = -m*dx` means a horizontal line is
+    invariant under the horizontal shift being tuned. Measured across the
+    archived Duo 3 frame set on three games (see `seam_vertical`): of 11, 61 and
+    88 accepted structures, 0, 1 and 2 respectively were steeper than |m| = 0.15,
+    and restricting the dx sweep to the subset that can see dx at all moved the
+    p90 by 1.3-2.9% -- no better than the full set. Re-weighting does not rescue
+    these frames. Only different structure does, which is why the remedy this
+    returns is an instruction about the scene rather than a smaller number:
+    **put a person in the seam.** A person is upright, and upright is precisely
+    what a horizontal error breaks.
     """
     sweep = []
     for dx in range(-16, 17, 2):
@@ -312,37 +456,66 @@ def _frame_quality(metric: Any, chains: Any, height: int) -> dict:
         )
         if r.n:
             sweep.append({"dx": dx, "p50": round(r.p50, 3), "p90": round(r.p90, 3)})
+
+    base = metric.residual_from_chains(chains)
+    split = _sensitivity_split(base.observations)
+    has_upright = bool(upright and upright.get("n_with_structure"))
+    upright_rows = (upright or {}).get("rows") or []
+
     if not sweep:
-        return {"usable": False, "reason": "no structure crosses the seam", "sweep": []}
+        return {
+            "usable": False,
+            "reason": "no structure crosses the seam at all",
+            "remedy": _PERSON_REMEDY,
+            "has_upright": has_upright,
+            "upright_rows": upright_rows,
+            "split": split,
+            "sweep": [],
+        }
 
     at_zero = next((s for s in sweep if s["dx"] == 0), sweep[0])
     best = min(sweep, key=lambda s: s["p90"])
     gain = 0.0 if at_zero["p90"] <= 0 else 1.0 - best["p90"] / at_zero["p90"]
 
-    base = metric.residual_from_chains(chains)
     saturated = [o for o in base.observations if o.residual_perp > 0.8 * _MATCH_GAP_PX]
     sat_frac = len(saturated) / base.n if base.n else 0.0
 
     usable = gain >= _MIN_USEFUL_GAIN
+    remedy = ""
     if usable:
         reason = (
             f"sliding dx across +/-16 px moves SCR p90 by {gain * 100:.0f}%, "
             f"best at dx={best['dx']:+d}"
         )
+    elif split["n_steering"] == 0:
+        reason = (
+            f"every one of the {split['n_total']} structures crossing the seam is "
+            "within 3 degrees of horizontal, and a horizontal edge does not move "
+            "when the halves shift horizontally -- SCR here is measuring its own "
+            "pairing tolerance"
+        )
+        remedy = _PERSON_REMEDY
     elif sat_frac > 0.4:
         reason = (
             f"{sat_frac * 100:.0f}% of matched structures sit near the "
             f"{_MATCH_GAP_PX:.0f} px pairing limit, so the score is dominated by "
             "unrelated edges paired across the seam, not by misregistration"
         )
+        remedy = _PERSON_REMEDY
     else:
         reason = (
             f"sliding dx across the whole plausible range moves SCR p90 by only "
-            f"{gain * 100:.0f}% -- this frame does not constrain the seam offset"
+            f"{gain * 100:.0f}%; the steepest structure here converts a shift into "
+            f"only {split['max_sensitivity']:.2f} px of residual per px"
         )
+        remedy = _PERSON_REMEDY
     return {
         "usable": usable,
         "reason": reason,
+        "remedy": remedy,
+        "has_upright": has_upright,
+        "upright_rows": upright_rows,
+        "split": split,
         "best_dx": best["dx"] if usable else None,
         "gain": round(gain, 4),
         "saturated_fraction": round(sat_frac, 3),
@@ -350,7 +523,40 @@ def _frame_quality(metric: Any, chains: Any, height: int) -> dict:
     }
 
 
-def _score_payload(scr: Any, ssr: Any) -> dict:
+#: The one instruction that changes the answer. Everything else -- re-weighting,
+#: tighter gates, a better regression -- is arithmetic on structure that cannot
+#: see the quantity being measured.
+_PERSON_REMEDY = (
+    "Have someone stand in the seam, out where play actually happens rather "
+    "than beside the tripod, and snap again. A person is upright, which is the "
+    "one thing a horizontal misregistration visibly breaks."
+)
+
+
+def _sensitivity_split(observations: Any) -> dict:
+    """How many of these structures can see a horizontal shift at all."""
+    vertical = load_toolkit().get("vertical")
+    if vertical is None or not observations:
+        return {
+            "n_total": len(observations or []),
+            "n_steering": 0,
+            "blind_fraction": 1.0,
+            "p90_steering": None,
+            "p90_blind": None,
+            "median_sensitivity": 0.0,
+            "max_sensitivity": 0.0,
+        }
+    return vertical.summarise(
+        vertical.VerticalProfile(), vertical.split_by_dx_sensitivity(observations)
+    )["scr_split"]
+
+
+def _score_payload(
+    scr: Any,
+    ssr: Any,
+    ssr_target: Any = None,
+    target_band: tuple[int, int] | None = None,
+) -> dict:
     return {
         "scr": {
             "n": scr.n,
@@ -370,11 +576,28 @@ def _score_payload(scr: Any, ssr: Any) -> dict:
                 else round(-scr.implied_dx, 3)
             ),
         },
+        # How much of that residual comes from structure that can actually see
+        # a horizontal shift. Reported beside the headline number rather than
+        # folded into it: silently redefining SCR would leave this tool and the
+        # automatic solver minimising two different things under one name.
+        "split": _sensitivity_split(scr.observations),
         "ssr": {
             "ssr": round(ssr.ssr, 4),
             "abs_ln_ssr": round(ssr.abs_ln_ssr, 4),
             "noise_floor": ssr.noise_floor,
         },
+        # The same metric, restricted to the rows the calibration target
+        # occupies. Grass cannot be broken by a misregistration, so averaging
+        # over a field band of it hides the damage: 0.062 whole-band against
+        # 1.180 on the player's rows, on one real frame verified in the UI.
+        "ssr_target": (
+            None
+            if ssr_target is None
+            else {
+                "abs_ln_ssr": round(ssr_target.abs_ln_ssr, 4),
+                "band": list(target_band or ssr_target.band),
+            }
+        ),
         # The structures the score is computed from, so the picture and the
         # number are the same evidence. Each is one structure fitted
         # independently on the two shoulders and extrapolated to the seam;
@@ -383,12 +606,17 @@ def _score_payload(scr: Any, ssr: Any) -> dict:
         # and it is honest in a way extrapolating pixels is not: the metric
         # really does extrapolate lines, and a line drawn on screen cannot be
         # mistaken for photographic evidence the fused frame does not contain.
+        # `sens` is px of residual per px of horizontal shift -- the structure's
+        # sine from horizontal. The view draws near-zero ones muted, because a
+        # bright confident line that cannot respond to the control the operator
+        # is holding is a lie told in a picture.
         "observations": [
             {
                 "y_left": round(o.y_left, 2),
                 "y_right": round(o.y_right, 2),
                 "slope": round(o.slope, 5),
                 "residual": round(o.residual_perp, 2),
+                "sens": round(abs(o.slope) / (1.0 + o.slope * o.slope) ** 0.5, 3),
             }
             for o in sorted(scr.observations, key=lambda o: o.fit_rms)[:60]
         ],
@@ -450,7 +678,10 @@ def _adopt_frame(
     the operator should be looking at the picture long before the numbers do.
     """
     metric = load_toolkit()["metric"]
-    halves = _encode_halves(frame, frame.shape[1] // 2)
+    seam_x = frame.shape[1] // 2
+    halves = _encode_halves(frame, seam_x)
+    scene = _encode_scene(frame)
+    upright = _vertical_profile(frame, seam_x)
     with _session.lock:
         _session.version += 1
         version = _session.version
@@ -459,6 +690,12 @@ def _adopt_frame(
         _session.source_path = source_path
         _session.frame = frame
         _session.halves = halves
+        _session.scene = scene
+        _session.scene_version = version
+        _session.scene_at = time.time()
+        _session.scene_source = source_path or "camera"
+        _session.scene_vertical = upright
+        _session.vertical = upright
         _session.height, _session.width = frame.shape[0], frame.shape[1]
         _session.snapped_at = time.time()
         _session.scalars_current, _session.scalars_factory = scalars
@@ -505,16 +742,10 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
         with _session.lock:
             return JSONResponse(_state_payload())
 
-    @router.post("/stitch/snap")
-    def post_snap() -> JSONResponse:
-        """Fetch a fresh still and the camera's own scalars, in one action.
-
-        `GetStitch` returns both the live values and the factory `initial`
-        block, so "confirm what the camera's auto-adjustment already found" is
-        a real comparison rather than a leap of faith.
-        """
+    def _live_frame() -> tuple[Any, CameraConfig, str]:
+        """One `Snap` off the camera, decoded. Read-only, every time."""
         toolkit = load_toolkit()
-        camera_mod, metric = toolkit["camera"], toolkit["metric"]
+        camera_mod = toolkit["camera"]
         if camera_mod is None:
             raise HTTPException(503, "; ".join(toolkit["errors"]) or "toolkit missing")
         cam = _reolink_camera(config_path)
@@ -533,7 +764,68 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
             frame = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if frame is None:
             raise HTTPException(502, "the camera returned something that is not a JPEG")
+        return frame, cam, host
 
+    @router.post("/stitch/aim")
+    def post_aim() -> JSONResponse:
+        """Where does the seam fall in the scene, and is anyone standing in it?
+
+        The step before the calibration snapshot, and the reason it is a
+        separate endpoint: it must be cheap enough to press repeatedly while
+        someone walks into position. A downscaled panorama (~35 KB) plus a
+        60 ms upright-structure scan, and nothing that touches the scored
+        session -- pressing this cannot lose a calibration in progress.
+
+        A phone at a pitch cannot see a live video stream from a camera it is
+        not on the same link as, and does not need to: what the operator has to
+        establish before spending 40 s on detection is only *where the seam
+        lands in the scene* and *whether the target is in it*.
+        """
+        frame, cam, host = _live_frame()
+        seam_x = frame.shape[1] // 2
+        scene = _encode_scene(frame)
+        upright = _vertical_profile(frame, seam_x)
+        with _session.lock:
+            _session.scene = scene
+            _session.scene_version += 1
+            _session.scene_at = time.time()
+            _session.scene_source = f"aim {host}"
+            _session.scene_vertical = upright
+            if not _session.camera_name:
+                _session.camera_name = cam.name
+                _session.host = host
+            payload = _state_payload()
+        payload["aim"] = {
+            "width": frame.shape[1],
+            "height": frame.shape[0],
+            "seam_x": seam_x,
+            "vertical": upright,
+        }
+        return JSONResponse(payload)
+
+    @router.get("/stitch/scene.jpg")
+    def get_scene(v: int = 0) -> Response:
+        with _session.lock:
+            data, version = _session.scene, _session.scene_version
+        if not data:
+            raise HTTPException(404, "no scene overview yet")
+        del v  # cache-buster only
+        return Response(
+            data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store", "X-Stitch-Scene": str(version)},
+        )
+
+    @router.post("/stitch/snap")
+    def post_snap() -> JSONResponse:
+        """Fetch a fresh still and the camera's own scalars, in one action.
+
+        `GetStitch` returns both the live values and the factory `initial`
+        block, so "confirm what the camera's auto-adjustment already found" is
+        a real comparison rather than a leap of faith.
+        """
+        frame, cam, host = _live_frame()
+        camera_mod = load_toolkit()["camera"]
         try:
             current, factory = camera_mod.get_stitch(host, cam.username, cam.password)
             scalars = (current.to_api(), factory.to_api())
@@ -541,7 +833,6 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
             logger.warning("STITCH: GetStitch failed: %s", exc)
             scalars = (None, None)
 
-        del metric
         return _adopt_frame(
             frame,
             camera_name=cam.name,
@@ -647,13 +938,15 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
             chains, frame = _session.chains, _session.frame
             width, height = _session.width, _session.height
             baseline = _session.baseline
+            upright = _session.vertical
         if chains is None or frame is None:
             raise HTTPException(409, "no measured snapshot yet")
 
         seam = width // 2
+        band = _target_band(upright, height)
         scr = metric.residual_from_chains(chains, anchors)
-        ssr = _ssr_for_anchors(metric, frame, seam, height, anchors)
-        payload = _score_payload(scr, ssr)
+        ssr, ssr_target = _ssr_for_anchors(metric, frame, seam, height, anchors, band)
+        payload = _score_payload(scr, ssr, ssr_target, band)
         payload["baseline"] = baseline
         return JSONResponse(payload)
 
@@ -781,9 +1074,18 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
 
 
 def _ssr_for_anchors(
-    metric: Any, frame: Any, seam: int, height: int, anchors: list[tuple[float, float]]
-) -> Any:
-    """SSR of the frame as the candidate curve would leave it.
+    metric: Any,
+    frame: Any,
+    seam: int,
+    height: int,
+    anchors: list[tuple[float, float]],
+    band: tuple[int, int] | None = None,
+) -> tuple[Any, Any]:
+    """SSR of the frame as the candidate curve would leave it, twice.
+
+    Once over the whole field band and once over the rows the calibration
+    target occupies, because those are different questions and on a real frame
+    they differ by two orders of magnitude.
 
     Computed on a 1280-px crop around the seam rather than the whole panorama:
     SSR only ever reads the blend window and the two shoulders, so the rest of
@@ -799,7 +1101,15 @@ def _ssr_for_anchors(
     ds = [a[1] for a in anchors]
     lut = np.round(np.interp(np.arange(height), ys, ds)).astype(np.int32)
     shifted = apply_shift_to_frame_rgb(crop, lut, seam - lo)
-    return metric.seam_sharpness_ratio(shifted, seam_x=seam - lo, blend_w=2 * BLEND_W)
+    whole = metric.seam_sharpness_ratio(shifted, seam_x=seam - lo, blend_w=2 * BLEND_W)
+    target = (
+        None
+        if band is None
+        else metric.seam_sharpness_ratio(
+            shifted, seam_x=seam - lo, blend_w=2 * BLEND_W, band=band
+        )
+    )
+    return whole, target
 
 
 def _state_payload() -> dict:
@@ -825,6 +1135,15 @@ def _state_payload() -> dict:
         "metric_error": _session.chains_error,
         "baseline": _session.baseline,
         "quality": _session.quality,
+        "vertical": _session.vertical,
+        "scene": {
+            "has": bool(_session.scene),
+            "version": _session.scene_version,
+            "at": _session.scene_at,
+            "source": _session.scene_source,
+            "vertical": _session.scene_vertical,
+            "width": SCENE_W,
+        },
         "last_apply": _session.last_apply,
     }
 
@@ -851,121 +1170,196 @@ _STYLE = """
   --rule:#2a2c34; --rule-strong:#3b3e48; --text:#e6e7ec; --text-mute:#94969f;
   --text-faint:#5e616b; --accent:#fb923c; --signal-on:#22c55e; --signal-off:#6b7280;
   --signal-warn:#fbbf24; --signal-bad:#f43f5e;
-  --display:'Barlow Condensed','Bebas Neue',sans-serif;
-  --body:'IBM Plex Sans',system-ui,sans-serif;
-  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  /* System stacks, no webfont link. A phone at a pitch should not be waiting on
+     a webfont CDN over whatever link the field has. */
+  --display:'Bahnschrift','DIN Alternate','Roboto Condensed',system-ui,sans-serif;
+  --body:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:ui-monospace,'SF Mono','Cascadia Mono','Segoe UI Mono',monospace;
 }
 * { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
 body {
-  margin:0; font-family:var(--body); font-size:14px; line-height:1.55;
-  color:var(--text); background:var(--bg-base);
+  margin:0; font-family:var(--body); font-size:15px; line-height:1.5;
+  color:var(--text); background:var(--bg-base); padding-bottom:76px;
+  overscroll-behavior-y:contain;
 }
-.topbar { border-bottom:1px solid var(--rule); background:rgba(10,11,15,.72); }
+.topbar { border-bottom:1px solid var(--rule); background:rgba(10,11,15,.94);
+  position:sticky; top:0; z-index:30; backdrop-filter:blur(6px); }
 .topbar-inner {
-  max-width:1400px; margin:0 auto; padding:14px 24px;
-  display:flex; align-items:center; justify-content:space-between;
+  max-width:1400px; margin:0 auto; padding:9px 12px;
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
 }
 .brand {
-  font-family:var(--display); font-weight:700; letter-spacing:.18em;
-  font-size:18px; text-transform:uppercase;
+  font-family:var(--display); font-weight:700; letter-spacing:.16em;
+  font-size:14px; text-transform:uppercase; white-space:nowrap;
 }
 .brand .dot { color:var(--accent); }
 .crumb {
-  font-family:var(--mono); font-size:11px; letter-spacing:.16em;
-  text-transform:uppercase; color:var(--text-mute);
+  font-family:var(--mono); font-size:11px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--text-mute); text-align:right;
 }
 .crumb a { color:var(--text-mute); text-decoration:none; }
-.crumb a:hover { color:var(--accent); }
-.shell { max-width:1400px; margin:0 auto; padding:24px 24px 80px; }
+.shell { max-width:1400px; margin:0 auto; padding:12px 12px 24px; }
 .headline {
   font-family:var(--display); font-weight:700; text-transform:uppercase;
-  letter-spacing:.04em; font-size:clamp(32px,4vw,48px); line-height:.95; margin:0 0 6px;
+  letter-spacing:.03em; font-size:clamp(21px,5.5vw,44px); line-height:1; margin:0 0 4px;
 }
-.lede { color:var(--text-mute); max-width:70ch; margin:0 0 20px; }
+.lede { color:var(--text-mute); max-width:70ch; margin:0 0 12px; font-size:13.5px; }
 h2.sec {
   font-family:var(--display); font-weight:700; text-transform:uppercase;
-  letter-spacing:.06em; font-size:19px; margin:0 0 12px;
+  letter-spacing:.05em; font-size:16px; margin:0 0 9px;
 }
 h2.sec .accent { color:var(--accent); }
-.grid { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:24px; align-items:start; }
-@media (max-width:1080px) { .grid { grid-template-columns:minmax(0,1fr); } }
+.grid { display:flex; flex-direction:column; gap:12px; }
+.col { display:contents; }
 .panel {
   background:var(--bg-surface); border:1px solid var(--rule);
-  padding:16px 18px; margin-bottom:18px;
+  padding:12px 13px; margin:0;
 }
+details.panel > summary {
+  cursor:pointer; list-style:none; font-family:var(--display); font-weight:700;
+  text-transform:uppercase; letter-spacing:.05em; font-size:16px;
+  display:flex; justify-content:space-between; align-items:center; gap:8px;
+}
+details.panel > summary::-webkit-details-marker { display:none; }
+details.panel > summary::after { content:'+'; color:var(--accent); font-size:19px; }
+details.panel[open] > summary::after { content:'\\2212'; }
+details.panel > summary .accent { color:var(--accent); }
+details.panel[open] > summary { margin-bottom:10px; }
 .mono { font-family:var(--mono); font-size:12px; }
 .muted { color:var(--text-mute); }
-.faint { color:var(--text-faint); font-size:12px; }
+.faint { color:var(--text-faint); font-size:12.5px; }
 .btn {
-  font-family:var(--display); text-transform:uppercase; letter-spacing:.09em;
-  font-weight:600; font-size:14px; padding:8px 16px; cursor:pointer;
-  background:var(--accent); color:#141414; border:0;
+  font-family:var(--display); text-transform:uppercase; letter-spacing:.07em;
+  font-weight:600; font-size:15px; padding:11px 15px; cursor:pointer;
+  background:var(--accent); color:#141414; border:0; min-height:44px;
+  touch-action:manipulation;
 }
-.btn:hover { filter:brightness(1.12); }
+.btn:active { filter:brightness(1.2); }
 .btn[disabled] { background:var(--rule-strong); color:var(--text-faint); cursor:not-allowed; }
 .btn-ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
-.btn-ghost:hover { background:rgba(251,146,60,.12); }
 .btn-danger { background:transparent; color:var(--signal-bad); border:1px solid var(--signal-bad); }
-.btn-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-canvas { display:block; background:#000; image-rendering:pixelated; }
-#viewwrap { border:1px solid var(--rule); position:relative; }
-#view { width:100%; height:auto; cursor:ew-resize; }
-#zoomwrap { border:1px solid var(--rule); margin-top:12px; position:relative; }
-#zoom { width:100%; height:auto; }
-.modes { display:flex; gap:6px; flex-wrap:wrap; margin:12px 0 8px; }
-.modes button {
-  font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
-  padding:6px 11px; background:var(--bg-elev); color:var(--text-mute);
-  border:1px solid var(--rule); cursor:pointer;
+.btn-sm { font-size:12px; padding:7px 10px; min-height:36px; }
+.btn-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+
+/* The procedure. It is the spine of the page, not a tip box. */
+ol.steps { list-style:none; margin:0 0 12px; padding:0; border:1px solid var(--rule);
+  background:var(--bg-surface); }
+ol.steps li { display:flex; gap:9px; padding:8px 11px; border-bottom:1px solid var(--rule);
+  color:var(--text-faint); font-size:13px; align-items:flex-start; }
+ol.steps li:last-child { border-bottom:0; }
+ol.steps li .n { font-family:var(--mono); font-size:11px; width:17px; flex:none;
+  border:1px solid var(--rule-strong); text-align:center; line-height:16px; height:18px; }
+ol.steps li .t { font-weight:600; color:var(--text-mute); }
+ol.steps li .d { display:none; }
+ol.steps li.on { color:var(--text); background:var(--bg-elev);
+  border-left:3px solid var(--accent); padding-left:8px; }
+ol.steps li.on .t { color:var(--accent); }
+ol.steps li.on .d { display:block; color:var(--text-mute); font-size:12.5px; }
+ol.steps li.done .n { border-color:var(--signal-on); color:var(--signal-on); }
+
+/* Bottom action bar: the two live-camera doors, in thumb reach. */
+.dock { position:fixed; left:0; right:0; bottom:0; z-index:40;
+  background:rgba(10,11,15,.96); border-top:1px solid var(--rule);
+  padding:8px 10px calc(8px + env(safe-area-inset-bottom)); display:flex; gap:8px;
+  align-items:center; backdrop-filter:blur(6px); }
+.dock .btn { flex:1 1 0; }
+.dock .st { font-family:var(--mono); font-size:11px; color:var(--text-mute);
+  flex:2 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+canvas { display:block; background:#000; image-rendering:pixelated; width:100%;
+  touch-action:none; -webkit-user-select:none; user-select:none; }
+#zoomwrap, #viewwrap { border:1px solid var(--rule); position:relative; }
+#zoomwrap { margin-bottom:8px; }
+.modes { display:flex; gap:5px; flex-wrap:wrap; margin:9px 0 6px; }
+.modes button, .seg button {
+  font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+  padding:8px 9px; background:var(--bg-elev); color:var(--text-mute); min-height:38px;
+  border:1px solid var(--rule); cursor:pointer; touch-action:manipulation;
 }
-.modes button.on { color:var(--accent); border-color:var(--accent); }
+.modes button.on, .seg button.on { color:var(--accent); border-color:var(--accent); }
+.seg { display:flex; gap:5px; }
+.seg button { flex:1; }
 .caption {
-  font-family:var(--mono); font-size:12px; letter-spacing:.04em;
-  padding:9px 12px; margin-top:10px;
+  font-family:var(--mono); font-size:12px; letter-spacing:.02em;
+  padding:8px 10px; margin-top:8px;
   border-left:3px solid var(--accent); background:var(--bg-elev); color:var(--text);
 }
 .caveat {
-  font-size:12.5px; padding:10px 12px; margin-top:10px;
+  font-size:12.5px; padding:9px 11px; margin-top:8px;
   border-left:3px solid var(--signal-warn); background:rgba(251,191,36,.07);
   color:var(--text-mute);
 }
 .caveat strong { color:var(--signal-warn); }
-label.row { display:block; margin:14px 0 4px; }
+.do { font-size:13.5px; padding:10px 12px; margin-top:8px;
+  border-left:3px solid var(--signal-on); background:rgba(34,197,94,.09); color:var(--text); }
+.do strong { color:var(--signal-on); }
+label.row { display:block; margin:11px 0 3px; }
 label.row .lbl {
-  font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+  font-family:var(--mono); font-size:11px; letter-spacing:.09em;
   text-transform:uppercase; color:var(--text-mute);
-  display:flex; justify-content:space-between; align-items:baseline;
+  display:flex; justify-content:space-between; align-items:baseline; gap:8px;
 }
 label.row .val { color:var(--accent); font-weight:600; }
-input[type=range] { width:100%; margin:6px 0 0; accent-color:var(--accent); }
-input[type=number], select {
+input[type=range] { width:100%; margin:2px 0 0; accent-color:var(--accent); height:38px; }
+input[type=number], input[type=text], select {
   background:var(--bg-input); color:var(--text); border:1px solid var(--rule);
-  padding:5px 7px; font-family:var(--mono); font-size:12px; width:100%;
+  padding:9px 8px; font-family:var(--mono); font-size:15px; width:100%; min-height:42px;
 }
-input[type=number]:focus, select:focus { outline:1px solid var(--accent); border-color:var(--accent); }
+select { -webkit-appearance:none; appearance:none; }
 table { border-collapse:collapse; width:100%; font-family:var(--mono); font-size:12px; }
-th, td { padding:5px 7px; border-bottom:1px solid var(--rule); text-align:left; }
-th { color:var(--text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.1em; font-size:10px; }
+th, td { padding:5px 6px; border-bottom:1px solid var(--rule); text-align:left; }
+th { color:var(--text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.08em; font-size:10px; }
 td.num { text-align:right; }
-.kpi { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:8px; }
-.kpi div { background:var(--bg-elev); border:1px solid var(--rule); padding:8px 10px; }
+.kpi { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-bottom:8px; }
+.kpi div { background:var(--bg-elev); border:1px solid var(--rule); padding:7px 9px; }
 .kpi .k {
-  font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+  font-family:var(--mono); font-size:10px; letter-spacing:.1em;
   text-transform:uppercase; color:var(--text-faint);
 }
-.kpi .v { font-family:var(--display); font-size:26px; line-height:1.1; }
-.kpi .d { font-family:var(--mono); font-size:11px; }
-.better { color:var(--signal-on); }
-.worse { color:var(--signal-bad); }
+.kpi .v { font-family:var(--display); font-size:25px; line-height:1.1; }
+.kpi.stale .v, .kpi.stale .d { opacity:.42; }
+.better { color:var(--signal-on); } .worse { color:var(--signal-bad); }
 .flat { color:var(--text-faint); }
-.flash { padding:10px 14px; margin:0 0 16px; border-left:3px solid var(--signal-bad);
+.flash { padding:9px 12px; margin:0 0 12px; border-left:3px solid var(--signal-bad);
   background:rgba(244,63,94,.08); font-size:13px; }
-.flash ul { margin:6px 0 0 16px; padding:0; }
-.flash-ok { border-left-color:var(--signal-on); background:rgba(34,197,94,.08); }
-.dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+.flash ul { margin:5px 0 0 16px; padding:0; }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
 .dot.on { background:var(--signal-on); } .dot.off { background:var(--signal-off); }
 .dot.warn { background:var(--signal-warn); } .dot.bad { background:var(--signal-bad); }
-.locked { color:var(--text-faint); }
+.badge { font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; padding:2px 6px;
+  border:1px solid var(--rule-strong); color:var(--text-mute); text-transform:uppercase; }
+.badge.live { border-color:var(--signal-on); color:var(--signal-on); }
+.badge.stale { border-color:var(--signal-warn); color:var(--signal-warn); }
+.badge.off { border-color:var(--signal-bad); color:var(--signal-bad); }
+#scenewrap { position:relative; border:1px solid var(--rule); background:#000; }
+#scene { display:block; width:100%; height:auto; }
+#sceneseam { position:absolute; top:0; bottom:0; left:50%; width:2px; margin-left:-1px;
+  background:var(--accent); box-shadow:0 0 6px rgba(251,146,60,.9); pointer-events:none; }
+#scenehint { position:absolute; left:0; right:0; bottom:0; padding:3px 6px;
+  font-family:var(--mono); font-size:10.5px; background:rgba(10,11,15,.72); color:var(--text-mute); }
+.nudge { display:flex; gap:6px; margin:8px 0 0; }
+.nudge button { flex:1; font-family:var(--mono); font-size:14px; min-height:46px;
+  background:var(--bg-elev); color:var(--text); border:1px solid var(--rule-strong);
+  cursor:pointer; touch-action:manipulation; }
+.nudge button:active { border-color:var(--accent); color:var(--accent); }
+.dxread { font-family:var(--display); font-size:30px; line-height:1.05; }
+.dxread span { font-family:var(--mono); font-size:12px; color:var(--text-mute); }
+
+@media (min-width:980px) {
+  body { padding-bottom:0; font-size:14px; }
+  .shell { padding:20px 24px 60px; }
+  .grid { display:grid; grid-template-columns:minmax(0,1fr) 400px; gap:18px;
+    align-items:start; }
+  .col { display:flex; flex-direction:column; gap:14px; }
+  .dock { position:static; border-top:0; border:1px solid var(--rule);
+    background:var(--bg-surface); margin-bottom:12px; padding:10px 12px; }
+  .dock .btn { flex:0 0 auto; }
+  ol.steps { display:flex; }
+  ol.steps li { flex:1; border-bottom:0; border-right:1px solid var(--rule);
+    flex-direction:column; }
+  ol.steps li:last-child { border-right:0; }
+}
 """
 
 
@@ -973,21 +1367,25 @@ _SCRIPT = r"""
 'use strict';
 // ---------------------------------------------------------------------------
 // Model. The anchor curve is the ONLY authored state: the translate and roll
-// sliders are a decomposition of it (mean, best-fit ramp), recomputed whenever
+// controls are a decomposition of it (mean, best-fit ramp), recomputed whenever
 // the curve changes by any route. Nothing the operator can move exists outside
 // the artifact.
 // ---------------------------------------------------------------------------
 var S = {
   st: null, anchors: [], surface: 'camera_mesh', mode: 'blink',
-  imgs: {}, blink: 0, cursorRow: 1080, dragging: null, ready: false,
-  metrics: null, baseline: null, busy: false, pending: false
+  imgs: {}, blink: 0, cursorRow: 1080, ready: false,
+  metrics: null, baseline: null, quality: null, vertical: null,
+  busy: false, pending: false, stale: false, scoredAt: null, netFails: 0,
+  spanX: 256, grab: 'curve', narrow: true, retry: null
 };
 // Geometry is taken from the frame the server actually fetched, never assumed.
 // These are only the pre-snapshot defaults.
-var H = 2160, STRIP = 640, BLENDH = 128, ZOOM = 4, ZOOM_ROWS = 400;
+var H = 2160, STRIP = 640, BLENDH = 128;
+var MEASURE_TIMEOUT_MS = 9000;
 
 function $(id) { return document.getElementById(id); }
 function fmt(v, d) { return (v === null || v === undefined || isNaN(v)) ? '--' : v.toFixed(d === undefined ? 2 : d); }
+function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
 function dxAt(y) {
   var A = S.anchors;
@@ -1005,7 +1403,8 @@ function dxAt(y) {
 
 // Piecewise-linear segments of the curve, as (y0, y1, slope, intercept). A
 // linear-in-y horizontal offset is exactly a canvas shear, so each segment is
-// one GPU-composited draw call instead of 2160 per-row blits.
+// one GPU-composited draw call instead of 2160 per-row blits -- which is what
+// keeps a drag smooth on a phone with no round trip to the server.
 function bands() {
   var A = S.anchors, out = [];
   if (A[0][0] > 0) out.push([0, A[0][0], 0, A[0][1]]);
@@ -1075,9 +1474,13 @@ function emitStrip(ctx, img) { ctx.drawImage(img, 0, 0); }
 // does instead is fit each structure independently on the two shoulders and
 // extrapolate both to the seam column -- so drawing those extrapolations is
 // both the most sensitive comparator available and exactly the evidence the
-// score is computed from. A gap between a red line and its cyan partner at the
-// seam IS that structure's residual, to sub-pixel precision, and no smear of
-// replicated columns comes close to showing it that clearly.
+// score is computed from.
+//
+// Drawn by sensitivity, not uniformly. `sens` is px of residual per px of
+// horizontal shift: a structure at 0.02 is within a degree of horizontal and
+// will not move whatever the operator does with the control in their hand.
+// Painting it as brightly as one that responds would be a lie told in a
+// picture, so it is drawn as a faint grey hint instead.
 function drawShoulders(view, which) {
   var obs = (S.metrics && S.metrics.observations) || [];
   if (!obs.length) return;
@@ -1086,10 +1489,9 @@ function drawShoulders(view, which) {
   ctx.lineWidth = Math.max(1, view.sy * 1.5);
   var seam = STRIP, reach = BLENDH * 2;
   for (var i = 0; i < obs.length; i++) {
-    var o = obs[i];
-    // slope is dy/dx in source px; the view scales the axes differently, so
-    // the drawn slope has to be scaled too or the lines would lie.
-    [['left', o.y_left, '#ff5a5a'], ['right', o.y_right, '#48e0ff']].forEach(function (t) {
+    var o = obs[i], blind = (o.sens !== undefined && o.sens < 0.05);
+    [['left', o.y_left, blind ? '#6b7280' : '#ff5a5a'],
+     ['right', o.y_right, blind ? '#4b5563' : '#48e0ff']].forEach(function (t) {
       if (which && which !== t[0]) return;
       var side = t[0], yAt = t[1];
       var x0 = side === 'left' ? seam - reach : seam;
@@ -1097,12 +1499,11 @@ function drawShoulders(view, which) {
       var X = function (x) { return (x - view.ox) * view.sx; };
       var Y = function (x) { return (yAt + o.slope * (x - seam) - view.oy) * view.sy; };
       ctx.strokeStyle = t[2];
-      ctx.globalAlpha = 0.9;
+      ctx.globalAlpha = blind ? 0.30 : 0.9;
       ctx.beginPath(); ctx.moveTo(X(x0), Y(x0)); ctx.lineTo(X(x1), Y(x1)); ctx.stroke();
-      // dashed continuation across the window: this part is extrapolation.
-      ctx.setLineDash([4, 4]); ctx.globalAlpha = 0.55;
+      ctx.setLineDash([4, 4]); ctx.globalAlpha = blind ? 0.18 : 0.55;
       var x2 = side === 'left' ? seam + reach : seam - reach;
-      ctx.beginPath(); ctx.moveTo(X(x1 === seam ? seam : seam), Y(seam));
+      ctx.beginPath(); ctx.moveTo(X(seam), Y(seam));
       ctx.lineTo(X(x2), Y(x2)); ctx.stroke();
       ctx.setLineDash([]);
     });
@@ -1110,16 +1511,21 @@ function drawShoulders(view, which) {
   ctx.globalAlpha = 1;
 }
 
-function paint(view, grid) {
+function paint(view, grid, locator) {
   var ctx = view.ctx;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, view.c.width, view.c.height);
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, view.c.width, view.c.height);
-  if (!S.imgs.left || !S.imgs.right) return;
+  var sxOf = function (x) { return (x - view.ox) * view.sx; };
+  if (!S.imgs.left || !S.imgs.right) {
+    ctx.fillStyle = '#5e616b'; ctx.font = '13px ui-monospace, monospace';
+    ctx.fillText(S.st && S.st.has_snapshot ? 'strips still loading' : 'no frame yet', 10, 22);
+    return;
+  }
 
-  // Both halves are always drawn at their true positions. Only the 256-px
-  // blend window changes between views -- blanking a whole half would be a
-  // flash, and what a blink has to reveal is a few pixels of jump.
+  // Both halves are always drawn at their true positions. Only the blend
+  // window changes between views -- blanking a whole half would be a flash,
+  // and what a blink has to reveal is a few pixels of jump.
   view.half('left', emitStrip, {});
   view.half('right', emitStrip, {});
 
@@ -1133,7 +1539,6 @@ function paint(view, grid) {
 
   // seam + blend window
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  var sxOf = function (x) { return (x - view.ox) * view.sx; };
   ctx.fillStyle = 'rgba(251,146,60,.10)';
   ctx.fillRect(sxOf(STRIP - BLENDH), 0, 2 * BLENDH * view.sx, view.c.height);
   ctx.strokeStyle = 'rgba(251,146,60,.85)'; ctx.lineWidth = 1;
@@ -1141,7 +1546,7 @@ function paint(view, grid) {
 
   if (grid) {
     ctx.strokeStyle = 'rgba(255,255,255,.13)';
-    for (var x = STRIP - BLENDH; x <= STRIP + BLENDH; x++) {
+    for (var x = Math.ceil(view.ox); x <= view.ox + view.c.width / view.sx; x++) {
       var px = Math.round(sxOf(x)) + .5;
       ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, view.c.height); ctx.stroke();
     }
@@ -1151,38 +1556,70 @@ function paint(view, grid) {
   ctx.fillStyle = 'rgba(0,0,0,.42)';
   ctx.fillRect(lockedLeft ? 0 : sxOf(STRIP), 0,
     lockedLeft ? sxOf(STRIP) : view.c.width - sxOf(STRIP), view.c.height);
-  // row cursor
-  ctx.strokeStyle = 'rgba(34,197,94,.8)';
+
+  if (locator) {
+    // Rows that hold upright structure -- the only rows where a horizontal
+    // error is visible at all. Marked so the operator can jump to the person
+    // they just put in the seam instead of scrubbing 2160 rows for them.
+    var rows = (S.vertical && S.vertical.rows) || [];
+    ctx.fillStyle = 'rgba(34,197,94,.30)';
+    for (var r = 0; r < rows.length; r++) {
+      ctx.fillRect(0, (rows[r][0] - view.oy) * view.sy, view.c.width,
+        (rows[r][1] - rows[r][0]) * view.sy);
+    }
+    // what the zoom view is currently showing
+    var span = zoomRows();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, (S.cursorRow - span / 2 - view.oy) * view.sy + .5,
+      view.c.width - 1, span * view.sy);
+  }
+  ctx.strokeStyle = 'rgba(34,197,94,.8)'; ctx.lineWidth = 1;
   var cy = (S.cursorRow - view.oy) * view.sy;
   ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(view.c.width, cy); ctx.stroke();
 }
 
+function zoomCssH() {
+  return S.narrow ? Math.round(clamp(window.innerHeight * 0.44, 210, 430)) : 430;
+}
+function zoomScale() {           // CSS px per source px
+  var z = $('zoom');
+  return (z.clientWidth || 360) / S.spanX;
+}
+function zoomRows() { return zoomCssH() / zoomScale(); }
+function zoomTop() {
+  return clamp(S.cursorRow - zoomRows() / 2, 0, Math.max(0, H - zoomRows()));
+}
+
+function fitCanvas(c, cssH) {
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  c.width = Math.max(1, Math.round((c.clientWidth || 360) * dpr));
+  c.height = Math.max(1, Math.round(cssH * dpr));
+  c.style.height = cssH + 'px';
+  return dpr;
+}
+
 function draw() {
   var v = $('view'), z = $('zoom');
-  var dpr = Math.min(window.devicePixelRatio || 1, 2);
-  var cssW = v.clientWidth || 900;
-  v.width = Math.round(cssW * dpr); v.height = Math.round(660 * dpr);
-  v.style.height = '660px';
-  paint(new View(v, 0, 0, v.width / (2 * STRIP), v.height / H), false);
+  var zh = zoomCssH();
+  var dpr = fitCanvas(z, zh);
+  var scale = z.width / S.spanX;             // device px per source px
+  var top = zoomTop();
+  paint(new View(z, STRIP - S.spanX / 2, top, scale, scale), scale / dpr >= 2.2, false);
 
-  var zw = z.clientWidth || 900;
-  z.width = Math.round(zw * dpr);
-  var zs = z.width / (2 * BLENDH * ZOOM);          // display px per (source px * ZOOM)
-  var scale = zs * ZOOM;                            // display px per source px
-  z.height = Math.round(ZOOM_ROWS * scale);
-  z.style.height = Math.round(z.height / dpr) + 'px';
-  var top = Math.max(0, Math.min(H - ZOOM_ROWS, S.cursorRow - ZOOM_ROWS / 2));
-  paint(new View(z, STRIP - BLENDH, top, scale, scale), true);
-  $('zoomlabel').textContent = 'rows ' + Math.round(top) + '-' + Math.round(top + ZOOM_ROWS)
-    + ' @ ' + ZOOM + 'x, true aspect';
-  $('viewscale').textContent = (v.width / dpr / (2 * STRIP)).toFixed(2);
+  var lh = S.narrow ? 120 : 430;
+  fitCanvas(v, lh);
+  paint(new View(v, 0, 0, v.width / (2 * STRIP), v.height / H), false, true);
+
+  $('zoomlabel').textContent = 'rows ' + Math.round(top) + '-' + Math.round(top + zoomRows())
+    + ' \u00b7 ' + (zoomScale()).toFixed(1) + 'x \u00b7 ' + Math.round(S.spanX) + ' px wide';
 }
 
 // ---------------------------------------------------------------------------
 // Curve editing
 // ---------------------------------------------------------------------------
 function setAnchors(a, why) {
-  S.anchors = a.map(function (p) { return [p[0], Math.max(-64, Math.min(64, p[1]))]; });
+  S.anchors = a.map(function (p) { return [p[0], clamp(p[1], -64, 64)]; });
+  S.stale = true;
   syncControls(); draw(); scheduleMeasure();
   if (why) $('curvewhy').textContent = why;
 }
@@ -1204,13 +1641,14 @@ function rollAmp() {
 }
 function syncControls() {
   var t = meanDx(), r = rollAmp();
-  $('translate').value = t.toFixed(2); $('translateV').textContent = fmt(t) + ' px';
-  $('roll').value = r.toFixed(2); $('rollV').textContent = fmt(r) + ' px top-to-bottom';
-  var rows = S.st ? S.st.anchor_rows : [0, 540, 1080, 1620, 2159];
+  $('roll').value = r.toFixed(2); $('rollV').textContent = fmt(r) + ' px';
+  $('dxnow').innerHTML = (t >= 0 ? '+' : '') + t.toFixed(2)
+    + ' <span>px mean \u00b7 dx at row ' + Math.round(S.cursorRow) + ' = '
+    + fmt(dxAt(S.cursorRow)) + '</span>';
   var html = '';
   for (var i = 0; i < S.anchors.length; i++) {
     html += '<tr><td class="muted">y ' + S.anchors[i][0] + '</td><td>'
-      + '<input type="number" step="0.25" data-i="' + i + '" class="anch" value="'
+      + '<input type="number" step="0.25" inputmode="decimal" data-i="' + i + '" class="anch" value="'
       + S.anchors[i][1].toFixed(2) + '"></td></tr>';
   }
   $('curverows').innerHTML = html;
@@ -1224,12 +1662,11 @@ function syncControls() {
   }
   $('curvejson').textContent = JSON.stringify(
     S.anchors.map(function (p) { return [p[0], Math.round(p[1] * 1000) / 1000]; }));
-  void rows;
 }
 
 function nudge(delta) {
   setAnchors(S.anchors.map(function (p) { return [p[0], p[1] + delta]; }),
-    'translate ' + (delta > 0 ? '+' : '') + delta.toFixed(2) + ' px');
+    'whole curve ' + (delta > 0 ? '+' : '') + delta.toFixed(2) + ' px');
 }
 function setRoll(amp) {
   var cur = rollAmp(), d = amp - cur, mid = (H - 1) / 2;
@@ -1237,31 +1674,78 @@ function setRoll(amp) {
     return [p[0], p[1] + d * (p[0] - mid) / (H - 1)];
   }), 'roll set to ' + fmt(amp) + ' px top-to-bottom');
 }
+function nearestAnchor(row) {
+  var best = 0, bd = 1e9;
+  for (var i = 0; i < S.anchors.length; i++) {
+    var d = Math.abs(S.anchors[i][0] - row);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
 
 // ---------------------------------------------------------------------------
-// Metrics
+// Metrics. Every request is bounded and every number says which curve it
+// belongs to: on a field link a request that never returns must degrade into a
+// visible "stale", never into numbers that quietly stop moving.
 // ---------------------------------------------------------------------------
 var measureTimer = null;
 function scheduleMeasure() {
   if (measureTimer) clearTimeout(measureTimer);
-  measureTimer = setTimeout(measure, 160);
+  measureTimer = setTimeout(measure, 180);
+  renderFreshness();
 }
 function measure() {
-  if (!S.ready) return;
+  if (!S.ready) { renderFreshness(); return; }
   if (S.busy) { S.pending = true; return; }
-  S.busy = true; $('metricstate').textContent = 'scoring...';
+  S.busy = true;
+  var sent = JSON.stringify(S.anchors), sentMean = meanDx();
+  var ctl = ('AbortController' in window) ? new AbortController() : null;
+  var timer = setTimeout(function () { if (ctl) ctl.abort(); }, MEASURE_TIMEOUT_MS);
+  renderFreshness();
   fetch('/stitch/measure', {
     method: 'POST', credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ dx_anchors: S.anchors })
+    body: sent === '[]' ? '{}' : '{"dx_anchors":' + sent + '}',
+    signal: ctl ? ctl.signal : undefined
   }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (res) {
-      S.busy = false;
-      if (!res.ok) { $('metricstate').textContent = res.j.detail || 'scoring failed'; return; }
+      clearTimeout(timer); S.busy = false;
+      if (!res.ok) { S.netFails++; renderFreshness(res.j.detail || 'scoring refused'); return; }
+      S.netFails = 0;
       S.metrics = res.j; S.baseline = res.j.baseline || S.baseline;
-      renderMetrics(); $('metricstate').textContent = '';
+      S.scoredAt = sentMean;
+      S.stale = (sent !== JSON.stringify(S.anchors));
+      renderMetrics(); renderFreshness();
       if (S.pending) { S.pending = false; measure(); }
-    }).catch(function (e) { S.busy = false; $('metricstate').textContent = String(e); });
+    }).catch(function (e) {
+      clearTimeout(timer); S.busy = false; S.netFails++;
+      renderFreshness(String(e && e.name === 'AbortError'
+        ? 'no answer in ' + (MEASURE_TIMEOUT_MS / 1000) + ' s' : e));
+      // Keep trying, with backoff: a phone at a pitch loses the link for a few
+      // seconds at a time, and the operator should not have to know to poke it.
+      if (S.retry) clearTimeout(S.retry);
+      S.retry = setTimeout(measure, Math.min(8000, 1000 * Math.pow(2, Math.min(3, S.netFails))));
+    });
+}
+// One line that says whether the numbers on screen describe the curve on
+// screen. Everything else about the network is noise to an operator.
+function renderFreshness(err) {
+  var b = $('fresh');
+  if (!S.ready) {
+    b.className = 'badge'; b.textContent = S.st && S.st.has_snapshot ? 'measuring frame' : 'no frame';
+  } else if (S.netFails) {
+    b.className = 'badge off';
+    b.textContent = 'offline \u00d7' + S.netFails;
+  } else if (S.busy || S.stale) {
+    b.className = 'badge stale'; b.textContent = 'scoring\u2026';
+  } else {
+    b.className = 'badge live'; b.textContent = 'live';
+  }
+  $('kpis').className = 'kpi' + ((S.stale || S.busy || S.netFails) ? ' stale' : '');
+  $('scoredat').textContent = S.scoredAt === null ? ''
+    : ('numbers are for dx ' + (S.scoredAt >= 0 ? '+' : '') + S.scoredAt.toFixed(2) + ' px'
+      + (S.stale || S.netFails ? ' \u2014 the curve has moved since' : ''));
+  $('neterr').textContent = err || '';
 }
 function delta(now, before, unit) {
   if (now === null || before === null || now === undefined || before === undefined) return '';
@@ -1269,65 +1753,169 @@ function delta(now, before, unit) {
   var cls = Math.abs(d) < 1e-6 ? 'flat' : (d < 0 ? 'better' : 'worse');
   return '<span class="' + cls + '">' + (d >= 0 ? '+' : '') + d.toFixed(2) + ' ' + unit + '</span>';
 }
+
 // Whether this frame can constrain the calibration at all, stated before any
-// number is. Real tripod frames routinely produce a large SCR that barely
-// responds to dx -- unrelated edges paired across the seam -- and every
-// coverage gate passes while it happens. A precise-looking number on a frame
-// that cannot steer is worse than no number.
+// number is, and -- when it cannot -- what to do about it. Real tripod frames
+// routinely produce a large SCR that barely responds to dx, because SCR is
+// built from near-horizontal structures and a horizontal edge does not move
+// when the halves shift horizontally. The remedy is not a better number. It is
+// a person standing in the seam.
 function renderQuality(q) {
   var el = $('quality');
   if (!q) { el.style.display = 'none'; return; }
   el.style.display = '';
   S.quality = q;
+  var sp = q.split || {};
+  var blind = (sp.n_total && sp.n_steering !== undefined)
+    ? (sp.n_total - sp.n_steering) : 0;
+  var blindLine = sp.n_total
+    ? ' <span class="faint">' + sp.n_total + ' structures crossing the seam, ' + blind
+      + ' of them within 3&deg; of horizontal and therefore blind to a horizontal shift'
+      + (sp.max_sensitivity ? '; the steepest converts a shift into '
+        + sp.max_sensitivity.toFixed(2) + ' px of residual per px' : '') + '.</span>'
+    : '';
   if (q.usable) {
     el.className = 'caption';
     el.innerHTML = '<b>This frame can steer the calibration.</b> ' + q.reason
-      + '. Drag until SCR p90 stops falling.';
+      + '. Drag until SCR p90 stops falling.' + blindLine;
   } else {
-    el.className = 'caveat';
-    el.innerHTML = '<strong>This frame cannot steer the calibration.</strong> ' + q.reason
-      + '. Read SCR here as a bound, not as the seam offset, and do not trust a curve '
-      + 'tuned against it &mdash; find a frame with a clear structure crossing the seam '
-      + '(a field line, a goal frame, a fence) at roughly the depth you care about.';
+    el.className = 'do';
+    el.innerHTML = '<strong>The picture cannot steer this calibration.</strong> '
+      + q.reason + '.' + (q.remedy ? ' <b>' + q.remedy + '</b>' : '') + blindLine;
   }
   $('suggest').disabled = (q.best_dx === null || q.best_dx === undefined);
+}
+
+// The prior question, answered from the picture rather than from the metric:
+// is there anything upright in the blend window for a horizontal error to
+// break? Cheap enough (~60 ms) to run on every aiming snapshot.
+function renderVertical(v, where) {
+  var el = $(where);
+  if (!el) return;
+  if (!v) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  if (v.n_with_structure) {
+    var r = v.rows && v.rows.length ? v.rows[0] : null;
+    el.className = 'do';
+    el.innerHTML = '<strong>Upright structure is in the seam</strong> at '
+      + (v.rows || []).map(function (x) { return 'rows ' + x[0] + '\u2013' + x[1]; }).join(', ')
+      + ' (peak ' + fmt(v.best_ratio, 1) + '\u00d7 the surrounding texture). That is what a '
+      + 'horizontal misregistration breaks. <b>Go and look at it</b>: pinch to 4&times; and ask '
+      + 'whether the body is continuous across the seam. This says only that something is '
+      + 'there \u2014 it is not a registration measurement, and nothing here can score a body '
+      + 'that sits inside the blend window, because both sensors are already mixed there.'
+      + (r ? ' <button class="btn btn-ghost btn-sm" id="jumpv">Show me</button>' : '');
+    if (r) {
+      var b = $('jumpv');
+      if (b) b.addEventListener('click', function () {
+        S.cursorRow = (r[0] + r[1]) / 2; S.spanX = Math.min(S.spanX, 320); draw(); syncControls();
+        $('zoomwrap').scrollIntoView({ block: 'center' });
+      });
+    }
+  } else {
+    el.className = 'caveat';
+    el.innerHTML = '<strong>Nothing upright crosses the seam.</strong> Everything at this seam '
+      + 'runs horizontally \u2014 the far touchline, the treeline, the painted banners \u2014 and a '
+      + 'horizontal edge does not move when the halves shift horizontally. '
+      + '<b>Have someone stand on the orange line</b>, out where play actually happens rather than '
+      + 'beside the tripod, and snap again.';
+  }
+}
+
+// "Nothing to change here" is an outcome, not a failure, and it is the common
+// one: across the archived games 52 of 96 frames sit below the SSR noise floor
+// and players straddling the seam are continuous. A tool that can only ever say
+// "here is a correction" will manufacture one.
+function renderFloor(ssr) {
+  var el = $('floor');
+  if (!ssr || ssr.abs_ln_ssr === undefined) { el.style.display = 'none'; return; }
+  var atFloor = ssr.abs_ln_ssr <= ssr.noise_floor;
+  el.style.display = '';
+  el.className = atFloor ? 'do' : 'caption';
+  el.innerHTML = atFloor
+    ? '<strong>This seam is already at the measurement floor.</strong> |ln SSR| '
+      + fmt(ssr.abs_ln_ssr, 3) + ' is at or below the ' + ssr.noise_floor.toFixed(2)
+      + ' floor, which is where a seam with nothing wrong with it reads. Unless the body '
+      + 'in the seam looks torn to you, the right answer here is to change nothing.'
+    : '|ln SSR| ' + fmt(ssr.abs_ln_ssr, 3) + ' is above the ' + ssr.noise_floor.toFixed(2)
+      + ' floor, so there is something to see &mdash; but this metric saturates and cannot '
+      + 'tell you how much. Go and look at the person in the seam.';
 }
 
 function renderMetrics() {
   var m = S.metrics, b = S.baseline;
   if (!m) return;
-  var scr = m.scr, ssr = m.ssr;
-  $('scrn').textContent = scr.n;
+  var scr = m.scr, ssr = m.ssr, sp = m.split || {}, tg = m.ssr_target;
+  $('scrn').textContent = sp.n_steering === undefined
+    ? scr.n : (sp.n_steering + '/' + scr.n);
   if (!scr.n) {
-    $('scrp50').textContent = '--'; $('scrp90').textContent = '--';
-    $('scrnote').textContent =
-      'No structure crosses the seam in this frame. That is the expected case '
-      + 'mid-field: point the camera at something with lines through the seam, '
-      + 'or walk a high-contrast edge across it, then re-snap.';
-  } else {
-    $('scrp50').textContent = fmt(scr.p50);
-    $('scrp90').textContent = fmt(scr.p90);
+    $('scrp90').textContent = '--';
     $('scrnote').innerHTML =
-      'p50 ' + delta(scr.p50, b && b.scr ? b.scr.p50 : null, 'px')
-      + ' &middot; p90 ' + delta(scr.p90, b && b.scr ? b.scr.p90 : null, 'px')
-      + ' &middot; ' + scr.row_bands_covered + '/3 row bands, '
+      'No structure crosses the seam in this frame. That is the expected case mid-field: '
+      + '<b>have someone stand in the seam</b> at the depth play happens, then snap again.';
+  } else {
+    var p90 = (sp.p90_steering === null || sp.p90_steering === undefined)
+      ? scr.p90 : sp.p90_steering;
+    $('scrp90').textContent = fmt(p90);
+    $('scrnote').innerHTML =
+      'p90 shown is over the <b>' + (sp.n_steering || 0) + '</b> structures steep enough to see a '
+      + 'horizontal shift; over all ' + scr.n + ' it is ' + fmt(scr.p90) + ' px '
+      + delta(scr.p90, b && b.scr ? b.scr.p90 : null, 'px')
+      + ', p50 ' + fmt(scr.p50) + ' px. ' + scr.row_bands_covered + '/3 row bands, '
       + Math.round(scr.height_coverage * 100) + '% height'
-      // Only offered when the frame was shown to respond to the curve at all.
-      // `implied_dx` is a regression that returns confident nonsense on a
-      // contaminated observation set -- it read -17, +159 and -7 px on three
-      // real frames whose seams were all fine.
       + (S.quality && !S.quality.usable ? ''
         : scr.suggested_dx === null ? ''
           : ' &middot; measurement suggests dx &asymp; <b>' + fmt(scr.suggested_dx) + ' px</b>');
   }
+  // The number the person in the seam exists to produce: seam damage measured
+  // over the rows they occupy rather than averaged across a field band of
+  // grass, which a misregistration cannot damage because there is nothing
+  // there to break.
+  $('ssrtarget').textContent = tg ? fmt(tg.abs_ln_ssr, 2) : '--';
   $('ssrv').textContent = fmt(ssr.abs_ln_ssr, 3);
-  $('ssrnote').innerHTML =
-    delta(ssr.abs_ln_ssr, b && b.ssr ? b.ssr.abs_ln_ssr : null, '')
-    + ' &middot; noise floor ' + ssr.noise_floor.toFixed(2)
-    + ' &mdash; a post-fusion shift cannot move this; only a camera-side '
-    + 'correction applied before the blend can, and that shows up after Apply.';
+  renderFloor(ssr);
+  $('ssrnote').innerHTML = tg
+    ? '<b>|ln SSR| on the target</b> is the same metric over rows ' + tg.band[0] + '-'
+      + tg.band[1] + ' only &mdash; the rows something upright occupies '
+      + delta(tg.abs_ln_ssr, b && b.ssr_target ? b.ssr_target.abs_ln_ssr : null, '')
+      + '. Over the whole field band the same frame reads ' + fmt(ssr.abs_ln_ssr, 3)
+      + ', because most of a field band is grass and a misregistration cannot break grass. '
+      + 'Read it as a <b>before/after</b> number, not as an absolute: SSR is a ratio against a '
+      + 'background fitted on the shoulders, so an object that exists only inside the window '
+      + 'raises it even when registration is perfect. Keep the same person standing in the same '
+      + 'place, Apply, snap again, and a drop is registration improving. Noise floor '
+      + ssr.noise_floor.toFixed(2) + '. Dragging cannot move either number: only a camera-side '
+      + 'correction applied before the blend can.'
+    : delta(ssr.abs_ln_ssr, b && b.ssr ? b.ssr.abs_ln_ssr : null, '')
+      + ' &middot; noise floor ' + ssr.noise_floor.toFixed(2)
+      + ' &mdash; averaged over the whole field band, which is mostly grass. Put something '
+      + 'upright in the seam and this is measured where it stands instead. A post-fusion shift '
+      + 'cannot move it either way; only a camera-side correction can.';
   if (!S.quality) {
     $('suggest').disabled = (scr.suggested_dx === null || scr.suggested_dx === undefined);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The procedure. Five steps, and which one you are on is derived from evidence
+// -- a frame exists, something upright is in the seam, the curve has moved --
+// never from a button someone pressed.
+// ---------------------------------------------------------------------------
+function currentStep() {
+  var st = S.st || {};
+  if (!st.has_snapshot) return st.scene && st.scene.has ? 'stand' : 'aim';
+  var v = S.vertical;
+  if (v && !v.n_with_structure) return 'stand';
+  if (Math.abs(meanDx()) < 0.001 && Math.abs(rollAmp()) < 0.001) return 'adjust';
+  return 'ship';
+}
+function renderSteps() {
+  var order = ['aim', 'stand', 'snap', 'adjust', 'ship'], cur = currentStep();
+  var at = order.indexOf(cur);
+  for (var i = 0; i < order.length; i++) {
+    var li = $('step-' + order[i]);
+    if (!li) continue;
+    li.className = (i === at ? 'on' : (i < at ? 'done' : ''));
   }
 }
 
@@ -1338,7 +1926,6 @@ function applyState(st) {
   S.st = st;
   if (st.height) {
     H = st.height; STRIP = st.strip_w; BLENDH = st.blend_w;
-    ZOOM_ROWS = Math.min(400, H);
     if (st.anchor_rows && st.anchor_rows.length && !S.anchorsPinned) {
       var rows = st.anchor_rows.filter(function (r) { return r < H; });
       if (rows[rows.length - 1] !== H - 1) rows.push(H - 1);
@@ -1360,17 +1947,30 @@ function applyState(st) {
       : ms === 'running' ? 'detecting structures and sweeping dx (25-60 s at 7680x2160)...'
         : ms === 'failed' ? ('detection failed: ' + (st.metric_error || '?'))
           : 'no snapshot yet';
+  S.vertical = st.vertical || (st.scene ? st.scene.vertical : null) || null;
+  renderVertical(S.vertical, 'vertical');
+  renderVertical((st.scene && st.scene.vertical) || S.vertical, 'aimverdict');
   renderQuality(st.quality);
+  if (st.scene && st.scene.has) {
+    var img = $('scene');
+    if (img.getAttribute('data-v') !== String(st.scene.version)) {
+      img.setAttribute('data-v', String(st.scene.version));
+      img.src = '/stitch/scene.jpg?v=' + st.scene.version;
+      $('scenewrap').style.display = '';
+    }
+  }
   if (st.baseline) { S.baseline = st.baseline; S.metrics = S.metrics || st.baseline; renderMetrics(); }
   S.ready = (ms === 'ready');
-  if (ms === 'running') setTimeout(pollState, 1500);
+  if (ms === 'running') setTimeout(pollState, 2000);
   $('apply').disabled = !st.has_snapshot;
   $('save').disabled = !st.has_snapshot;
+  renderSteps(); renderFreshness(); draw();
 }
 function pollState() {
   fetch('/stitch/state', { credentials: 'same-origin' })
     .then(function (r) { return r.json(); })
-    .then(function (st) { applyState(st); if (st.metric_state === 'ready') measure(); });
+    .then(function (st) { applyState(st); if (st.metric_state === 'ready') measure(); })
+    .catch(function (e) { S.netFails++; renderFreshness(String(e)); });
 }
 function renderScalars(cur, fac) {
   var t = $('scalars');
@@ -1391,23 +1991,41 @@ function renderScalars(cur, fac) {
     + 'auto-adjustment. The factory column is recoverable from the camera itself.';
 }
 
+// The aiming loop: cheap, repeatable, and the step where the operator finds out
+// where the seam actually falls in the scene before spending 40 s measuring one.
+function aim() {
+  $('aim').disabled = true; $('dockstate').textContent = 'aiming\u2026';
+  fetch('/stitch/aim', { method: 'POST', credentials: 'same-origin' })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      $('aim').disabled = false;
+      if (!res.ok) { $('dockstate').textContent = res.j.detail || 'aim failed'; return; }
+      $('dockstate').textContent = 'aimed ' + new Date().toLocaleTimeString();
+      applyState(res.j);
+    }).catch(function (e) { $('aim').disabled = false; $('dockstate').textContent = String(e); });
+}
+
 function snap() {
-  $('snap').disabled = true; $('snapstate').textContent = 'fetching 7680x2160 still...';
+  $('snap').disabled = true; $('dockstate').textContent = 'fetching 7680x2160 still\u2026';
   fetch('/stitch/snap', { method: 'POST', credentials: 'same-origin' })
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (res) {
       $('snap').disabled = false;
-      if (!res.ok) { $('snapstate').textContent = res.j.detail || 'snapshot failed'; return; }
-      $('snapstate').textContent = 'live snapshot ' + new Date().toLocaleTimeString();
+      if (!res.ok) { $('dockstate').textContent = res.j.detail || 'snapshot failed'; return; }
+      $('dockstate').textContent = 'live snapshot ' + new Date().toLocaleTimeString();
       loadFrame(res.j);
-    }).catch(function (e) { $('snap').disabled = false; $('snapstate').textContent = String(e); });
+    }).catch(function (e) { $('snap').disabled = false; $('dockstate').textContent = String(e); });
 }
 
 function loadFrame(res) {
   var v = res.version, n = 0;
+  S.imgs = {};
   ['left', 'right'].forEach(function (side) {
     var im = new Image();
     im.onload = function () { S.imgs[side] = im; if (++n === 2) draw(); };
+    im.onerror = function () {
+      $('dockstate').textContent = 'the ' + side + ' strip did not load \u2014 snap again';
+    };
     im.src = '/stitch/half.jpg?side=' + side + '&v=' + v;
   });
   applyState(res);
@@ -1446,7 +2064,7 @@ function openFrame() {
     .then(function (res) {
       if (!res.ok) { $('openstate').textContent = res.j.detail || 'open failed'; return; }
       $('openstate').textContent = 'loaded ' + f;
-      $('snapstate').textContent = 'frame from file';
+      $('dockstate').textContent = 'frame from file';
       loadFrame(res.j);
     }).catch(function (e) { $('openstate').textContent = String(e); });
 }
@@ -1467,7 +2085,7 @@ function save() {
       $('savestate').innerHTML = res.ok
         ? '<span class="better">written to ' + res.j.path + '</span>'
         : '<span class="worse">' + (res.j.detail || 'save failed') + '</span>';
-    });
+    }).catch(function (e) { $('savestate').innerHTML = '<span class="worse">' + e + '</span>'; });
 }
 
 function applyToCamera(dry) {
@@ -1487,15 +2105,114 @@ function applyToCamera(dry) {
         : '<span class="worse">' + (res.j.detail || 'apply failed') + '</span>';
       $('applyreport').textContent = JSON.stringify(res.j, null, 2);
       if (res.ok && !dry) snap();   // re-score against a fresh frame, not a promise
-    });
+    }).catch(function (e) { $('applystate').innerHTML = '<span class="worse">' + e + '</span>'; });
+}
+
+// ---------------------------------------------------------------------------
+// Gestures. Pointer Events, so one implementation serves a thumb and a mouse.
+// One finger is axis-locked -- across is the calibration, down is navigation --
+// and two fingers zoom. Nothing here touches the network.
+// ---------------------------------------------------------------------------
+function geomFor(kind, c) {
+  if (kind === 'zoom') {
+    return { scale: zoomScale(), left: STRIP - S.spanX / 2, top: zoomTop(), rows: zoomRows() };
+  }
+  var s = (c.clientWidth || 360) / (2 * STRIP);
+  return { scale: s, left: 0, top: 0, rows: H };
+}
+function pdist(pts) {
+  var a = [];
+  pts.forEach(function (v) { a.push(v); });
+  return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+}
+function setSpan(v) {
+  S.spanX = clamp(v, 48, 2 * STRIP);
+  draw();
+}
+function bindGestures(c, kind) {
+  var pts = new Map(), start = null, pinch = null;
+  function rowAt(ev) {
+    var g = geomFor(kind, c), rect = c.getBoundingClientRect();
+    return clamp((ev.clientY - rect.top) / rect.height * g.rows + g.top, 0, H - 1);
+  }
+  function srcXAt(ev) {
+    var g = geomFor(kind, c), rect = c.getBoundingClientRect();
+    return (ev.clientX - rect.left) / rect.width * (rect.width / g.scale) + g.left;
+  }
+  c.addEventListener('pointerdown', function (ev) {
+    try { c.setPointerCapture(ev.pointerId); } catch (e) { void e; }
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pts.size === 2) { pinch = { d: pdist(pts), span: S.spanX }; start = null; return; }
+    if (pts.size !== 1) return;
+    var row = rowAt(ev);
+    S.cursorRow = row;
+    start = {
+      x: ev.clientX, y: ev.clientY, row: row, mode: null,
+      onMoving: (srcXAt(ev) < STRIP) === (movingSide() === 'left'),
+      i: nearestAnchor(row), before: S.anchors.slice()
+    };
+    syncControls(); draw();
+  });
+  c.addEventListener('pointermove', function (ev) {
+    if (!pts.has(ev.pointerId)) return;
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pinch && pts.size >= 2) {
+      var d = pdist(pts);
+      if (d > 6 && pinch.d > 6) setSpan(pinch.span * pinch.d / d);
+      return;
+    }
+    if (!start) return;
+    var dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+    if (!start.mode) {
+      if (Math.hypot(dx, dy) < 7) return;
+      start.mode = Math.abs(dx) >= Math.abs(dy) ? 'shift' : 'row';
+      if (start.mode === 'shift' && !start.onMoving) {
+        // A grab only moves the half that can actually move. The other one is
+        // drawn dimmed and labelled locked; letting it be dragged anyway would
+        // make "locked" a decoration rather than a statement about hardware.
+        start.mode = 'blocked';
+        $('curvewhy').textContent = 'That half is locked. ' + (movingSide() === 'left'
+          ? 'The camera can only warp the left half -- drag that one.'
+          : 'The downstream corrector only rolls the right half -- drag that one.');
+      }
+    }
+    var g = geomFor(kind, c);
+    if (start.mode === 'row') {
+      S.cursorRow = clamp(start.row - dy / g.scale, 0, H - 1);
+      syncControls(); draw();
+    } else if (start.mode === 'shift') {
+      var sgn = signFor(movingSide()) || 1;
+      var moved = (dx / g.scale) * sgn;
+      if (S.grab === 'curve') {
+        setAnchors(start.before.map(function (p) { return [p[0], p[1] + moved]; }),
+          'whole curve dragged ' + (moved >= 0 ? '+' : '') + moved.toFixed(2) + ' px');
+      } else {
+        var a = start.before.slice(), i = start.i;
+        a[i] = [a[i][0], a[i][1] + moved];
+        setAnchors(a, 'anchor at y=' + a[i][0] + ' dragged directly');
+      }
+    }
+  });
+  function release(ev) {
+    pts.delete(ev.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (pts.size === 0) start = null;
+  }
+  c.addEventListener('pointerup', release);
+  c.addEventListener('pointercancel', release);
+  c.addEventListener('lostpointercapture', release);
+  // Desktop convenience only; the primary path is the pinch.
+  c.addEventListener('wheel', function (ev) {
+    if (kind !== 'zoom') return;
+    ev.preventDefault(); setSpan(S.spanX * (ev.deltaY > 0 ? 1.12 : 0.89));
+  }, { passive: false });
 }
 
 // ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
 function surfaceChanged() {
-  S.surface = $('owner').value === 'downstream' ? 'downstream'
-    : ($('owner').value === 'camera_mesh' ? 'camera_mesh' : 'downstream');
+  S.surface = $('owner').value === 'camera_mesh' ? 'camera_mesh' : 'downstream';
   var moving = movingSide();
   $('caption').innerHTML = moving === 'left'
     ? 'You are moving the <b>LEFT</b> image relative to the right. '
@@ -1509,31 +2226,16 @@ function surfaceChanged() {
   draw();
 }
 
-function onViewDrag(ev, canvas, view) {
-  var rect = canvas.getBoundingClientRect();
-  var y = (ev.clientY - rect.top) / rect.height * (view.rows) + view.top;
-  S.cursorRow = Math.max(0, Math.min(H - 1, y));
-  if (S.dragging === null) return;
-  var dxPx = (ev.clientX - S.dragging.x0) / rect.width * (view.cols);
-  var sgn = signFor(movingSide());
-  var target = S.dragging.base + dxPx * (sgn === 0 ? 1 : sgn);
-  // The nearest anchor follows the grab; the rest of the curve is untouched.
-  var i = S.dragging.i, a = S.anchors.slice();
-  a[i] = [a[i][0], target];
-  setAnchors(a, 'anchor at y=' + a[i][0] + ' grabbed directly');
-}
-function nearestAnchor(row) {
-  var best = 0, bd = 1e9;
-  for (var i = 0; i < S.anchors.length; i++) {
-    var d = Math.abs(S.anchors[i][0] - row);
-    if (d < bd) { bd = d; best = i; }
-  }
-  return best;
+function onResize() {
+  S.narrow = window.innerWidth < 980;
+  draw();
 }
 
 function init() {
+  S.narrow = window.innerWidth < 980;
   S.anchors = [[0, 0], [540, 0], [1080, 0], [1620, 0], [2159, 0]];
   syncControls();
+  $('aim').addEventListener('click', aim);
   $('snap').addEventListener('click', snap);
   $('browse').addEventListener('click', browse);
   $('open').addEventListener('click', openFrame);
@@ -1555,59 +2257,49 @@ function init() {
       'set to the swept minimum, dx=' + s + ' px');
   });
   $('owner').addEventListener('change', surfaceChanged);
-  $('translate').addEventListener('input', function (e) { nudge(parseFloat(e.target.value) - meanDx()); });
   $('roll').addEventListener('input', function (e) { setRoll(parseFloat(e.target.value)); });
+  var nudges = document.querySelectorAll('.nudge button');
+  for (var n = 0; n < nudges.length; n++) {
+    nudges[n].addEventListener('click', function (e) {
+      nudge(parseFloat(e.currentTarget.getAttribute('data-d')));
+    });
+  }
+  var segs = document.querySelectorAll('#grabseg button');
+  for (var s2 = 0; s2 < segs.length; s2++) {
+    segs[s2].addEventListener('click', function (e) {
+      S.grab = e.currentTarget.getAttribute('data-grab');
+      for (var k = 0; k < segs.length; k++) segs[k].classList.remove('on');
+      e.currentTarget.classList.add('on');
+    });
+  }
   var modes = document.querySelectorAll('.modes button');
   for (var i = 0; i < modes.length; i++) {
     modes[i].addEventListener('click', function (e) {
-      S.mode = e.target.getAttribute('data-mode');
+      S.mode = e.currentTarget.getAttribute('data-mode');
       for (var k = 0; k < modes.length; k++) modes[k].classList.remove('on');
-      e.target.classList.add('on');
+      e.currentTarget.classList.add('on');
       draw();
     });
   }
-  ['view', 'zoom'].forEach(function (id) {
-    var c = $(id);
-    var geom = function () {
-      return id === 'view'
-        ? { cols: 2 * STRIP, rows: H, top: 0, left: 0 }
-        : {
-          cols: 2 * BLENDH, rows: ZOOM_ROWS, left: STRIP - BLENDH,
-          top: Math.max(0, Math.min(H - ZOOM_ROWS, S.cursorRow - ZOOM_ROWS / 2))
-        };
-    };
-    c.addEventListener('mousedown', function (ev) {
-      var g = geom(), rect = c.getBoundingClientRect();
-      var row = (ev.clientY - rect.top) / rect.height * g.rows + g.top;
-      S.cursorRow = row;
-      // A grab only starts on the half that can actually move. The other one
-      // is drawn dimmed and labelled locked, and letting it be dragged anyway
-      // would make "locked" a decoration rather than a statement about the
-      // hardware.
-      var srcX = (ev.clientX - rect.left) / rect.width * g.cols + (g.left || 0);
-      var onMoving = (srcX < STRIP) === (movingSide() === 'left');
-      if (!onMoving) {
-        $('curvewhy').textContent =
-          'That half is locked. ' + (movingSide() === 'left'
-            ? 'The camera can only warp the left half -- drag that one.'
-            : 'The downstream corrector only rolls the right half -- drag that one.');
-        draw(); return;
-      }
-      var i = nearestAnchor(row);
-      S.dragging = { x0: ev.clientX, base: S.anchors[i][1], i: i };
-      draw();
-    });
-    c.addEventListener('mousemove', function (ev) { onViewDrag(ev, c, geom()); });
-    window.addEventListener('mouseup', function () { S.dragging = null; });
-  });
+  bindGestures($('zoom'), 'zoom');
+  bindGestures($('view'), 'view');
   document.addEventListener('keydown', function (ev) {
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test((ev.target || {}).tagName || '')) return;
     var step = ev.shiftKey ? 1 : 0.25;
     if (ev.key === 'ArrowLeft') { nudge(-step); ev.preventDefault(); }
     if (ev.key === 'ArrowRight') { nudge(step); ev.preventDefault(); }
+    if (ev.key === 'ArrowUp') { S.cursorRow = clamp(S.cursorRow - 20, 0, H - 1); draw(); ev.preventDefault(); }
+    if (ev.key === 'ArrowDown') { S.cursorRow = clamp(S.cursorRow + 20, 0, H - 1); draw(); ev.preventDefault(); }
   });
-  setInterval(function () { if (S.mode === 'blink') { S.blink ^= 1; draw(); } }, 250);
-  window.addEventListener('resize', draw);
+  setInterval(function () { if (S.mode === 'blink' && S.imgs.left) { S.blink ^= 1; draw(); } }, 250);
+  window.addEventListener('resize', onResize);
+  window.addEventListener('orientationchange', onResize);
+  if (!S.narrow) {
+    var ds = document.querySelectorAll('details.panel');
+    for (var d = 0; d < ds.length; d++) ds[d].open = true;
+  }
   surfaceChanged();
+  renderFreshness();
   pollState();
 }
 document.addEventListener('DOMContentLoaded', init);
@@ -1618,75 +2310,90 @@ _PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
 <title>Soccer-Cam &middot; Seam Calibration</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>__STYLE__</style>
 </head>
 <body>
 <div class="topbar"><div class="topbar-inner">
 <div class="brand">SOCCER<span class="dot">&middot;</span>CAM</div>
-<div class="crumb"><a href="/">Dashboard</a> / <a href="/config">Config</a> / Seam calibration</div>
+<div class="crumb"><a href="/">Dashboard</a> / <a href="/config">Config</a> / Seam</div>
 </div></div>
 
 <div class="shell">
 <h1 class="headline">Stitch seam calibration</h1>
-<p class="lede">Pull a still off the camera, slide the halves into registration by eye, and
-send the geometry back. The curve you author below <em>is</em> the calibration artifact &mdash;
-there is no separate export, and nothing you can move here exists outside it.</p>
+<p class="lede">Built for a phone at the touchline: aim, put someone in the seam, snap,
+judge the seam by eye, send the geometry back. The curve you author <em>is</em> the
+calibration artifact &mdash; there is no separate export. This is a <b>check</b>-and-correct
+tool for after a knock or a remount: on the archived games 52 of 96 frames sit below the
+measurement floor and players straddling the seam are continuous, so
+<b>&ldquo;nothing to change here&rdquo; is a common and perfectly good answer</b>.</p>
 
 __BANNER__
 
-<div class="panel">
-  <div class="btn-row">
-    <button class="btn" id="snap">Fetch live snapshot</button>
-    <span class="mono muted" id="snapstate">no frame loaded</span>
-    <span style="flex:1"></span>
-    <span class="mono faint">source <b id="camname">--</b> &middot; <b id="camhost">--</b></span>
-  </div>
-  <p class="faint">Two doors into the same editor. A live <span class="mono">Snap</span> is
-    right when the camera is already looking at the field; most calibrations will come from a
-    recorded game instead, because nobody stands at the touchline with a laptop mid-match and a
-    camera on a bench indoors is looking at a scene 0.3&nbsp;m away &mdash; where parallax runs to
-    tens of pixels and drowns the lens roll this tool corrects.</p>
-  <div class="btn-row" style="margin-top:8px">
-    <input type="text" id="framedir" placeholder="folder of frames or recordings"
-      style="flex:2;min-width:240px">
-    <button class="btn btn-ghost" id="browse">List</button>
-    <select id="framelist" style="flex:2;min-width:200px"></select>
-    <input type="number" id="atsec" placeholder="sec" step="1" style="width:80px" title="seconds into a video file">
-    <button class="btn" id="open">Open frame</button>
-  </div>
-  <div class="btn-row" style="margin-top:8px">
-    <input type="text" id="deployment" placeholder="deployment / tripod placement label"
-      style="flex:1;min-width:240px">
-    <span class="mono faint" id="openstate"></span>
-  </div>
-  <p class="faint">A calibration belongs to a camera <em>and where it was standing</em>. Whether
-    the seam offset actually differs between tripod placements is still being measured, so every
-    save is also filed under this label in
-    <span class="mono">stitch_calibrations/</span> &mdash; if it turns out to be per-deployment,
-    the evidence is already there instead of having been overwritten.</p>
+<ol class="steps" id="steps">
+  <li id="step-aim"><span class="n">1</span><span><span class="t">Aim</span>
+    <span class="d">Tap Aim. The orange line is the seam. It is free to repeat, so use it
+    to see where the seam lands in the scene.</span></span></li>
+  <li id="step-stand"><span class="n">2</span><span><span class="t">Put someone in the seam</span>
+    <span class="d">Stand them on the orange line, out where play actually happens &mdash;
+    not beside the tripod. One calibration is exact at one depth, and a target at 2&nbsp;m
+    carries tens of pixels of parallax that have nothing to do with the lens roll.</span></span></li>
+  <li id="step-snap"><span class="n">3</span><span><span class="t">Snap</span>
+    <span class="d">The full 7680&times;2160 still. Detection takes 25-60 s; the picture
+    arrives first.</span></span></li>
+  <li id="step-adjust"><span class="n">4</span><span><span class="t">Look at the person, then slide</span>
+    <span class="d">Pinch to 4&times; and ask one question: is the body continuous across the
+    seam? A tear is unmistakable. Drag across the picture to move the half; drag up and
+    down to travel the rows. Your eye is the instrument here &mdash; the numbers beside it
+    are aids, and none of them can see a person in the blend window.</span></span></li>
+  <li id="step-ship"><span class="n">5</span><span><span class="t">Apply only if you saw a tear</span>
+    <span class="d">Then snap again and confirm on a fresh frame rather than on a promise.
+    If the body was continuous, leave the camera alone.</span></span></li>
+</ol>
+
+<div class="dock">
+  <button class="btn btn-ghost" id="aim">Aim</button>
+  <button class="btn" id="snap">Snap</button>
+  <span class="st" id="dockstate">no frame loaded</span>
 </div>
 
 <div class="grid">
-<div>
+<div class="col">
+
+  <div class="panel" id="scenepanel">
+    <h2 class="sec">Where the seam <span class="accent">falls</span></h2>
+    <div id="scenewrap" style="display:none">
+      <img id="scene" alt="scene overview with the seam marked">
+      <div id="sceneseam"></div>
+      <div id="scenehint">the orange line is the seam &mdash; stand your target on it</div>
+    </div>
+    <div id="aimverdict" style="display:none"></div>
+    <p class="faint">Aim re-snaps the camera and redraws this at 1/8 scale (~35&nbsp;KB), which is
+      useless for judging registration and exactly right for judging aim. It never disturbs a
+      measured session, so press it as often as you like while someone walks into position.</p>
+  </div>
+
   <div class="panel">
-    <h2 class="sec">Seam <span class="accent">view</span></h2>
+    <h2 class="sec">The <span class="accent">seam</span></h2>
+    <div id="zoomwrap"><canvas id="zoom"></canvas></div>
+    <p class="faint mono" id="zoomlabel"></p>
     <div class="modes">
-      <button data-mode="blink" class="on">Blink 2Hz</button>
+      <button data-mode="blink" class="on">Blink</button>
       <button data-mode="anaglyph">Anaglyph</button>
       <button data-mode="mirror">Mirror</button>
       <button data-mode="split">Plain</button>
     </div>
+    <p class="faint">Drag <b>across</b> to move the half you are allowed to move; drag
+      <b>up and down</b> to travel the rows; <b>pinch</b> to zoom. Arrow keys nudge by
+      0.25&nbsp;px (shift = 1&nbsp;px) if you are on a laptop.</p>
     <div id="viewwrap"><canvas id="view"></canvas></div>
-    <p class="faint mono">Full height, horizontal <b id="viewscale">1.00</b>&times; and vertical
-      0.31&times; &mdash; deliberately anisotropic: what you are judging is horizontal, and
-      squashing the rows keeps all 2160 of them on screen without shrinking a 4&nbsp;px error
-      to nothing. Drag anywhere to grab the nearest anchor; arrow keys nudge (shift = 1&nbsp;px).</p>
+    <p class="faint mono">Whole frame, squashed vertically: a locator, not a judge. Green bands
+      are rows where something upright crosses the seam; the white box is what the view above is
+      showing.</p>
     <div class="caption" id="caption"></div>
+    <div id="vertical" style="display:none"></div>
     <div class="caveat"><strong>What these views can and cannot show.</strong>
       The camera fuses the two sensors before it hands out a JPEG, blending them over the
       256&nbsp;px window shaded above. Every pixel in there is already a mixture of both, so
@@ -1694,18 +2401,71 @@ __BANNER__
       therefore draw the <em>fitted</em> structures instead: each one measured independently on
       the left shoulder (red) and the right shoulder (cyan) and extrapolated to the seam, solid
       where there is real image behind it and dashed where it is extrapolation. A gap between a
-      red line and its cyan partner at the seam is that structure's residual. The shoulders
-      either side of the window are real; the window is inference.</div>
-
-    <div id="zoomwrap"><canvas id="zoom"></canvas></div>
-    <p class="faint mono">Blend window at 4&times;, true aspect, 1&nbsp;px grid &mdash;
-      <span id="zoomlabel"></span>. Follows the green row cursor.</p>
+      red line and its cyan partner at the seam is that structure's residual. Structures too
+      near horizontal to respond to a horizontal shift are drawn grey, because they cannot tell
+      you anything about what you are adjusting. The shoulders either side of the window are
+      real; the window is inference.</div>
   </div>
-</div>
 
-<div>
   <div class="panel">
-    <h2 class="sec">Correction <span class="accent">surface</span></h2>
+    <h2 class="sec">The <span class="accent">curve</span></h2>
+    <div class="dxread" id="dxnow"></div>
+    <div class="nudge">
+      <button data-d="-1">&minus;1</button>
+      <button data-d="-0.25">&minus;&frac14;</button>
+      <button data-d="0.25">+&frac14;</button>
+      <button data-d="1">+1</button>
+    </div>
+    <label class="row"><span class="lbl">Roll &mdash; linear in y, top to bottom
+      <span class="val" id="rollV"></span></span>
+      <input type="range" id="roll" min="-40" max="40" step="0.25" value="0"></label>
+    <div class="seg" id="grabseg">
+      <button data-grab="curve" class="on">Drag moves the whole curve</button>
+      <button data-grab="anchor">Drag moves this row</button>
+    </div>
+    <p class="faint">Roll is the shape the physics predicts: two lenses rotated relative to each
+      other about their optical axes displace the seam by
+      <span class="mono">dx = -&theta;&middot;y</span>, linear in the row. With one person at one
+      depth you have one observation and can only honestly move the whole curve; a second person
+      at a different height is what earns a roll.</p>
+    <p class="faint" id="curvewhy"></p>
+    <div class="btn-row">
+      <button class="btn btn-ghost btn-sm" id="reset">Reset to zero</button>
+      <button class="btn btn-ghost btn-sm" id="suggest" disabled>Use measured dx</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 class="sec">Live <span class="accent">score</span>
+      <span class="badge" id="fresh" style="float:right">no frame</span></h2>
+    <p class="mono faint"><span class="dot off" id="metricdot"></span><span id="metriclabel"></span></p>
+    <div id="floor" style="display:none"></div>
+    <div id="quality" style="display:none"></div>
+    <div class="kpi" id="kpis">
+      <div><div class="k">|ln SSR| on the target</div><div class="v" id="ssrtarget">--</div></div>
+      <div><div class="k">|ln SSR| whole frame</div><div class="v" id="ssrv">--</div></div>
+      <div><div class="k">SCR p90, steerable</div><div class="v" id="scrp90">--</div></div>
+      <div><div class="k">steerable / all</div><div class="v" id="scrn">0</div></div>
+    </div>
+    <p class="mono faint" id="scoredat"></p>
+    <p class="mono worse" id="neterr"></p>
+    <p class="faint" id="scrnote"></p>
+    <p class="faint" id="ssrnote"></p>
+    <p class="faint">These are the same numbers the automatic solver minimises, computed by the
+      same code &mdash; and that solver <b>refuses on all 27 archived games</b>, because the
+      structures able to span a vertical seam are the near-horizontal ones and their median
+      |slope| is 0.034: a 10&nbsp;px error moves the median observation 0.34&nbsp;px, under its
+      own noise. So treat every number on this panel as a secondary aid. The picture is the
+      evidence, and it should overrule them. The headline p90 is taken over the structures
+      steep enough to see a horizontal shift; the whole-set p90 is printed beside it, and
+      neither is redefined anywhere the solver would read.</p>
+  </div>
+
+</div>
+<div class="col">
+
+  <details class="panel">
+    <summary>Correction <span class="accent">surface</span></summary>
     <select id="owner">
       <option value="camera_mesh">Camera warp mesh &mdash; sub-pixel, before the blend</option>
       <option value="camera_scalars+downstream">Camera scalars + downstream residual</option>
@@ -1714,67 +2474,26 @@ __BANNER__
     <p class="faint">Exactly one surface owns the correction. Splitting it across two is how a
       reboot silently turns a full correction into half of one: the camera's mesh is runtime
       state and does not survive a power cycle, while the downstream profile always does.</p>
-  </div>
+  </details>
 
-  <div class="panel">
-    <h2 class="sec">The <span class="accent">curve</span></h2>
-    <label class="row"><span class="lbl">Translate <span class="val" id="translateV"></span></span>
-      <input type="range" id="translate" min="-40" max="40" step="0.25" value="0"></label>
-    <label class="row"><span class="lbl">Roll &mdash; linear in y <span class="val" id="rollV"></span></span>
-      <input type="range" id="roll" min="-40" max="40" step="0.25" value="0"></label>
-    <p class="faint">Roll is the shape the physics predicts: two lenses rotated relative to each
-      other about their optical axes displace the seam by <span class="mono">dx = -&theta;&middot;y</span>,
-      linear in the row. Translate and roll are a <em>view</em> of the curve, recomputed from it
-      after every edit &mdash; not stored parameters.</p>
-    <table><thead><tr><th>row</th><th>dx (px, right half moves right)</th></tr></thead>
-      <tbody id="curverows"></tbody></table>
-    <p class="mono faint" style="word-break:break-all" id="curvejson"></p>
-    <p class="faint" id="curvewhy"></p>
-    <div class="btn-row">
-      <button class="btn btn-ghost" id="reset">Reset to zero</button>
-      <button class="btn btn-ghost" id="suggest" disabled>Use measured dx</button>
-    </div>
-  </div>
-
-  <div class="panel">
-    <h2 class="sec">Live <span class="accent">score</span></h2>
-    <p class="mono faint"><span class="dot off" id="metricdot"></span><span id="metriclabel"></span>
-      <span id="metricstate"></span></p>
-    <div id="quality" style="display:none"></div>
-    <div class="kpi">
-      <div><div class="k">SCR p50</div><div class="v" id="scrp50">--</div></div>
-      <div><div class="k">SCR p90</div><div class="v" id="scrp90">--</div></div>
-      <div><div class="k">|ln SSR|</div><div class="v" id="ssrv">--</div></div>
-      <div><div class="k">structures</div><div class="v" id="scrn">0</div></div>
-    </div>
-    <p class="faint" id="scrnote"></p>
-    <p class="faint" id="ssrnote"></p>
-    <p class="faint">These are the same numbers the automatic solver minimises, computed by the
-      same code &mdash; so a calibration done by hand and one done by search are directly
-      comparable. Acceptance wants p90 below 2&nbsp;px and at least halved.</p>
-  </div>
-
-  <div class="panel">
-    <h2 class="sec">What the camera <span class="accent">already decided</span></h2>
-    <table><thead><tr><th>scalar</th><th class="num">live</th><th class="num">factory</th></tr></thead>
-      <tbody id="scalars"></tbody></table>
-    <p class="faint" id="scalarnote"></p>
-  </div>
-
-  <div class="panel">
-    <h2 class="sec">Ship <span class="accent">it</span></h2>
+  <details class="panel">
+    <summary>Ship <span class="accent">it</span></summary>
+    <label class="row"><span class="lbl">Deployment / tripod placement</span>
+      <input type="text" id="deployment" placeholder="fairport-north-2026.08"></label>
     <label class="row"><span class="lbl">Calibrated for distance (m)</span>
-      <input type="number" id="distance_m" step="1" placeholder="45"></label>
+      <input type="number" id="distance_m" step="1" inputmode="decimal" placeholder="45"></label>
     <label class="row"><span class="lbl">Basis</span>
-      <input type="text" id="basis" placeholder="far touchline midpoint"></label>
-    <p class="faint">One calibration is correct at one depth. Calibrating for the far field costs
-      a couple of pixels across the far half of the pitch and tens of pixels at the near
-      touchline &mdash; the right trade here, but a stated one.</p>
+      <input type="text" id="basis" placeholder="player standing at the far touchline"></label>
+    <p class="faint">One calibration is correct at one depth &mdash; whichever depth the person you
+      used was standing at. Calibrating for the far field costs a couple of pixels across the far
+      half of the pitch and tens of pixels at the near touchline: the right trade here, but a
+      stated one. Every save is also filed under the deployment label in
+      <span class="mono">stitch_calibrations/</span>.</p>
     <div class="btn-row">
       <button class="btn" id="save">Save profile</button>
       <span class="mono" id="savestate"></span>
     </div>
-    <div id="applywrap" style="margin-top:14px">
+    <div id="applywrap" style="margin-top:12px">
       <div class="btn-row">
         <button class="btn btn-ghost" id="dryrun">Dry run</button>
         <button class="btn btn-danger" id="apply">Apply to camera</button>
@@ -1782,12 +2501,55 @@ __BANNER__
       </div>
       <p class="faint">Apply sets the vendor scalars first and only then writes a mesh composed
         onto the baseline they produce &mdash; <span class="mono">SetStitch</span> re-runs the
-        camera's own mesh optimiser and destroys anything written before it. The baseline is
-        re-checked immediately before the write and the write is refused if it moved. Afterwards
-        a fresh snapshot is pulled and re-scored, so you see numbers rather than a promise.</p>
-      <pre class="mono faint" id="applyreport" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre>
+        camera's own mesh optimiser and destroys anything written before it. Afterwards a fresh
+        snapshot is pulled and re-scored, so you see numbers rather than a promise.</p>
+      <pre class="mono faint" id="applyreport" style="white-space:pre-wrap;max-height:200px;overflow:auto"></pre>
     </div>
-  </div>
+  </details>
+
+  <details class="panel">
+    <summary>The <span class="accent">anchors</span></summary>
+    <table><thead><tr><th>row</th><th>dx (px, right half moves right)</th></tr></thead>
+      <tbody id="curverows"></tbody></table>
+    <p class="mono faint" style="word-break:break-all" id="curvejson"></p>
+  </details>
+
+  <details class="panel">
+    <summary>What the camera <span class="accent">already decided</span></summary>
+    <table><thead><tr><th>scalar</th><th class="num">live</th><th class="num">factory</th></tr></thead>
+      <tbody id="scalars"></tbody></table>
+    <p class="faint" id="scalarnote"></p>
+    <p class="mono faint">source <b id="camname">--</b> &middot; <b id="camhost">--</b></p>
+  </details>
+
+  <details class="panel">
+    <summary>Calibrate from a <span class="accent">recorded game</span></summary>
+    <p class="faint">The other door. A calibration can be recovered after the fact from an
+      archived game &mdash; useful for footage already shot, and for checking whether the seam
+      differs between tripod placements.</p>
+    <label class="row"><span class="lbl">Folder of frames or recordings</span>
+      <input type="text" id="framedir" placeholder="F:\\archive\\duo3_stitch\\frames\\..."></label>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn btn-ghost btn-sm" id="browse">List</button>
+      <select id="framelist" style="flex:2;min-width:160px"></select>
+      <input type="number" id="atsec" placeholder="sec" step="1" inputmode="numeric"
+        style="width:88px" title="seconds into a video file">
+      <button class="btn btn-sm" id="open">Open frame</button>
+    </div>
+    <p class="mono faint" id="openstate"></p>
+  </details>
+
+  <details class="panel">
+    <summary>Reaching this <span class="accent">from a phone</span></summary>
+    <p class="faint">The app answers on loopback by default and rejects any other
+      <span class="mono">Host</span> header, which is a deliberate DNS-rebinding defence. To use it
+      from a phone on the same network, set <span class="mono">[TTT] auth_server_bind</span> in
+      <span class="mono">config.ini</span> to this machine's LAN address and browse to
+      <span class="mono">http://&lt;that address&gt;:8765/stitch</span>. Setting it to
+      <span class="mono">0.0.0.0</span> binds everywhere but does <em>not</em> widen the allowlist,
+      so it will still refuse &mdash; name the address.</p>
+  </details>
+
 </div>
 </div>
 </div>

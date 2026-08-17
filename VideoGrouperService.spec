@@ -9,7 +9,8 @@
 # step and must stay light.
 
 # The seam-calibration tool at /stitch reaches the firmware-side toolkit
-# (seam_metric, stitch_apply, lut2d, camsh) by path rather than by import --
+# (seam_metric, seam_vertical, stitch_apply, lut2d, camsh) by path rather than
+# by import --
 # `reolink-firmware-patching/` is excluded from the wheel and from mypy because
 # it is firmware territory, not application code. Carrying the two directories
 # in as data keeps that separation while letting the installed service run the
