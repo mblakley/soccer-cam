@@ -1,0 +1,221 @@
+#!/bin/sh
+# /etc/init.d/S37_RoiQp
+# Apply a per-game encoder ROI window (QP bias) to the main stream.
+#
+# The encoder supports 10 ROI windows with a per-window QP offset. Nothing in
+# the stock userspace ever sets them (see docs/ENCODER_ROI_QP.md); the only
+# reachable control is the kernel debug command
+#
+#     echo vdoenc setroi <PathId> <RoiIndex> <Enable> <QP> <QPMode> <X> <Y> <W> <H> \
+#         > /proc/hdal/venc/cmd
+#
+# which on stock firmware always lands QP=0/QPMode=0 because of an argument-width
+# bug in the kernel module. The pak this script ships in patches that; if you are
+# running it against an unpatched module the dmesg echo will read back
+# "QP = 0, QPMode = 0" and the window will have no effect. The log below records
+# that echo on every apply so the failure is visible rather than silent.
+#
+# Only ROI window 0 is reachable this way: the command's scanf targets are fixed
+# to window 0 and every call re-zeroes the whole 168-byte struct, so RoiIndex is
+# cosmetic and the other nine windows always read back disabled.
+#
+# Config (writable SD card, hot-reloaded):
+#   /mnt/sda/soccercam/roi.conf         - the active window; see roi.conf.example
+#   /mnt/sda/soccercam/roi.log          - what was parsed, applied, and echoed back
+#   /etc/soccercam_roi.conf.default     - baked-in fallback if roi.conf is absent
+#
+# Fail-closed: a missing, unparseable or out-of-range config never reaches the
+# encoder. If a good config had previously been applied, an invalid one disables
+# the window again, so the encoder returns to stock behaviour rather than keeping
+# a stale bias.
+
+CONF_DIR=/mnt/sda/soccercam
+CONF=$CONF_DIR/roi.conf
+DEFAULT=/etc/soccercam_roi.conf.default
+CMD=/proc/hdal/venc/cmd
+LOG=$CONF_DIR/roi.log
+LOG_MAX_BYTES=262144
+
+# Seconds between config checks, and between unconditional re-applies. The
+# re-apply exists because `device` tears the encode path down and rebuilds it
+# whenever the stream config changes (resolution, bitrate, day/night), which
+# drops the ROI struct back to zeros.
+POLL_INTERVAL=30
+REAPPLY_INTERVAL=300
+# How long to wait at boot for the videoenc module to publish its proc node.
+PROC_WAIT=180
+
+mkdir -p "$CONF_DIR" 2>/dev/null
+
+log() {
+    MSG="[$(date '+%F %T')] $*"
+    echo "$MSG"
+    mkdir -p "$CONF_DIR" 2>/dev/null || return 0
+    if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt $LOG_MAX_BYTES ]; then
+        mv "$LOG" "$LOG.old" 2>/dev/null
+    fi
+    echo "$MSG" >>"$LOG" 2>/dev/null
+}
+
+# --- validation -------------------------------------------------------------
+# Every field is checked before anything is written to /proc. REASON carries the
+# first failure so the log says which line was wrong, not just "invalid".
+
+REASON=""
+
+# in_range <value> <min> <max>  -- integer compare, tolerates a leading '-'
+in_range() {
+    [ "$1" -ge "$2" ] 2>/dev/null && [ "$1" -le "$3" ] 2>/dev/null
+}
+
+parse_conf() {
+    F="$1"
+    REASON=""
+    # defaults
+    C_ENABLE=""; C_PATH=0; C_X=""; C_Y=""; C_W=""; C_H=""; C_QP=""; C_MODE=""
+    C_FRAME_W=7680; C_FRAME_H=2160
+
+    [ -f "$F" ] || { REASON="no config file"; return 1; }
+    # A config bigger than this is not a config.
+    if [ "$(wc -c <"$F" 2>/dev/null)" -gt 4096 ]; then
+        REASON="config larger than 4096 bytes"
+        return 1
+    fi
+
+    while IFS= read -r RAW; do
+        # strip CR (files edited on Windows) and surrounding blanks
+        LINE=$(echo "$RAW" | tr -d '\r' | sed 's/^[ \t]*//; s/[ \t]*$//')
+        [ -z "$LINE" ] && continue
+        case "$LINE" in \#*) continue ;; esac
+        if ! echo "$LINE" | grep -qE '^[a-z_]+=-?[0-9]+$'; then
+            REASON="malformed line: $LINE"
+            return 1
+        fi
+        K=${LINE%%=*}
+        V=${LINE#*=}
+        case "$K" in
+            enable)  C_ENABLE=$V ;;
+            path)    C_PATH=$V ;;
+            x)       C_X=$V ;;
+            y)       C_Y=$V ;;
+            w)       C_W=$V ;;
+            h)       C_H=$V ;;
+            qp)      C_QP=$V ;;
+            mode)    C_MODE=$V ;;
+            frame_w) C_FRAME_W=$V ;;
+            frame_h) C_FRAME_H=$V ;;
+            *)       REASON="unknown key: $K"; return 1 ;;
+        esac
+    done <"$F"
+
+    for N in enable x y w h qp mode; do
+        eval "VAL=\$C_$(echo $N | tr 'a-z' 'A-Z')"
+        [ -n "$VAL" ] || { REASON="missing key: $N"; return 1; }
+    done
+
+    in_range "$C_ENABLE" 0 1     || { REASON="enable out of range (0..1): $C_ENABLE"; return 1; }
+    in_range "$C_PATH"   0 7     || { REASON="path out of range (0..7): $C_PATH"; return 1; }
+    in_range "$C_MODE"   0 3     || { REASON="mode out of range (0..3): $C_MODE"; return 1; }
+    in_range "$C_FRAME_W" 16 65535 || { REASON="frame_w out of range: $C_FRAME_W"; return 1; }
+    in_range "$C_FRAME_H" 16 65535 || { REASON="frame_h out of range: $C_FRAME_H"; return 1; }
+
+    # QP semantics come from the HDAL validator: mode 3 is an absolute QP, the
+    # other modes are a delta. Enforcing both keeps a typo from silently
+    # becoming a legal-but-wrong value.
+    if [ "$C_MODE" -eq 3 ]; then
+        in_range "$C_QP" 0 51 || { REASON="qp out of range for mode=3 (0..51): $C_QP"; return 1; }
+    else
+        in_range "$C_QP" -32 31 || { REASON="qp out of range for mode=$C_MODE (-32..31): $C_QP"; return 1; }
+    fi
+
+    # Geometry. The window must be a real rectangle inside the frame. The kernel
+    # struct stores x/y/w/h as u16, so 65535 is the hard ceiling regardless.
+    in_range "$C_X" 0 65535 || { REASON="x out of range: $C_X"; return 1; }
+    in_range "$C_Y" 0 65535 || { REASON="y out of range: $C_Y"; return 1; }
+    in_range "$C_W" 1 65535 || { REASON="w must be >= 1: $C_W"; return 1; }
+    in_range "$C_H" 1 65535 || { REASON="h must be >= 1: $C_H"; return 1; }
+    if [ $((C_X + C_W)) -gt "$C_FRAME_W" ]; then
+        REASON="x+w ($((C_X + C_W))) exceeds frame_w ($C_FRAME_W)"
+        return 1
+    fi
+    if [ $((C_Y + C_H)) -gt "$C_FRAME_H" ]; then
+        REASON="y+h ($((C_Y + C_H))) exceeds frame_h ($C_FRAME_H)"
+        return 1
+    fi
+    return 0
+}
+
+# --- apply ------------------------------------------------------------------
+
+APPLIED=0
+
+# write_roi <path> <enable> <qp> <mode> <x> <y> <w> <h>
+write_roi() {
+    # RoiIndex (the second argument) is passed as 0: the command only ever
+    # writes window 0 whatever you put here.
+    if printf 'vdoenc setroi %s 0 %s %s %s %s %s %s %s\n' \
+            "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" >"$CMD" 2>/dev/null; then
+        # The kernel prints exactly what it parsed. Echo it into our log so a
+        # mismatch (e.g. running against an unpatched module, where QP and
+        # QPMode always come back 0) is recorded instead of assumed away.
+        ECHOED=$(dmesg 2>/dev/null | grep 'Set ROI Index' | tail -1)
+        log "applied: path=$1 enable=$2 qp=$3 mode=$4 rect=($5,$6 ${7}x${8})"
+        [ -n "$ECHOED" ] && log "  kernel: $ECHOED"
+        return 0
+    fi
+    log "ERROR: write to $CMD failed (is the node writable? are we root?)"
+    return 1
+}
+
+disable_roi() {
+    write_roi "${1:-0}" 0 0 0 0 0 1 1 && APPLIED=0
+}
+
+run() {
+    I=0
+    while [ ! -e "$CMD" ] && [ $I -lt $PROC_WAIT ]; do sleep 1; I=$((I + 1)); done
+    if [ ! -e "$CMD" ]; then
+        log "$CMD never appeared after ${PROC_WAIT}s; giving up (encoder left at stock)"
+        return
+    fi
+    log "===== roi/qp daemon start ====="
+
+    LAST_SIG=""
+    SINCE_APPLY=$REAPPLY_INTERVAL
+    while :; do
+        SRC="$CONF"
+        [ -f "$SRC" ] || SRC="$DEFAULT"
+        SIG=$(md5sum "$SRC" 2>/dev/null | cut -d' ' -f1)
+        [ -z "$SIG" ] && SIG="absent"
+
+        if [ "$SIG" != "$LAST_SIG" ] || [ $SINCE_APPLY -ge $REAPPLY_INTERVAL ]; then
+            if [ "$SIG" != "$LAST_SIG" ]; then
+                log "config $SRC changed (md5 $SIG)"
+            fi
+            if parse_conf "$SRC"; then
+                if [ "$C_ENABLE" -eq 1 ]; then
+                    write_roi "$C_PATH" 1 "$C_QP" "$C_MODE" \
+                              "$C_X" "$C_Y" "$C_W" "$C_H" && APPLIED=1
+                else
+                    log "config disables the window"
+                    disable_roi "$C_PATH"
+                fi
+            else
+                log "REJECTED $SRC: $REASON"
+                if [ $APPLIED -eq 1 ]; then
+                    log "  reverting to stock (disabling previously applied window)"
+                    disable_roi "$C_PATH"
+                fi
+            fi
+            LAST_SIG="$SIG"
+            SINCE_APPLY=0
+        fi
+
+        sleep $POLL_INTERVAL
+        SINCE_APPLY=$((SINCE_APPLY + POLL_INTERVAL))
+    done
+}
+
+( run ) &
+disown 2>/dev/null
+exit 0

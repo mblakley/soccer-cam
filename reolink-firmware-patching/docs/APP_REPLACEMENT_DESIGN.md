@@ -213,13 +213,25 @@ and `upgrade` alive and independent of our binary.
 | Stream geometry | Fixed at 7680×2160; four separate patches failed to move it | Arbitrary — we emit the numbers |
 | Frame rate | 21 fps hard ceiling (VTS floor at 2160 rows) | Up to ~63 fps at 720 rows; `fps = 46296/(rows+8)` |
 | Warp / stitch | Factory 257×257 mesh from `CamStitchPara` | Our own LUT; already know the format and the `SET` ioctl |
-| Bit allocation | AQ only; ROI/QP-map present but unexposed | `HD_H26XENC_ROI_WIN` / `USR_QP` driven directly, per-game |
+| Bit allocation | AQ only; ROI/QP-map present but unexposed [1] | `HD_H26XENC_ROI_WIN` / `USR_QP` driven directly, per-game |
 | Crop | `SetCrop` exists but gated by `videoClip: permit 0` | No ability gate |
 | Bitrate | Encoder-validator ceiling ~20.5 Mbps | Our own limits |
 | Pre-stitch frames | Unclear | Direct access to per-sensor buffers |
 
 The recurring theme: **every one of these is currently blocked by a policy or
 constant inside `device`, not by hardware.**
+
+[1] **Bit allocation no longer needs app replacement — see `ENCODER_ROI_QP.md`.**
+"Present but unexposed" is confirmed: `device`'s `hd_videoenc_set` has a working
+`OUT_ROI` (0xc) arm that no call site ever invokes, and no Baichuan/CGI/config
+field reaches it. But driving the HDAL param "directly" turned out to be the
+worst of the available routes — `hd_videoenc_set` case 0xc does not issue an
+ioctl at all; it writes a 284-byte userspace shadow and sets a dirty flag, so an
+outside process cannot replicate it. The encoder ROI is reachable *without*
+touching `device`, through `kflow_videoenc.ko`'s own
+`/proc/hdal/venc/cmd setroi` command plus a 26-byte in-place fix to that
+command's `sscanf` format string. `USR_QP` remains out of reach from userspace
+(it needs a DMA-able QP-map buffer, and has no proc command).
 
 ---
 
