@@ -1030,6 +1030,13 @@ question moot.
   `VIDEOCAP` then only *produces* ~17 fps and the pipeline delivers 16.67 fps —
   worse than leaving it at 20. Raising fps therefore requires reducing pixels
   per frame, not requesting more frames.
+- **Stitch-seam calibration — DESIGNED, not implemented.** The two halves meet
+  at x=3840 and are mixed over a 256 px window (`blend_w = 128`, confirmed from
+  `VIDEOPROC 2` out port 1 running at 256x2160 and from the `set_proc_cfg`
+  string in `/mnt/app/device`). Correcting registration *before* that mix is
+  the one thing only the camera can do. Design for the measurement, the
+  calibration format shared with the downstream corrector, boot persistence of
+  the runtime-only mesh, and rollback: **`STITCH_CALIBRATION.md`**.
 - **Sub-stream improvements** — patches focused on main stream. Sub stream
   bitrate range is `[256, 512, 1024, 1536, 2048]` (max 2 Mbps); separately
   capped, untouched.
