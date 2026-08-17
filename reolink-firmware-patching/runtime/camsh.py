@@ -32,9 +32,17 @@ from __future__ import annotations
 import re
 import socket
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 DEFAULT_HOST = "192.168.86.24"
 DEFAULT_PORT = 2323
+
+# The netstate daemon's kill switch. Asserting this is legitimate as a
+# deliberate, released operator act and never as build state -- see
+# hold_recording_override() and verify/check_recording_default.sh.
+OVERRIDE_DIR = "/mnt/sda/netstate"
+OVERRIDE_FLAG = f"{OVERRIDE_DIR}/override"
 
 # Paths that hold the only on-camera copy of anything we care about. Nothing
 # this tool sends may delete, move, truncate or reformat inside them.
@@ -89,6 +97,14 @@ class CameraCommandRefused(RuntimeError):
     """Raised instead of sending a command that could destroy data."""
 
 
+class RecordingOverrideStuck(RuntimeError):
+    """Raised when the override flag survives a release attempt.
+
+    Loud on purpose: while it is set the camera records at home, and nothing
+    else in the system will notice.
+    """
+
+
 def check(cmd: str) -> None:
     """Raise CameraCommandRefused if `cmd` is in the forbidden class."""
     for pattern, why in REFUSALS:
@@ -107,15 +123,15 @@ def check(cmd: str) -> None:
                 )
 
 
-def sh(
+def _send(
     cmd: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, timeout: int = 40
 ) -> str:
-    """Send one command set to the probe shell and return its combined output.
+    """Put `cmd` on the wire and return its output. NO refusal checks.
 
-    The listener runs `sh` per connection: it reads stdin to EOF, executes, and
-    exits. So one call is one batch, and state does not carry between calls.
+    Private. Every caller from outside this module goes through `sh()`, which
+    checks first; the only other user is the override pair below, which sends
+    two fixed strings and no free-form input.
     """
-    check(cmd)
     s = socket.create_connection((host, port), timeout=timeout)
     try:
         s.sendall((cmd + "\n").encode())
@@ -132,6 +148,18 @@ def sh(
     finally:
         s.close()
     return b"".join(chunks).decode(errors="replace")
+
+
+def sh(
+    cmd: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, timeout: int = 40
+) -> str:
+    """Send one command set to the probe shell and return its combined output.
+
+    The listener runs `sh` per connection: it reads stdin to EOF, executes, and
+    exits. So one call is one batch, and state does not carry between calls.
+    """
+    check(cmd)
+    return _send(cmd, host, port, timeout)
 
 
 def hold_recording_override(
@@ -152,33 +180,60 @@ def hold_recording_override(
     and pairs with its own release. Every other refusal still applies to
     everything else.
 
-    Callers MUST release it -- wrap in try/finally. Releasing also lets
-    S99_NetState resume and clean this boot's stubs, which is how test clips
-    get tidied without anyone running `rm` near Mp4Record.
+    Prefer `recording_override_held()` over calling this directly: it releases
+    in a `finally` and then *verifies* the flag is gone, so a crash between hold
+    and release cannot leave the camera recording at home. Releasing also lets
+    S99_NetState resume and clean this boot's stubs, which is how test clips get
+    tidied without anyone running `rm` near Mp4Record.
     """
-    path = "/mnt/sda/netstate/override"
     if on:
-        cmd = f"mkdir -p /mnt/sda/netstate && touch {path} && echo held"
+        cmd = f"mkdir -p {OVERRIDE_DIR} && touch {OVERRIDE_FLAG} && echo held"
     else:
         # Exact path, no wildcard -- allowed by check(), but we bypass it here
-        # too so the pair is symmetric and auditable in one place.
-        cmd = f"rm -f {path} && echo released"
-    s = socket.create_connection((host, port), timeout=40)
+        # too so the pair is symmetric and auditable in one place. Report the
+        # post-state rather than the exit code: `rm -f` succeeds on a path it
+        # did not remove, so only an existence test proves the release.
+        cmd = (
+            f"rm -f {OVERRIDE_FLAG}; "
+            f"[ -e {OVERRIDE_FLAG} ] && echo STILL-HELD || echo released"
+        )
+    return _send(cmd, host, port)
+
+
+@contextmanager
+def recording_override_held(
+    host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+) -> Iterator[None]:
+    """Hold the override for the duration of the block, then prove it released.
+
+    The docstring above used to say callers *must* release in a try/finally.
+    That is an instruction, not a guard, and this project's rule is that a
+    guard nothing enforces is a comment: the failure it invites -- an exception
+    between hold and release -- leaves the camera recording at home silently,
+    discovered only by noticing the card filling. Exactly the 2026-08-16 shape,
+    reached by a different road.
+
+    So the release is structural. It runs in `finally`, and it then tests for
+    the flag's absence rather than trusting `rm`'s exit code; if the flag is
+    still there the block raises, because a hold believed released is worse
+    than one known held.
+
+    Not covered: a hold that outlives this *process* (a hard kill between the
+    two calls). Closing that needs a camera-side self-expiring watchdog, which
+    is unverified on hardware and therefore not shipped -- see the note in
+    docs/FPS_CEILING.md rather than assuming this is airtight.
+    """
+    hold_recording_override(True, host, port)
     try:
-        s.sendall((cmd + "\n").encode())
-        s.shutdown(socket.SHUT_WR)
-        chunks = []
-        try:
-            while True:
-                buf = s.recv(65536)
-                if not buf:
-                    break
-                chunks.append(buf)
-        except TimeoutError:
-            pass
+        yield
     finally:
-        s.close()
-    return b"".join(chunks).decode(errors="replace")
+        out = hold_recording_override(False, host, port)
+        if "released" not in out:
+            raise RecordingOverrideStuck(
+                "the recording override did not release; the camera may still "
+                f"be recording at home. Remove {OVERRIDE_FLAG} by hand.\n"
+                f"  camera said: {out.strip()[:200]}"
+            )
 
 
 def _selftest() -> int:
@@ -213,9 +268,55 @@ def _selftest() -> int:
         except CameraCommandRefused as e:
             print(f"  [FAIL] should have been allowed: {c}  ({e})")
             fails += 1
-    print(
-        f"\n{len(blocked) + len(allowed) - fails}/{len(blocked) + len(allowed)} gates passed"
-    )
+    total = len(blocked) + len(allowed)
+
+    # The override context manager, exercised against a fake camera. These are
+    # the gates that matter most: the flag left set is the failure that recorded
+    # at home for hours without anyone noticing.
+    global _send  # noqa: PLW0603 -- test seam; restored below
+    real_send = _send
+    for name, ok, body, camera_says in (
+        ("releases on the happy path", True, lambda: None, "released"),
+        (
+            "releases when the block raises",
+            True,
+            lambda: (_ for _ in ()).throw(ValueError("boom")),
+            "released",
+        ),
+        ("raises when the flag survives release", False, lambda: None, "STILL-HELD"),
+    ):
+        total += 1
+        sent: list[str] = []
+
+        def fake(
+            cmd: str,
+            *a: object,
+            says: str = camera_says,
+            log: list[str] = sent,
+            **k: object,
+        ) -> str:
+            log.append(cmd)
+            return "held" if "touch" in cmd else says
+
+        _send = fake  # type: ignore[assignment]
+        stuck = False
+        try:
+            with recording_override_held():
+                body()
+        except RecordingOverrideStuck:
+            stuck = True
+        except ValueError:
+            pass
+        finally:
+            _send = real_send  # type: ignore[assignment]
+        released = any("rm -f" in c and OVERRIDE_FLAG in c for c in sent)
+        if released and stuck is not ok:
+            print(f"  [ok]   {name}")
+        else:
+            print(f"  [FAIL] {name}: release_attempted={released} raised={stuck}")
+            fails += 1
+
+    print(f"\n{total - fails}/{total} gates passed")
     return 1 if fails else 0
 
 

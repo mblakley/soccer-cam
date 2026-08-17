@@ -554,7 +554,19 @@ SHA-256 assertion before being written.
 | `builds/build_fps_demo.sh` | the builder that produced 4910–4916. Capture-fps + advertised-list + aux-geometry patches; refuses >16× ISE downscale; asserts the boot chain is SHA-256 identical to base and aborts if not |
 | `builds/build_tge_retime.sh` | TGE `hd_period` retime, 387..415 enforced. **Not flashed** — see O3, and back-fill the boot-chain guard first |
 | `runtime/isfbind.c` | freestanding aarch64 ISF bind/get client, no libc. Reproduces F8 |
-| `runtime/camsh.py` | `hold_recording_override()` — the one narrow, named capability for asserting the record-at-home flag while capturing a sample, so the general refusal stays enforced instead of being reworded around |
+| `runtime/camsh.py` | `recording_override_held()` — the one narrow, named capability for asserting the record-at-home flag while capturing a sample, so the general refusal stays enforced instead of being reworded around. A context manager, not a pair of calls: it releases in `finally` and then tests for the flag's *absence*, because `rm -f` exits 0 on a path it did not remove |
+
+**Known gap in the override tooling.** `recording_override_held()` guarantees
+release against an exception, but not against a hard kill of the host process
+between hold and release — that leaves the camera recording at home with nothing
+to notice it. Closing that needs a camera-side self-expiring watchdog (assert the
+flag, and have the camera itself drop it after N minutes). The obvious
+implementation, backgrounding a `sleep N; rm -f` under `nohup`, has **not** been
+verified to survive `tcpsvd` closing the connection on this busybox build, so it
+is deliberately not shipped rather than shipped untested — an expiry believed
+armed and actually absent is worse than none. Until then: the flag is only ever
+held inside the context manager, and `verify/check_recording_default.sh` keeps
+the far more dangerous case, a *build* that asserts it at boot, impossible.
 
 ### Reproducing the headline measurement
 
