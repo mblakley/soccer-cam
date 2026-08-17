@@ -753,11 +753,56 @@ crossing the seam and fit them:
 **Accumulate across the game, not within a frame.** A 90-minute game at 20 fps is ~108,000 frames;
 a few hundred good observations is plenty, and no single frame needs to be good.
 
-**Solve.** Weighted robust regression of `dx` on `y` over the accumulated observations: Huber loss,
-weights from fit quality and depth agreement. Fit a **line** first, because §2 says a lens roll is
-linear in y — then emit anchors by sampling that line at 5 rows. Record `r²` and the max residual
-(§5.2). Only if the residual is structured and large does a higher-order anchor curve become
-justified, and that fact goes in the artifact as a finding.
+**Solve.** ~~Weighted robust regression of `dx` on `y`~~ — **corrected in implementation
+(`../vpe/stitch_solver.py`, 2026-08-17): there is no per-observation `dx` to regress.** A structure
+must span the whole blend window in x to be extrapolated to the seam from both sides, so the usable
+ones are *near-horizontal*, and a near-horizontal line of slope `m` displaced horizontally by `dx`
+moves **vertically** at the seam:
+
+```
+r_y  =  dy  +  m * dx(y)
+```
+
+A flat line therefore sees nothing of `dx`, one line under-determines it, and `dx` is recoverable
+only **jointly**, from structures of differing slope. Substituting the linear-in-y model of §2,
+`dx(y) = a + b*(y − y_ref)`, gives one three-parameter fit over every accumulated observation, with
+design row `[1, m, m*(y − y_ref)]` and unknowns `(dy, a, b)`. Huber loss; weights are the inverse of
+each observation's extrapolation variance (below). Emit anchors by sampling the fitted line at 5
+rows. Record `r²` and the max residual (§5.2), and test a quadratic term — if it is significant, that
+is a finding about the camera and goes in the artifact, but the emitted curve stays straight until a
+human has looked at it. **[M]**
+
+What the fit can and cannot separate, stated so the artifact does not overclaim:
+
+- It **does** separate translate (`a`) from shear (`b`) — that needs spread in `m*(y − y_ref)`, i.e.
+  differing slopes at differing heights, which is a property of the *design matrix*, not of `n`.
+- It **does not** separate a rigid relative rotation from a linear-in-y shear (§2): both are `dx`
+  linear in y observed at one column. `roll_theta_rad` in the metadata is the roll *interpretation*
+  of `b`, not an independently measured angle.
+- It **does not** attribute the misregistration to a half. `dx` is relative, which is all either
+  surface needs.
+
+**Weights, and what the blend window costs.** Every observation is extrapolated from a shoulder
+across at least `blend_w/2 = 128` px of already-mixed pixels. For a chain of length `L` seeded at the
+blend edge, the fit's centroid is `D = 128 + L/2` from the seam, and the variance of a linear
+extrapolation is `sigma^2/L * (1 + 12 D^2 / L^2)` per side, doubled because `r_y` is a difference
+**[D]**. That is ~9× the in-span variance for a full 384-px chain and ~90× for a 96-px one, so
+weighting by it — rather than by chain length or fit quality alone — is what stops a handful of
+scraps outvoting the good data. It bounds *precision*, not correctness; what is irrecoverable is the
+ghosting already fused into the window, which is what SSR measures (§9.2).
+
+**Free consistency check.** §2 says the same roll `theta` that shears `dx` must also produce a
+constant `dy = theta * 1920` at the seam. The fit estimates `dy` anyway, as a nuisance parameter, so
+comparing it to `b * 1920` costs nothing and is a check on the *physics* rather than the algebra. A
+disagreement means something other than roll contributes — relative pitch, or parallax at a depth
+away from the calibration (§12.1) — and is reported as a finding. `dy` itself is still not emitted:
+the downstream surface cannot express it (§4.2, §12.2).
+
+**Sign, once more, because two modules disagree by design.** `seam_metric.ScrResult.implied_dx`
+models `r_y = dy − m*dx` and so reports the misregistration the right half currently *carries*; the
+artifact's `dx` is the *correction*, "px the right half must move right" (§4.4). Equal and opposite.
+The solver fits the correction directly rather than negating anything, and a test pins the
+relationship. **[M]**
 
 **Converge.** Apply → re-measure on held-out frames → iterate. Stop when `SCR p90 < 1.0 px`, or the
 improvement between iterations is `< 0.2 px`, or after 4 iterations. **Revert-on-regression**: if an
@@ -777,6 +822,148 @@ the seam sits mid-field, and mid-field is featureless grass. Handling, in order:
 4. Documented recovery: a **deliberate target**. Stand a high-contrast vertical edge — a taped board,
    or just walk the goal to the halfway line — so it straddles the seam at roughly the calibration
    depth, and grab a 10-second clip. One decisive observation set, ~2 minutes of a volunteer's time.
+
+**§9.3's counts are necessary but not sufficient — corrected in implementation.** The coverage
+conditions (`n ≥ 8`, ≥ 3 row bands, ≥ 60% of height) are all *proxies* for a design matrix that pins
+the curve, and a case exists that satisfies every one of them and is still unusable: structures
+spread over the full height and all three bands, but with slopes so shallow that `dx` — which enters
+only as `m*dx` — has almost no lever. Demonstrated with 18 observations across three bands over 70%
+of the height at slopes ±0.011, where the fitted `dx` is uncertain to ±1.35 px **[M]**. So the
+governing gate is the **standard error on `dx` at the anchor rows**, refused above 1.0 px, which is
+the target §10 stops iterating at: a fit whose own uncertainty exceeds the accuracy it is aiming for
+has not measured anything. The count and coverage conditions are kept as well, because they give a
+far better error message and because passing them means `check_acceptance` cannot later reject the
+same solve on coverage grounds. The solver reports **per-band observation counts** in every result,
+accepted or refused, so a caller can see which of these bit.
+
+### 10.1 What 27 archived games actually contained — measured 2026-08-17
+
+The solver was run against the Duo 3 archive on `DESKTOP-5L867J8`: every `2026.*` directory under
+`F:\Heat_2012s\` and `F:\Flash_2013s\` holding `RecM09_*.mp4`, which is 27 games and ~400 segments.
+Four frames per game were extracted server-side, one per segment at t = 30 s, spread across the game
+(`F:\archive\duo3_stitch\solver_frames\`), 96 frames total, each verified 7680×2160 before use
+**[M]**. 27 distinct tripod placements, indoor domes and outdoor pitches.
+
+**All 27 games refused. None produced a calibration.** That is the headline, and it is a result about
+the *observation primitive*, not about the fit.
+
+| What was measured | Value |
+|---|---|
+| Observations found per game | 40–498 (4 games: 0, single-segment dirs) |
+| Fraction of observations in the **top** row band | 73–98%; smallest band's share ≤ 9.2% in every game |
+| Top-band share **per frame** | 0.48–1.00, median 0.87 — stable across frames within a game **[M]** |
+| Chain span | median **68 px** against a 384-px shoulder; `min_len=150` returns **zero** observations |
+| `r_y` scatter inside one 150-row slice | 7–20 px, against a ~1.3 px per-observation noise model |
+| `corr(r_y, slope)` inside a slice | \|0.04\|–\|0.28\|; per-slice implied `dx` −58…+91 px, incoherent |
+| Weighted `r²` of the joint fit | **0.00–0.24** across all 27 games |
+| Robust dispersion | 5–17× the noise model |
+| `\|ln SSR\|` over the 96 frames | median **0.093**, p90 0.390; **52/96 below the 0.10 noise floor** |
+
+Read together:
+
+1. **Usable near-horizontal structure lives only on the far touchline and the crowd behind it.** Below
+   about row 900 of 2160 the frame is grass, and grass produces no edge that chains for 60 px on both
+   shoulders. This is the failure mode §10 predicts, and it is worse than predicted: it is not
+   "sometimes there is nothing", it is *every game, every frame*.
+2. **More frames do not fix it.** The imbalance is per-frame and stable, so accumulating across the
+   whole game — §10's remedy — adds mass to the same band. Checked, not assumed **[M]**.
+3. **The residuals do not describe a per-row `dx`.** With `r²` ≈ 0 and almost no correlation between
+   `r_y` and slope within a row slice, whatever produces the 7–20 px scatter (spurious left/right
+   pairings, moving people, objects at differing depths sharing a row) is not a common shear.
+4. **There may be little to correct.** More than half the frames are below the SSR noise floor, i.e.
+   indistinguishable from a registered seam at the ~1 px level. Only the indoor dome game
+   (2026.03.21) is consistently high (0.405–0.533). SSR saturates past ~4 px so this is not proof of
+   sub-pixel registration, but it is evidence against a gross one.
+
+**Consequence for the design: §10 step 4 is the primary path, not the fallback.** A deliberate target
+straddling the seam at calibration depth is the only route this footage supports. The automatic
+solver's job on archived footage is to *say so*, with numbers, which is what it now does.
+
+**And a gate §9.3 was missing.** `height_coverage` is a *range* — `(y_max − y_min) / band` — so two
+stragglers at the extremes satisfy it. On this archive, range coverage read 81–98% on 24 of 27 games
+while 73–98% of the mass sat in one band **[M]**. Leverage on a shear comes from mass at differing
+heights, so the solver adds `MIN_ROW_BAND_FRACTION = 0.10`: every row band must hold at least a tenth
+of the observations. With it, 23 of the 27 refusals name the actual problem ("piled into one band")
+instead of reporting an uninterpretable ±50–375 px error bar.
+
+**Limitations of this run, stated.** Four frames per game is a thin sample of ~108,000 (finding 2 is
+why that is defensible, not an excuse). The frames are single stills, so no within-game drift over
+time was measured. And no calibration was applied to any camera, so nothing here is an end-to-end
+before/after.
+
+### 10.2 Verdict: SCR cannot be the objective for an automatic solver on fused frames
+
+This is the load-bearing correction to the design, and it is measured.
+
+**Root cause, in one line: on a soccer field almost everything that crosses a vertical seam runs
+horizontally, and a horizontal edge is invariant under a horizontal shift.**
+
+`dx` enters every SCR observation only as `m · dx` (§10). So the lever is the structure's slope. Over
+**4239 observations from the 27-game archive** **[M]**:
+
+| | median | p90 | max |
+|---|---|---|---|
+| \|slope\| | **0.034** | 0.089 | 0.265 |
+
+A 10 px misregistration therefore moves the median observation by **0.34 px** vertically — below the
+~1.3 px noise on one observation. And this is not fixable by tuning: a structure must span the 256-px
+blend window in x to be extrapolated to the seam from both shoulders, which is *why* only
+near-horizontal ones qualify, and `seam_metric` enforces `|m| ≤ 0.35` accordingly. The admissible
+feature set and the informative feature set barely overlap.
+
+**The discriminative sweep, which is the check with teeth.** Apply a constant `dx`, re-detect, and
+look at whether the score moves. Three frames, chosen by vertical-edge energy in the blend window —
+two of the richest, one of the poorest **[M]**:
+
+| dx | rich A (ratio 1.31) p90 | rich B (ratio 1.26) p90 | poor control (ratio 0.65) p90 |
+|---|---|---|---|
+| −32 | 26.12 | 30.29 | 36.63 |
+| −16 | 26.36 | 27.98 | 36.88 |
+| −4 | 29.31 | 26.89 | 37.10 |
+| **0** | **29.15** | **27.51** | **37.17** |
+| +4 | 30.20 | 27.27 | 37.23 |
+| +16 | 24.85 | 29.44 | 37.49 |
+| +32 | **23.47** | 27.03 | 37.71 |
+| | 22% range, **argmin at endpoint** | 14% range, 3 troughs | 4% range, **argmin at endpoint** |
+
+Read it: on rich A, deliberately breaking the seam by 32 px makes the score **better** (29.15 →
+23.47). `implied_dx` on the same frame wanders over −0.8 … −53 px *across the sweep of a single
+frame*, and on the control it sits at −100 … −170 px regardless of what shift was applied. The
+objective is not merely noisy — it is uninformative, and in places anti-correlated with the truth.
+This reproduces independently on a fourth frame swept by the calibration-UI work.
+
+**Mark's insight — "it's easy to see misregistration if there's a person in the seam" — is correct,
+and it is also the reason SCR cannot use it.** A person is vertical structure, which is exactly what
+a horizontal shift displaces visibly. But a vertical structure at the seam sits *inside* the blend
+window, where it exists only as a superposition of the two sensors' views. There is no left-shoulder
+copy and right-shoulder copy to extrapolate and compare, so the extrapolation primitive cannot
+consume it at any weighting. Tested rather than argued: selecting the 12 frames richest in
+vertical-edge energy at the seam gave `implied_dx` spanning **−55 … +141 px across a fixed camera**,
+4 of the 12 yielded **zero** usable observations, and the sweep above is on two of those frames
+**[M]**. Frame selection and orientation weighting do not rescue it; they select for the content SCR
+must discard.
+
+**What this leaves.**
+
+- SCR remains a fine *reporting* metric for a human (Workflow B shows it live, §11) and a fine
+  acceptance check once a correction exists. It is not a solvable objective.
+- The information about `dx` is in the **ghosting inside the blend window** — two copies of the world
+  at a fixed offset, `(1−α)·W(x) + α·W(x−e)`. Recovering `e` from that is an echo-separation problem,
+  not an extrapolation problem, and it is the one fused-frame primitive that can use a person at the
+  seam. Unbuilt, and the honest next step for Workflow A.
+- Better still, §14 question 1: `VIDEOPROC 2` out port 1 is a live 256×2160 output nobody reads. If
+  it carries the two contributions separately, this stops being an inference problem and becomes
+  direct two-image registration, where vertical structure is precisely what one correlates. The
+  archive result promotes that from "highest-value lead" to "the thing to do next".
+- `stitch_solver` therefore ships with `sweep_dx` / `require_responsive_objective`: before any curve
+  is trusted, the objective must be shown to have an interior, deep, single-troughed minimum. On this
+  footage it does not, and the solver says so.
+
+**One unit trap, worth stating.** Anchors are in the pixel units of the frame they were measured on,
+and `build_dx_lookup` rescales them — so a profile solved on a downscaled still is correct, but its
+*integer* downstream projection is not free: `StitchProfile` stores `int` dx, so a profile solved at
+half resolution carries a ±0.5 px quantisation that becomes ±1.0 px after rescaling. Solve at full
+resolution where possible; the camera-mesh surface is unaffected (quarter-pixel, §5.1). **[D]**
 
 ---
 
@@ -924,9 +1111,16 @@ Not fixed here — this branch is design only — but they are real, reproduced,
    settles it; it needs a write, so it was out of scope here (§1.4).
 4. **Is `distance` in metres?** Determines whether §12.1's reading of the 20.0 cap is right.
 5. **Does the DCE resample chroma correctly at fractional offsets?** (§5.3.)
-6. **What does real `dx(y)` look like?** No real profile exists on disk **[M]**; the roll model of §2
-   is physically motivated but unmeasured on this unit. The first calibration answers it, and the
-   answer decides whether the mesh's y-coarseness matters at all (§5.2).
+6. **What does real `dx(y)` look like?** ~~No real profile exists on disk~~ — **still open, and now
+   known to be harder than expected.** 27 archived games could not answer it: the seam observations
+   they contain do not determine `dx` at all (§10.1, `r²` ≈ 0 on every game), so the roll model of §2
+   remains unmeasured on this unit. Answering it needs the deliberate target of §10 step 4, or the
+   pre-stitch source images of question 1 — which would turn this from an extrapolation problem into
+   a direct registration one and is now the highest-value lead in the document for this reason too.
+7. **Is there anything to correct on outdoor footage at all?** 52 of 96 archived frames sit below the
+   SSR noise floor **[M]**. SSR saturates past ~4 px so this is not proof of sub-pixel registration,
+   but before more effort goes into Workflow A it is worth establishing whether the far-field seam on
+   a tripod-mounted unit is misregistered by an amount detection cares about.
 
 ---
 
