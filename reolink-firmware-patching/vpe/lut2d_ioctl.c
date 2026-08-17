@@ -8,9 +8,15 @@
  *
  *   VPE_IOC_GET_2DLUT = _IOWR('v', 13, 8) = 0xc008760d   (device @ VA 0x599c1c)
  *   VPE_IOC_SET_2DLUT = _IOW ('v', 13, 8) = 0x4008760d
- *   buffer            = {u32 id, u32 reserved, u32 n} followed by the table
- *   size              = 12 + align4(n)*n*4              (vpe_uti_calc_2dlut_ioctl_size)
- *                       n = vpe_2dlut_size = 257 -> 267292
+ *   buffer            = {u32 id, u32 n} followed by the table at +8
+ *   size              = 8 + align4(n)*n*4
+ *                       n = vpe_2dlut_size = 257 -> 267288
+ *
+ * The n field is buf[1], NOT buf[2]. This was wrong in the first version and
+ * the failure is silent: the driver returns align4(0)*0 = zero entries and
+ * still reports success, so you get a structurally perfect, entirely empty
+ * mesh. Established by sweeping calling conventions against the procfs oracle
+ * `get_2dlut_param 0`, whose 2dlut[0] must appear in any correct response.
  *   entry             = (y<<16)|x, each half unsigned Q14.2
  *
  * The ioctl's declared size field is 8, but the driver reads the whole buffer;
@@ -37,10 +43,14 @@
 #define N 257
 #define ALIGN4(x) (((x) + 3) & ~3)
 #define STRIDE ALIGN4(N)
-#define HDR_WORDS 3
+#define HDR_WORDS 2
 #define HDR_BYTES (HDR_WORDS * 4)
 #define TABLE_BYTES (STRIDE * N * 4)
 #define BUFSZ (HDR_BYTES + TABLE_BYTES)
+/* The driver was built around a 3-word header and can write a few bytes
+ * past BUFSZ. Allocate slack -- without it the write corrupts the heap
+ * and glibc aborts with "double free or corruption". */
+#define ALLOCSZ (BUFSZ + 64)
 
 /* Reject a mesh that would tear the image before handing it to the hardware:
  * the padded tail of every row must be zero, and no control point may fall
@@ -82,12 +92,12 @@ static unsigned char *read_file(const char *path, long *out_len)
 
 static int do_get(int fd, int id, const char *path)
 {
-    unsigned char *buf = calloc(1, BUFSZ);
+    unsigned char *buf = calloc(1, ALLOCSZ);
     unsigned int *h = (unsigned int *)buf;
     FILE *f;
     int r;
 
-    h[0] = id; h[1] = 0; h[2] = N;
+    h[0] = id; h[1] = N;
     r = ioctl(fd, GET_2DLUT, buf);
     printf("GET id=%d -> %d  hdr={%u,%u,%u}\n", id, r, h[0], h[1], h[2]);
     if (r != 0) { free(buf); return 1; }
@@ -121,9 +131,9 @@ static int do_set(int fd, int id, const char *path, int armed)
         return 1;
     }
 
-    buf = calloc(1, BUFSZ);
+    buf = calloc(1, ALLOCSZ);
     h = (unsigned int *)buf;
-    h[0] = id; h[1] = 0; h[2] = N;
+    h[0] = id; h[1] = N;
     memcpy(buf + HDR_BYTES, in + off, TABLE_BYTES);
     free(in);
 
@@ -146,9 +156,9 @@ static int do_set(int fd, int id, const char *path, int armed)
 
     /* Read back and diff. A SET that silently does nothing looks identical to
      * one that worked unless you check. */
-    back = calloc(1, BUFSZ);
+    back = calloc(1, ALLOCSZ);
     h = (unsigned int *)back;
-    h[0] = id; h[1] = 0; h[2] = N;
+    h[0] = id; h[1] = N;
     r = ioctl(fd, GET_2DLUT, back);
     if (r != 0) {
         printf("  read-back failed (%d) — cannot confirm the write\n", r);
