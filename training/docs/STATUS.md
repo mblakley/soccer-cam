@@ -1,6 +1,34 @@
 # Current Status
 
-*Last updated: 2026-07-24 (overnight) — Virtual Operator arc kickoff*
+*Last updated: 2026-08-17 — non-uniform camera warp assessed and declined*
+
+## 2026-08-17 — NON-UNIFORM CAMERA WARP: assessed, DECLINED for image quality; the mesh READ is the win
+
+- Design doc: `training/docs/NONUNIFORM_WARP_DESIGN.md` (branch `design/nonuniform-warp-impact`).
+  Question: now that the Duo 3's 257×257 VPE warp mesh can be read/written at runtime, should we
+  resample the panorama non-uniformly to buy far-ball detail ahead of the 20 Mbps encoder ceiling?
+- **Answer: no.** Decoded the archived factory mesh (`F:\archive\duo3_stitch\dumps\lut\lut_vpe0.bin`;
+  parse validated against the ranges in `reolink-firmware-patching/vpe/README.md`). Horizontal
+  source-sampling rate over the field band is **0.63–1.04 src px per dst px** — i.e. the far field
+  is **already upsampled**, and **≤4%** additional real sensor detail exists anywhere. Magnification
+  beyond that is interpolation. The far ball is ~4 px because of distance and lens, not the mesh.
+- **The proposal's geometric premise is inverted.** On a sideline mount the far touchline occupies
+  only the CENTRE ~42% of the panorama (measured on Irondequoit's confirmed polygon: far line
+  x 2163–5416, near line x 30–7380; and `world_geometry.py:115-117` enforces far_w < near_w for
+  every accepted polygon). The hardest ball (4.0 px) sits at the **seam**, not the edges. The
+  demonstrated symmetric mesh magnifies the near corners and moves the frame's worst ball only
+  **+10%** (magnification-vs-need correlation r = +0.11).
+- **New, load-bearing finding for the open ONE BUG CLASS:** the factory mesh is already strongly
+  non-uniform (**1.65× horizontal magnification swing**, symmetric bow) and already **anisotropic**
+  (source circle renders 0.88:1 to 1.52:1, a **1.72× aspect swing**). The renderer assumes the
+  opposite (`cylindrical_view.py:4-5`, `render_src_hfov_deg = 180.0`), and `world_geometry` fits a
+  planar homography over it whose reprojection gate is documented as catastrophe-only. This is a
+  live, unmodelled, position-dependent geometry error TODAY and a candidate mechanism for the
+  ±35% wavy expectation field. **Recommended next: correlate the measured sampling bow against the
+  cached Phase 2 per-position ratio field (`F:\archive\geodet_phase2`) — zero GPU, zero clicks.**
+- Encoder-side benefit (more pixels on the far ball before quantisation) is the one surviving
+  mechanism, but `firmware/encoder-roi-qp-per-game` (`ca8b88e`) targets it directly with no
+  geometry change. Prefer it. No camera writes were made; camera access was read-only.
 
 ## 2026-07-24 (overnight) — VIRTUAL OPERATOR arc OPENED; geodet MERGED to main; W1 scoreboard is the first artifact
 

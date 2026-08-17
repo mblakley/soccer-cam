@@ -79,6 +79,48 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-08-17: Non-uniform camera warp DECLINED for image quality; the mesh READ is adopted as a calibration input
+
+**The proposal.** The Duo 3's 257×257 VPE warp mesh can now be read, modified, written and verified
+at runtime. Proposal: resample the panorama non-uniformly (magnify the far field, compress the
+near) to buy far-ball detail geometrically, upstream of the confirmed 20 Mbps encoder ceiling.
+
+**Decision: do not write a mesh for image quality.** Measured on the archived factory dump
+(`F:\archive\duo3_stitch\dumps\lut\lut_vpe0.bin`): the horizontal source-sampling rate over the
+field band is 0.63–1.04 source px per destination px, so the far field is **already upsampled** and
+**≤4%** additional real sensor detail exists anywhere in the band. A mesh cannot create angular
+resolution the lens and sensor did not deliver; the 4 px far ball is a 60–76 m optics problem.
+Separately, the proposal's geometry is inverted: on a sideline mount the far touchline occupies only
+the centre ~42% of the panorama (`world_geometry.py:115-117` enforces far_w < near_w for every
+accepted polygon), so the hardest ball sits at the seam and edge magnification is spent on the near
+corners.
+
+**Decision: adopt the mesh READ as a per-camera calibration artifact.** The same measurement shows
+the delivered panorama is already non-uniform (1.65× horizontal magnification swing) and already
+locally anisotropic (0.88:1–1.52:1, a 1.72× aspect swing), while the renderer assumes columns are
+linear in azimuth (`cylindrical_view.py:4-5`; `render_src_hfov_deg = 180.0`) and `world_geometry`
+fits a planar homography whose reprojection gate is documented as catastrophe-only. That is an
+unmodelled position-dependent error carried **today**, independent of any mesh write, and a
+candidate mechanism for the ONE BUG CLASS's structurally wavy expectation field.
+
+**Consequences.**
+- Reading/storing the mesh, and making the renderer + planner consume the measured profile instead
+  of a flat 180°, are funded as **correctness work** with no camera write and no retraining.
+- Any future mesh write must ship atomically with `stitch_remap` recalibration, polygon
+  re-confirmation, and a mesh-aware image↔world map — a write with a stale homography passes every
+  existing guard and returns silently wrong metres.
+- A production mesh must be the factory mesh **composed** with a redistribution, never
+  `Lut2D.from_mapping` from scratch: the factory mesh *is* the per-unit stitch calibration.
+- "Isotropic everywhere" (2026-06-26) is **upheld and extended**: a projective/Möbius mesh is still
+  aspect-distorting, and cannot produce interior magnification anyway (monotone derivative), so it
+  is the wrong function family for this field geometry.
+- Encoder-side pixel reallocation remains a real but separable hypothesis; pursue it via
+  `firmware/encoder-roi-qp-per-game`, which buys it with zero geometry change.
+
+Full evidence, citations and the migration order: `training/docs/NONUNIFORM_WARP_DESIGN.md`.
+
+---
+
 ## 2026-07-24 (s): FACTORIZATION SUPPORTED — one shared bow curve x per-game scalar (+ yaw phase); frame-weighted contamination; the one-bug-class appendix (Mark, three directives)
 
 **1. Factorization test (run before composing, cached data):** normalizing each
