@@ -1,0 +1,234 @@
+#!/bin/sh
+# /etc/init.d/S98_StitchCal
+# Re-apply the stitch-seam correction to the VPE 0 warp mesh at every boot.
+#
+# The mesh is RUNTIME state. The firmware regenerates it from CamStitchPara
+# (mtd11) plus the persisted scalars in /mnt/para/stitch.cfg on every power-on,
+# so anything written to it dies at the next reboot. That is a safety property
+# worth keeping -- a bad mesh is undone by a power cycle -- but it means a real
+# calibration needs re-applying, which is this script.
+#
+# WHAT IS STORED IS THE CORRECTION, NEVER A COMPOSED MESH.
+#
+# /mnt/sda/stitchcal/anchors.txt holds a few hundred bytes of [row, dx] anchors.
+# At each boot this script dumps THIS BOOT'S factory mesh and composes the
+# anchors onto that. Three things follow, and they are the whole reason for the
+# design:
+#
+#   * "the production mesh is the factory mesh plus a correction" becomes an
+#     invariant rather than a rule, because no composed mesh has any persistent
+#     existence to drift out of date;
+#   * it self-heals -- if the vendor scalars change, or a firmware update
+#     changes the factory calibration, the next boot composes onto the new
+#     baseline instead of restoring a stale mesh over it;
+#   * the ordering constraint is satisfied structurally. SetStitch re-runs the
+#     firmware's own optimiser (Na_calc_2dlut_data) and destroys any mesh we
+#     wrote, so scalars must always be applied BEFORE the mesh. Here that is
+#     automatic: whatever mesh the firmware generated already reflects whatever
+#     scalars were persisted, and that generated mesh is our input.
+#
+# Runtime configuration, all on the writable SD card (the S99_NetState pattern:
+# fixed script in read-only firmware, mutable config on the card):
+#
+#   /mnt/sda/stitchcal/anchors.txt   the correction; the only file routinely updated
+#   /mnt/sda/stitchcal/disable       presence => this script exits 0, uncorrected
+#   /mnt/sda/stitchcal/bin/lut2d_ioctl   optional override for the baked-in helper
+#   /mnt/sda/stitchcal/factory_boot.bin  this boot's factory dump (overwritten)
+#   /mnt/sda/stitchcal/mesh_boot.bin     what was written (overwritten)
+#   /mnt/sda/stitchcal/state.json        witness: what was applied, when, against what
+#   /mnt/sda/stitchcal/log               rotates at 256 KB, as S99_NetState does
+#
+# EVERY FAILURE PATH EXITS 0 AND UNCORRECTED. A camera that records an
+# uncorrected game is a degraded camera; a camera that fails to boot is a lost
+# weekend. Nothing here is allowed to be the second thing.
+#
+# Runs at S98: after S15_NvtAppInit has the media pipeline up, and before
+# S99_NetState makes its record/idle decision -- the mesh must be live before
+# the first recorded frame.
+
+CFG_DIR=/mnt/sda/stitchcal
+ANCHORS=$CFG_DIR/anchors.txt
+DISABLE=$CFG_DIR/disable
+LOG=$CFG_DIR/log
+STATE=$CFG_DIR/state.json
+FACTORY=$CFG_DIR/factory_boot.bin
+LIVE=$CFG_DIR/live_now.bin
+APPLIED_SIG=$CFG_DIR/applied.sig
+MESH=$CFG_DIR/mesh_boot.bin
+BAKED=/usr/bin/lut2d_ioctl
+OVERRIDE_BIN=$CFG_DIR/bin/lut2d_ioctl
+
+LOG_MAX_BYTES=262144
+WAIT_TRIES=60          # x 2s = up to 2 minutes for the pipeline to settle
+SD_TRIES=60            # x 2s = up to 2 minutes for the SD card to appear
+VPRC=/proc/hdal/vprc/info
+
+log() {
+    MSG="[$(date '+%F %T')] $*"
+    echo "$MSG"
+    if [ -d "$CFG_DIR" ] || mkdir -p "$CFG_DIR" 2>/dev/null; then
+        if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt $LOG_MAX_BYTES ]; then
+            mv "$LOG" "$LOG.old" 2>/dev/null
+        fi
+        echo "$MSG" >>"$LOG"
+    fi
+}
+
+give_up() {
+    log "  NOT APPLIED: $*"
+    log "===== stitchcal finished: mesh left at factory ====="
+    exit 0
+}
+
+# The SD card is NOT mounted by rcS's `mount -a` -- /dev/hd/sda1 is brought up
+# later by the app, well after rcS starts running S* scripts. Everything this
+# hook reads and writes lives there, so nothing may be read until it is up.
+#
+# This is not hypothetical: the first flashed build checked for anchors.txt
+# immediately, found nothing because the card was not mounted yet, and exited.
+# It could not even say so -- / is read-only squashfs, so log() could not create
+# /mnt/sda/stitchcal and the message went to the boot console and nowhere else.
+# The result was a hook that had provably run and left no trace at all, which is
+# the most expensive kind of silence. Wait for the mount FIRST, then read config,
+# so every subsequent decision is both correct and recorded.
+# Identify a mesh by its table alone. The 8-byte header differs between a
+# driver dump and a composed file even when the tables are identical, so it must
+# not be part of the identity.
+mesh_sig() {
+    dd if="$1" bs=8 skip=1 2>/dev/null | md5sum | cut -d' ' -f1
+}
+
+wait_for_sdcard() {
+    i=0
+    while [ $i -lt $SD_TRIES ]; do
+        if grep -q ' /mnt/sda ' /proc/mounts 2>/dev/null; then
+            return 0
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    return 1
+}
+
+# Wait on a CONDITION, never a fixed sleep. The stitcher (VIDEOPROC 2) has to be
+# running at the full panorama size and pushing frames before the mesh means
+# anything, and how long that takes varies with what else booted first.
+wait_for_stitcher() {
+    i=0
+    prev=""
+    while [ $i -lt $WAIT_TRIES ]; do
+        if [ -r "$VPRC" ]; then
+            # out 0 of VIDEOPROC 2 must be the full panorama...
+            if grep -q '7680  2160' "$VPRC" 2>/dev/null; then
+                # ...and its push counter must be advancing, not merely present
+                cur=$(grep -c . "$VPRC" 2>/dev/null)$(md5sum "$VPRC" 2>/dev/null | cut -c1-16)
+                if [ -n "$prev" ] && [ "$cur" != "$prev" ]; then
+                    return 0
+                fi
+                prev="$cur"
+            fi
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    return 1
+}
+
+main() {
+    # Before the mount, log() can only echo to the boot console -- so do the
+    # waiting before the announcing, and the first line in the file is then a
+    # complete record of the run.
+    if ! wait_for_sdcard; then
+        echo "[stitchcal] /mnt/sda never mounted after $((SD_TRIES * 2))s -- giving up"
+        exit 0
+    fi
+    log "===== stitchcal starting ====="
+
+    [ -e "$DISABLE" ] && give_up "$DISABLE present (operator rollback)"
+    [ -r "$ANCHORS" ] || give_up "no $ANCHORS -- nothing is calibrated on this unit"
+
+    BIN=$BAKED
+    if [ -x "$OVERRIDE_BIN" ]; then
+        BIN=$OVERRIDE_BIN
+        log "  using SD-card helper override $OVERRIDE_BIN"
+    fi
+    [ -x "$BIN" ] || give_up "no usable lut2d_ioctl ($BAKED / $OVERRIDE_BIN)"
+
+    if wait_for_stitcher; then
+        log "  stitcher is up and pushing 7680x2160"
+    else
+        give_up "stitcher did not reach 7680x2160 within $((WAIT_TRIES * 2))s"
+    fi
+
+    # 1) dump the live mesh. `compose` liveness-gates it: an all-zero read
+    #    satisfies every structural check by construction, and the driver
+    #    returns success on one, so a dump that looks perfect can be empty.
+    rm -f "$LIVE" 2>/dev/null
+    "$BIN" get 0 "$LIVE" >>"$LOG" 2>&1 || give_up "mesh dump failed"
+    [ -s "$LIVE" ] || give_up "mesh dump produced no file"
+
+    # 1b) IS THE LIVE MESH THE FACTORY BASELINE, OR OUR OWN OUTPUT?
+    #
+    # At boot it is always the baseline -- the firmware regenerates the mesh
+    # from CamStitchPara on every power-on. But this script must also be safe to
+    # run by hand, because "run it again and see" is the first thing anyone does
+    # when debugging, and composing a correction onto an already-corrected mesh
+    # silently DOUBLES it. That is not hypothetical: it happened during
+    # bring-up, and the log looked entirely healthy while the shear went from
+    # 3 px to 6 px.
+    #
+    # So: remember the signature of what we last wrote. If the live mesh is
+    # that, the true baseline is the copy we saved; otherwise the live mesh IS
+    # the baseline and the saved copy is stale. This also self-heals through a
+    # SetStitch, which produces a new factory mesh whose signature matches
+    # neither.
+    #
+    # Signature skips the 8-byte header: a dump carries {id, n} plus whatever
+    # the driver left in the third word, while a composed file carries a
+    # canonical header, so only the table is comparable.
+    LIVE_SIG=$(mesh_sig "$LIVE")
+    PREV_SIG=$(cat "$APPLIED_SIG" 2>/dev/null)
+    if [ -n "$PREV_SIG" ] && [ "$LIVE_SIG" = "$PREV_SIG" ] && [ -s "$FACTORY" ]; then
+        log "  our correction is already live; composing from the saved baseline"
+    else
+        cp "$LIVE" "$FACTORY" || give_up "could not save the factory baseline"
+        log "  live mesh is the factory baseline for this boot"
+    fi
+
+    # 2) compose the stored correction onto it. No --require-baseline here: the
+    #    shear is a property of the physical lens pair, not of any one mesh, so
+    #    composing it onto whatever the firmware generated this boot is exactly
+    #    right. Requiring a baseline match would mean one legitimate SetStitch
+    #    permanently disabled the hook.
+    rm -f "$MESH" 2>/dev/null
+    "$BIN" compose "$FACTORY" "$ANCHORS" "$MESH" >>"$LOG" 2>&1 \
+        || give_up "compose refused (see above) -- anchors or mesh failed a gate"
+    [ -s "$MESH" ] || give_up "compose produced no file"
+
+    # 3) write it. `set` reads the mesh back and diffs it; a SET that silently
+    #    does nothing is indistinguishable from one that worked unless you check.
+    if "$BIN" set 0 "$MESH" --i-have-a-recovery-path >>"$LOG" 2>&1; then
+        # Remember what we wrote, so a re-run recognises it instead of
+        # composing on top of it (step 1b).
+        mesh_sig "$MESH" >"$APPLIED_SIG"
+        CRC=$(grep -o 'crc [0-9a-f]*' "$LOG" | tail -1 | cut -d' ' -f2)
+        ID=$(sed -n 's/^# seam_calibration\/2 //p' "$ANCHORS" | head -1)
+        cat >"$STATE" <<EOF
+{"calibration_id": "${ID:-unknown}",
+ "applied_utc": "$(date -u '+%FT%TZ')",
+ "uptime_s": $(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0),
+ "mesh_crc32": "${CRC:-unknown}",
+ "vpe_id": 0,
+ "readback": "ok"}
+EOF
+        log "  APPLIED: calibration ${ID:-unknown}, mesh crc ${CRC:-unknown}, read-back ok"
+    else
+        rm -f "$STATE" 2>/dev/null
+        give_up "mesh write failed or read-back did not match"
+    fi
+
+    log "===== stitchcal finished ====="
+}
+
+( main ) &
+exit 0

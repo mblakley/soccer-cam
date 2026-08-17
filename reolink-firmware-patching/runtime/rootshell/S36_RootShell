@@ -1,0 +1,19 @@
+#!/bin/sh
+# S36_RootShell -- recovery channel. One command set per TCP connection:
+# /bin/sh reads stdin to EOF, executes, exits. There is no login, no banner and
+# no prompt, so any client must be written for that model rather than as an
+# interactive session (see runtime/camsh.py, which is the only sanctioned way to
+# drive it).
+#
+# This is the reason recovery from the 2026-08-16 outage took minutes instead of
+# waiting on a UART cable. It is also a loaded gun -- the same shell has write
+# access to /mnt/sda, where every recording lives -- which is why camsh.py
+# refuses the class of command that caused that incident before it reaches the
+# camera.
+#
+# This script deliberately does NOT touch /mnt/sda/netstate/override. Asserting
+# that flag at boot makes S99_NetState yield permanently and the camera records
+# at home; enabling recording is an explicit operator action, never a build
+# default. See verify/check_recording_default.sh.
+tcpsvd -vE 0.0.0.0 2323 /bin/sh >/dev/null 2>&1 &
+exit 0

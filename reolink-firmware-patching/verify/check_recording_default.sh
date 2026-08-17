@@ -41,9 +41,13 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "==> extracting rootfs from $(basename "$PAK")"
-python3 - "$PAK" "$WORK/rootfs.bin" <<'PY'
+# PYTHONPATH from $ROOT, not from sys.argv[0]: the script body arrives on stdin,
+# so argv[0] is "-" and the old dirname() trick silently resolved to the caller's
+# cwd. It happened to work when run by hand from reolink-firmware-patching/ and
+# failed with ModuleNotFoundError the first time a builder invoked it by absolute
+# path from a temp dir -- i.e. exactly when this gate started mattering.
+PYTHONPATH="$ROOT" python3 - "$PAK" "$WORK/rootfs.bin" <<'PY'
 import sys
-sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(sys.argv[0]) or ".", ".."))
 from pak import pak  # reolink-firmware-patching/pak/pak.py
 data = open(sys.argv[1], "rb").read()
 for s in pak.parse(data):
