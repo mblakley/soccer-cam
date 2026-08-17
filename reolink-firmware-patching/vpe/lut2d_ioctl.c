@@ -47,6 +47,10 @@
 #define HDR_BYTES (HDR_WORDS * 4)
 #define TABLE_BYTES (STRIDE * N * 4)
 #define BUFSZ (HDR_BYTES + TABLE_BYTES)
+/* The driver was built around a 3-word header and can write a few bytes
+ * past BUFSZ. Allocate slack -- without it the write corrupts the heap
+ * and glibc aborts with "double free or corruption". */
+#define ALLOCSZ (BUFSZ + 64)
 
 /* Reject a mesh that would tear the image before handing it to the hardware:
  * the padded tail of every row must be zero, and no control point may fall
@@ -88,7 +92,7 @@ static unsigned char *read_file(const char *path, long *out_len)
 
 static int do_get(int fd, int id, const char *path)
 {
-    unsigned char *buf = calloc(1, BUFSZ);
+    unsigned char *buf = calloc(1, ALLOCSZ);
     unsigned int *h = (unsigned int *)buf;
     FILE *f;
     int r;
@@ -127,7 +131,7 @@ static int do_set(int fd, int id, const char *path, int armed)
         return 1;
     }
 
-    buf = calloc(1, BUFSZ);
+    buf = calloc(1, ALLOCSZ);
     h = (unsigned int *)buf;
     h[0] = id; h[1] = N;
     memcpy(buf + HDR_BYTES, in + off, TABLE_BYTES);
@@ -152,7 +156,7 @@ static int do_set(int fd, int id, const char *path, int armed)
 
     /* Read back and diff. A SET that silently does nothing looks identical to
      * one that worked unless you check. */
-    back = calloc(1, BUFSZ);
+    back = calloc(1, ALLOCSZ);
     h = (unsigned int *)back;
     h[0] = id; h[1] = N;
     r = ioctl(fd, GET_2DLUT, back);
