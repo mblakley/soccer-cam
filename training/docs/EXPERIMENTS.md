@@ -4004,3 +4004,46 @@ never applying; null baked into `measure()` (0/325 control candidates accepted
 vs 12–18 at the seam on the same archive frames); chroma reported per candidate.
 Every hand-verified case refuses and says what would fix it: a flat single-height
 target. Full write-up: `reolink-firmware-patching/docs/STITCH_CALIBRATION.md` §15.
+
+
+---
+
+## EXP-STITCH-02: seam echo withdrawn at scale - it measures a step edge (2026-08-19)
+
+**What was tested:** the shipped `vpe/seam_echo.py` (chromatic candidate selection + two-copy fit on
+the Lab-chroma profile, `a` predicted from geometry), run unmodified over the archive.
+
+**Acceptance tests - failed:**
+
+| frame | required | reported |
+|---|---|---|
+| 1104 (+6 px, real 18 px ghost) | 17-19 px | **33.0 px, published** |
+| 1088 (+106 px) | ~0 / refuse | void |
+| 1120 (-51 px) | ~0 / refuse | void |
+
+**Null at scale** - 7,688 frames, 46,088 seam candidates, 90,609 controls, 28 games: seam acceptance
+7.4% vs control 6.3% (**1.18x**, against the module's own `NULL_MARGIN` of 3.0). `ctl-1200` accepts
+more often than the seam. d-histogram overlap 0.85; seam/control median d 31/30 px, unchanged after
+matching on colour decile and row band. 96 gate settings swept, none both quiet off-seam and correct
+on it.
+
+**Mechanism:** a step edge (shirt against grass) is fitted better by two lobes than by one, so `gain`
+rises on precisely the objects the chromatic gate finds best - `gain` is anti-correlated with truth
+here. On f1104 all three accepted candidates were a walking player's torso/shorts/leg 37-47 px from
+the seam; the ball's band ranked 15th chromatically and `max_fits=10` never fitted it. Forced onto
+the ball, the fit returns d=1.
+
+**Agreement inverts and cannot be the criterion:** within-track IQR median 1.0 px / 74% <=1 px at
+*controls* vs 2.0 px / 38% at the seam. The steadiest landmark in the corpus is a control reading
+d=35.0 px with IQR 0.0 over 25 looks, where truth is 0.
+
+**Own-code flaw worth keeping:** the null guard `if ctl_ok and seam_rate < NULL_MARGIN * ctl_rate`
+is skipped entirely when the controls accept nothing, which is common on a single frame - inert at
+exactly the sample size the button uses, and the reason single-frame and scale runs disagreed. A null
+a small sample can switch off is not a null.
+
+**Outcome:** `/stitch/auto` is diagnostics only. `measure()` always returns `verdict="withdrawn"`
+and `anchors_from_measurement` raises unconditionally; the UI has no adopt control. Colour gating was
+necessary but insufficient - a fix must discriminate a **ghost** from a **step**, which is new work
+with its own acceptance bar. Shards: `F:/archive/duo3_stitch/harvest/report_shards_dense/` (78
+`.npz`). Full write-up: `reolink-firmware-patching/docs/STITCH_CALIBRATION.md` section 15.5.

@@ -1293,21 +1293,73 @@ and head sit at different heights and legitimately disagree. Two consequences:
   or `stitch_ori_snap` would expose the two contributions *separately*, turning
   this from echo estimation under an unknown mixture into direct registration.
 
-### 15.5 What shipped
+### 15.5 Withdrawn at scale: it measures a step edge, not a ghost
 
-`vpe/seam_echo.py` and `POST /stitch/auto`. The null is built into `measure()`
-and cannot be skipped: the identical fit runs at control corridors either side
-of the seam, *pretending the seam is there* (otherwise `a_pred` would refuse
-them for free and the null would be vacuous), and the seam must clear the
-controls by `NULL_MARGIN`. Chroma distance is reported on every candidate, so a
-reviewer can see the estimator ran on something actually distinct from the
-pitch — the audit trail the previous four passes lacked. On the archive the fair
-null is clean: 0 of 325 control candidates accepted against 12–18 at the seam on
-the same frames.
+The estimator of 15.2 was run unmodified over the archive and **fails**. It no longer proposes
+anchors. This is the fourth withdrawn estimator, so the reasons are recorded specifically enough to
+stop a fifth repeating them.
 
-On every hand-verified case the shipped path **refuses** and says what would fix
-it. It proposes; it never applies. Applying still goes through
-`apply_calibration()` via `/stitch/apply`, unchanged.
+**Acceptance tests, against the shipped module:**
+
+| frame | required | reported |
+|---|---|---|
+| 1104 (+6 px, real 18 px ghost) | 17-19 px | **33.0 px, published** |
+| 1088 (+106 px) | ~0 / refuse | void |
+| 1120 (-51 px) | ~0 / refuse | void |
+
+Publishing 33.0 on the one frame that carries a real ghost is worse than refusing.
+
+**The mechanism.** A **step edge** -- a shirt against grass -- is fitted better by two lobes than by
+one, so `gain` rises on exactly the objects the chromatic gate is best at finding. `gain` is
+therefore *anti-correlated with truth* on this material. On frame 1104 all three accepted candidates
+sat on a walking player's torso, shorts and leg, 37-47 px left of the seam; the ball's own row band
+ranked **15th** chromatically and `max_fits=10` never fitted it. Forced onto the ball, the fit
+returns d=1.
+
+**The null, at scale** (7,688 frames, 46,088 seam candidates, 90,609 controls, 28 games):
+
+| | value |
+|---|---|
+| seam acceptance | 7.4% |
+| control acceptance | 6.3% |
+| ratio | **1.18x**, against the module's own `NULL_MARGIN` of 3.0 |
+| `ctl-1200` | accepts **more often** than the seam |
+| d-histogram overlap | 0.85 |
+| seam / control median d | 31 / 30 px -- unchanged at 31 / 30 after matching on colour decile and row band |
+
+96 gate settings were swept; none is both quiet off-seam and correct on it.
+
+**Cross-frame agreement does not rescue it, and inverts.** Within-track IQR is *better at the
+controls* (median 1.0 px, 74% <= 1 px) than at the seam (2.0 px, 38%). The steadiest landmark in the
+corpus is a **control** reading d = 35.0 px with IQR 0.0 across 25 looks, where the truth is exactly
+zero. So agreement cannot be the acceptance criterion.
+
+**And the null as originally written was not a safeguard.** The guard read
+`if ctl_ok and seam_rate < NULL_MARGIN * ctl_rate`: on a single frame the controls frequently accept
+nothing, `ctl_ok` is empty, and the guard is skipped entirely -- inert at exactly the sample size the
+button uses. That is why the single-frame and scale runs disagreed about the same frame. **A null a
+small sample can switch off is not a null.**
+
+`HV_sheet_control_top_lab.png` is the picture of it: a page of ordinary single, unghosted players in
+*control* corridors, accepted at 19-35 px.
+
+**What a future attempt must do differently.** Colour gating was necessary and insufficient -- it
+correctly finds chromatically distinct objects, and distinct objects have step edges. Any fix has to
+discriminate a **ghost** from a **step**, which is new work with its own acceptance bar, not a
+parameter tweak. Per-candidate shards with every fitted profile are at
+`F:/archive/duo3_stitch/harvest/report_shards_dense/` (78 `.npz`), so it can be re-analysed without
+re-decoding.
+
+### 15.6 What shipped
+
+`vpe/seam_echo.py` and `POST /stitch/auto`, as **diagnostics only**. `measure()` reports its
+candidates, its control corridors and what it would have said (`provisional_dx`), and always returns
+`verdict = "withdrawn"`; `anchors_from_measurement` raises unconditionally, so no result however
+confident can become a curve. The UI has no adopt control. The chromatic gate, the control machinery
+and the plumbing are kept because they are reusable and because the numbers are the evidence.
+
+**The seam is calibrated by hand** (section 11), starting from the camera's installed state
+(section 16).
 
 ---
 
@@ -1368,23 +1420,52 @@ an all-zero curve leaves the vendor mesh untouched. "Reset to zero" and "back to
 same button; there is now one, labelled **Back to factory**, plus **Back to camera current** which
 loads `anchors.txt` resampled onto the editor's rows.
 
-### 16.5 A divergence this exposed, in the existing apply path
+### 16.5 The double-compose, and its fix
 
-`apply_calibration` composes onto `wait_for_stable_mesh()` — the **live** mesh — while
-`S98_StitchCal` composes onto `factory_boot.bin` — the **factory** mesh. When a calibration is
-already installed those are not the same baseline:
+**Found while building 16.2, fixed and verified live 2026-08-19.**
 
-- immediately after an interactive apply: `factory ⊕ old ⊕ new`
-- after the next reboot: `factory ⊕ new`
+`apply_calibration` took `wait_for_stable_mesh()` -- the **live** mesh -- as its baseline
+unconditionally. `S98_StitchCal` does not: it keeps `applied.sig`, and when the live mesh matches
+its own last write it composes from the saved `factory_boot.bin` instead (that is the idempotency
+verified on hardware in #135). So on a unit already carrying a calibration the two paths disagreed:
 
-The `--require-baseline` guard does not catch it: `format_anchors` stamps the *live* crc it just
-measured, so the interactive compose trivially agrees with itself, and the boot hook deliberately
-does not set the flag (§7.3). This does not bite today — Mark's unit is at factory with no
-`anchors.txt` — but it bites the first time anyone re-calibrates an already-calibrated unit, which
-is precisely the case this feature exists to support. `read_calibration` therefore surfaces it in
-the note shown next to the loaded curve rather than leaving it to be discovered. **Fixing it belongs
-in `apply_calibration`** (compose onto the factory copy, not the live mesh) and was left alone here
-because that path is live-verified end-to-end and out of scope for a read-only change.
+| | mesh |
+|---|---|
+| immediately after an interactive Apply | `factory (+) old (+) new` |
+| after the next reboot | `factory (+) new` |
+
+Same stored anchors, two meshes, differing only by whether the unit had been power-cycled.
+`--require-baseline` could not catch it: `format_anchors` stamps the live crc it just measured, so
+the interactive compose trivially agreed with itself.
+
+This lands squarely on 16.2 -- "load the installed calibration, nudge it by 2 px, Apply" is exactly
+the sequence that doubles.
+
+**The fix mirrors the boot hook rather than inventing a second scheme.** `apply_calibration` now
+computes `mesh_signature()` -- `md5` of the table with the 8-byte header skipped, the same byte range
+as `S98`'s `dd bs=8 skip=1` -- and if the live mesh matches `applied.sig`, composes from the saved
+factory copy. It writes `applied.sig` after a successful set (via `tail -c +9`, because `camsh`
+refuses `dd`), so the interactive and boot paths cannot drift apart. The ordering guard now compares
+the re-dump against the **live signature seen at decision time** rather than against the baseline
+crc: those are the same thing only on an uncalibrated unit, and a baseline comparison would have
+refused every legitimate re-calibration while still missing the doubling.
+
+**Verified live end-to-end on the unit, writes included.** Expected crcs were computed host-side
+*before* any write, so the doubling was falsifiable rather than assumed:
+
+| step | baseline chosen | resulting mesh crc32 | expected |
+|---|---|---|---|
+| start | — | `8514014a` | factory |
+| apply A (dx = 4 px) | live mesh | **`9604929c`** | `factory (+) A` |
+| apply A **again** | saved factory copy | **`9604929c`** unchanged | idempotent (old code: `3cdcb4aa`) |
+| apply B (dx = 8 px) | saved factory copy | **`83e3bedc`** | `factory (+) B`, **not** `f18b0999` = `factory (+) A (+) B` |
+| restore | — | `8514014a` | factory |
+
+Every write was read-back verified by the camera (`read-back matches: the mesh is live`). The unit
+was returned to exactly the state it was found in: all three mesh files back to md5
+`7ac18ef2988970d09fc4f5a36c6cd311`, `anchors.txt` / `applied.sig` / `mesh_apply.bin` /
+`recheck.bin` removed, and `read_calibration` reporting at-factory and uncalibrated. No reboot, no
+flash, no `netstate` change.
 
 ---
 

@@ -1075,16 +1075,18 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
 
     @router.post("/stitch/auto")
     def post_auto(body: dict = Body(default={})) -> JSONResponse:
-        """Measure `dx` from whatever is standing in the seam, or refuse.
+        """Report what the seam echo estimator sees. It does NOT propose a curve.
 
-        Class-agnostic by construction: candidates are selected by *colour*
-        distance from the pitch, never by object class, because grass has
-        enormous luminance texture and almost no colour distinctiveness and
-        that is what defeated every gradient-gated attempt. See `seam_echo`.
+        **The estimator is withdrawn** (see `seam_echo`): it measures a step
+        edge rather than a ghost, and at scale it accepts control corridors --
+        where the true answer is exactly zero -- almost as often as the seam
+        (6.3% against 7.4%), with the same `d` distribution. On the one
+        hand-verified frame carrying a real 18 px ghost it reported 33 px. The
+        endpoint and its numbers are kept because they are the evidence and
+        because the plumbing is reusable; the curve stays hand-authored.
 
         Several frames are used when the source is the live camera -- the
-        camera is on a tripod and `Snap` is read-only, so a couple of seconds
-        of them is free and turns one lucky reading into an agreement test.
+        camera is on a tripod and `Snap` is read-only.
         """
         echo = load_toolkit()["echo"]
         if echo is None:
@@ -2270,14 +2272,13 @@ function drawCamProfile(profile) {
   g.fillText('row ' + profile[profile.length - 1].y.toFixed(0), 2, H - pad + 2);
 }
 
-// Class-agnostic seam measurement. It proposes or refuses; it never applies,
-// and it never publishes a number that its own control corridors also produced.
+// Seam echo diagnostics. WITHDRAWN as a measurement: it reports what the
+// estimator sees and never proposes a curve -- see `seam_echo` for the evidence.
 function autoMeasure() {
   $('auto').disabled = true;
   $('autopanel').style.display = '';
   $('autoverdict').textContent = 'measuring…';
   $('autodetail').textContent = '';
-  $('autoadopt').style.display = 'none';
   fetch('/stitch/auto', {
     method: 'POST', credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
@@ -2310,25 +2311,17 @@ function pollAuto() {
 function showAuto(a) {
   if (!a) { $('autoverdict').textContent = 'no measurement'; return; }
   S.auto = a;
-  var best = null;
-  (a.candidates || []).forEach(function (c) {
-    if (c.accepted && (best === null || c.lab > best.lab)) best = c;
-  });
-  var chroma = best ? (', strongest colour distance ' + best.lab) : '';
-  if (a.verdict === 'measured') {
-    $('autoverdict').textContent = 'dx = ' + a.dx + ' px (spread ' + a.spread +
-      ' px over ' + a.n_accepted + ' candidates)';
-    $('autoadopt').style.display = '';
-  } else if (a.verdict === 'void') {
-    $('autoverdict').textContent = 'void — the control corridors measured too';
-    $('autoadopt').style.display = 'none';
-  } else {
-    $('autoverdict').textContent = 'no measurement published';
-    $('autoadopt').style.display = 'none';
-  }
+  // No branch here sets a curve. The estimator is withdrawn: it measures step
+  // edges rather than ghosts, so its numbers are shown as evidence and never as
+  // a proposal. The adopt control is gone rather than merely disabled.
+  $('autoverdict').textContent =
+    'not measurable automatically — nothing proposed'
+    + (a.provisional_dx !== null && a.provisional_dx !== undefined
+        ? ' (estimator said ' + a.provisional_dx + ' px; not trustworthy)' : '');
   $('autodetail').textContent = (a.remedy || '') +
-    ' [seam ' + a.n_accepted + '/' + a.n_candidates + ', controls ' +
-    a.control_accepted + chroma + ']';
+    ' [seam ' + a.n_accepted + '/' + a.n_candidates + ' accepted, control ' +
+    a.control_accepted + '/' + (a.controls ? a.controls.length : '?') +
+    ' — off the seam the true answer is zero]';
 }
 
 function loadFrame(res) {
@@ -2552,15 +2545,6 @@ function init() {
   $('aim').addEventListener('click', aim);
   $('snap').addEventListener('click', snap);
   $('auto').addEventListener('click', autoMeasure);
-  $('autoadopt').addEventListener('click', function () {
-    var a = S.auto;
-    if (!a || a.verdict !== 'measured' || a.dx === null) return;
-    // Flat, deliberately: the measurement establishes one dx at the rows the
-    // target occupied. Shaping it is the operator's job, which is what the
-    // curve editor is for.
-    setAnchors(S.anchors.map(function (p) { return [p[0], a.dx]; }),
-      'proposed by the automatic measurement, dx=' + a.dx + ' px');
-  });
   $('browse').addEventListener('click', browse);
   $('open').addEventListener('click', openFrame);
   $('save').addEventListener('click', save);
@@ -2718,14 +2702,14 @@ __BANNER__
 
   <div class="panel" id="autopanel" style="display:none">
     <h2 class="sec">Automatic <span class="accent">measurement</span></h2>
-    <p class="hint">Candidates are picked by <em>colour</em> distance from the
-      pitch, never by what they are &mdash; a shirt, a chair, a car, a cone and a
-      ball all qualify; grass does not. The same fit runs at control corridors
-      either side of the seam, where the answer must be nothing; if they measure
-      too, no number is published.</p>
+    <p class="hint"><strong>This does not propose a curve.</strong> The estimator is
+      withdrawn: it turns out to measure a <em>step edge</em> &mdash; a shirt against
+      grass &mdash; rather than a ghost, and at scale it accepts control corridors,
+      where the true answer is exactly zero, almost as often as the seam. On the one
+      hand-verified frame with a real 18&nbsp;px ghost it said 33&nbsp;px. The numbers
+      are shown as evidence; calibrate by hand below.</p>
     <div id="autoverdict" class="st"></div>
     <div id="autodetail" class="hint"></div>
-    <button class="btn btn-ghost" id="autoadopt" style="display:none">Use this curve</button>
   </div>
 
   <div class="panel" id="scenepanel">

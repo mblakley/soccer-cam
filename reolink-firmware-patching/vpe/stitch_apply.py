@@ -14,10 +14,11 @@ entry point that writes a mesh on its own:
 
     1. set scalars (if any)      -- HTTP, persists to /mnt/para/stitch.cfg
     2. wait for the pipeline to settle and the mesh to stop changing
-    3. dump the NEW factory mesh -- this is the baseline
+    3. decide the TRUE baseline: the live mesh, unless the live mesh is our
+       own previous correction, in which case it is the saved factory copy
     4. compose the correction onto THAT
-    5. write, with read-back verification
-    6. re-dump and confirm the baseline did not move under us
+    5. write, with read-back verification, and record what we wrote
+    6. re-dump and confirm nothing else moved the mesh under us
 
 Step 6 is the guard that makes step 1 unskippable in practice: if anything
 re-ran the optimiser between the baseline dump and the write -- another
@@ -25,9 +26,20 @@ operator, the app, a second copy of this tool -- the composed mesh no longer
 matches its baseline and the write is refused rather than silently applied on
 top of a different calibration.
 
-The boot hook (`S98_StitchCal`) satisfies the same constraint structurally
-instead: it composes onto whatever mesh the firmware generated at boot, which by
-construction already reflects the persisted scalars.
+Step 3 is not a formality. The live mesh is only the baseline on an
+uncalibrated unit; once a calibration is installed it is `factory (+) old`, and
+composing onto it gives `factory (+) old (+) new` -- which the next boot then
+rewrites as `factory (+) new`, because the boot hook composes from the saved
+factory copy. Same stored anchors, two different meshes, distinguished only by
+whether the unit has been power-cycled. `S98_StitchCal` avoids this by keeping
+`applied.sig`, and this file uses the same file, the same byte range and the
+same rule, so the two paths cannot drift apart. That matters most for the
+sequence the editor now encourages: load the installed calibration, nudge it,
+apply.
+
+The boot hook satisfies the scalars constraint structurally instead: it composes
+onto whatever mesh the firmware generated at boot, which by construction already
+reflects the persisted scalars.
 
 Transport: HTTP for the scalars and the snapshot, the port-2323 probe shell for
 everything else, `wget` for pushing files (there is no base64 on the device).
@@ -35,6 +47,7 @@ everything else, `wget` for pushing files (there is no base64 on the device).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
@@ -233,6 +246,21 @@ def wait_for_stable_mesh(host: str, tries: int = 12, interval: float = 5.0) -> L
 #: `S98_StitchCal` writes and documents, so it is tried first.
 FACTORY_COPIES = ("factory_boot.bin", "factory_vpe0.bin")
 
+#: Bytes skipped when identifying a mesh by its table alone.
+#:
+#: Must stay in lockstep with `S98_StitchCal`'s `mesh_sig()`, which is
+#: `dd bs=8 skip=1 | md5sum`: the interactive path writes `applied.sig` and the
+#: boot path reads it, so a disagreement here reintroduces exactly the doubling
+#: this exists to prevent. The header is skipped because a driver dump carries
+#: {id, n} plus whatever the driver left in the third word, while a composed
+#: file carries a canonical header -- only the table is comparable.
+MESH_SIG_SKIP = 8
+
+
+def mesh_signature(blob: bytes) -> str:
+    """Identify a mesh by its table alone, exactly as `S98_StitchCal` does."""
+    return hashlib.md5(blob[MESH_SIG_SKIP:]).hexdigest()  # noqa: S324
+
 
 def seam_profile(
     lut: Lut2D,
@@ -293,6 +321,12 @@ def _fetch_optional(host: str, sd_relative: str) -> bytes | None:
         raise
     except urllib.error.URLError:
         return None
+
+
+def _fetch_text(host: str, sd_relative: str) -> str:
+    """A small text file off the SD card, or "" if it is not there."""
+    blob = _fetch_optional(host, sd_relative)
+    return "" if blob is None else blob.decode("utf-8", "replace").strip()
 
 
 @dataclass
@@ -460,10 +494,40 @@ def apply_calibration(
             stage["state"] = "applied"
     report["stages"].append(stage)
 
-    # 2+3) settle, then dump THIS baseline
-    baseline = wait_for_stable_mesh(host)
+    # 2+3) settle, then work out what the TRUE baseline is.
+    #
+    # The live mesh is not automatically the baseline. On a unit that already
+    # carries a calibration it is `factory (+) old`, and composing onto it
+    # yields `factory (+) old (+) new` -- which then silently becomes
+    # `factory (+) new` at the next boot, because `S98_StitchCal` composes from
+    # the saved factory copy. Two different meshes for the same stored anchors,
+    # differing only by whether the unit has been power-cycled.
+    #
+    # `S98_StitchCal` already solves this and this mirrors it exactly rather
+    # than inventing a second scheme: remember the signature of what we last
+    # wrote, and if the live mesh IS that, the true baseline is the saved copy.
+    # Otherwise the live mesh is the baseline and the saved copy is stale --
+    # which is also what makes it self-heal through a legitimate `SetStitch`.
+    live = wait_for_stable_mesh(host)
+    live_sig = mesh_signature(live.to_bytes())
+    prev_sig = _fetch_text(host, "stitchcal/applied.sig")
+    factory_blob = _fetch_optional(host, f"stitchcal/{FACTORY_COPIES[0]}")
+    ours_is_live = bool(prev_sig) and prev_sig == live_sig and factory_blob is not None
+
+    if ours_is_live:
+        baseline = Lut2D.from_bytes(factory_blob)  # type: ignore[arg-type]
+        baseline_src = FACTORY_COPIES[0]
+    else:
+        baseline = live
+        baseline_src = ""  # the live dump is already at baseline.bin
     baseline_crc = crc32(baseline)
     report["baseline_crc32"] = f"{baseline_crc:08x}"
+    report["baseline"] = {
+        "source": "saved factory copy" if ours_is_live else "live mesh",
+        "live_sig": live_sig,
+        "applied_sig": prev_sig or None,
+        "our_correction_was_live": ours_is_live,
+    }
 
     # 4) compose against it
     text = format_anchors(
@@ -480,11 +544,19 @@ def apply_calibration(
         "result_crc32": f"{stats.result_crc32:08x}",
     }
 
-    # 6) re-check the baseline before writing. This is the ordering guard: if
-    #    anything re-ran the optimiser since step 3, the mesh we hold was
-    #    composed against a calibration that no longer exists.
+    # 6) re-check before writing. This is the ordering guard: if anything
+    #    re-ran the optimiser since step 3, the mesh we hold was composed
+    #    against a calibration that no longer exists.
+    #
+    #    Compare against the LIVE signature seen at decision time, not against
+    #    the baseline crc. Those are the same thing only on an uncalibrated
+    #    unit; once our own correction is live they differ by exactly that
+    #    correction, and a baseline comparison would refuse every re-calibration
+    #    while still failing to catch the doubling it was supposed to prevent.
+    #    What must be detected is *someone else* moving the mesh, which is a
+    #    change away from the signature we just observed.
     dump_mesh(host, name="recheck.bin")
-    if crc32(read_mesh(host, "recheck.bin")) != baseline_crc:
+    if mesh_signature(read_mesh(host, "recheck.bin").to_bytes()) != live_sig:
         raise OrderingViolation(
             "the live mesh changed between the baseline dump and the write. "
             "Something re-ran SetStitch (or another copy of this tool is "
@@ -504,11 +576,27 @@ def apply_calibration(
     #    the interactive path, where a baseline that moved means the operator
     #    changed something mid-flight.
     push_text(host, f"{CAM_DIR}/anchors.txt", text)
+    helper = _helper(host)
+    # Put the true baseline where the camera-side composer reads it, and keep
+    # the saved factory copy current, in the same order `S98_StitchCal` does:
+    # either restore the factory copy as the compose input (our correction was
+    # live), or save the live mesh as the factory copy (it is the baseline).
+    stage_baseline = (
+        f"cp {baseline_src} baseline.bin"
+        if baseline_src
+        else f"cp baseline.bin {FACTORY_COPIES[0]}"
+    )
+    # `applied.sig` is written from the composed file, by the camera, with the
+    # same byte range `S98_StitchCal` reads -- if the interactive path and the
+    # boot path can disagree about what is installed, eventually they will.
+    # `tail -c +9` rather than `dd bs=8 skip=1`: camsh refuses `dd` outright.
     out = sh(
-        f"cd {CAM_DIR} && "
-        f"{_helper(host)} compose baseline.bin anchors.txt mesh_apply.bin "
+        f"cd {CAM_DIR} && {stage_baseline} && "
+        f"{helper} compose baseline.bin anchors.txt mesh_apply.bin "
         f"--require-baseline 2>&1 && "
-        f"{_helper(host)} set 0 mesh_apply.bin --i-have-a-recovery-path 2>&1",
+        f"{helper} set 0 mesh_apply.bin --i-have-a-recovery-path 2>&1 && "
+        f"tail -c +{MESH_SIG_SKIP + 1} mesh_apply.bin | md5sum | "
+        f"cut -d' ' -f1 > applied.sig",
         host=host,
         timeout=120,
     )

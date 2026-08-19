@@ -1,4 +1,11 @@
-"""Automatic seam measurement: read `dx` off whatever is standing in the seam.
+"""Seam echo diagnostics. WITHDRAWN -- does not measure registration.
+
+**Read the WITHDRAWN section below before trusting anything else in this file.**
+The design notes that follow it are kept because they are the record of what was
+tried and why, but several of their claims were falsified at scale and are
+annotated where that happened.
+
+Originally: read `dx` off whatever is standing in the seam.
 
 Five passes have tried to measure this camera's stitch misregistration
 automatically. Four built a detector for an **object class** -- a ball, a person
@@ -58,13 +65,54 @@ estimator should be believed on it. An earlier two-copy fit reported "separation
 16.1 px" for exactly that ball, where the true answer is zero. Requiring
 `a_pred` in [0.29, 0.71] confines the measurement to the region where a ghost
 can physically exist, and requiring the *fitted* `a` to agree with the predicted
-one is a consistency check that scene structure cannot fake.
+one was intended as a consistency check that scene structure could not fake.
+**That last claim is false.** Ordinary single, unghosted players in *control*
+corridors fit `a` = 0.40-0.60 against predictions of 0.32-0.70 and sail through
+it, because a step edge is genuinely well described by two partially-overlapping
+lobes of comparable weight. The check constrains the *shape* of a fit; it does
+not establish that a second copy exists.
 
-**The null is built in and cannot be skipped.** `measure` always runs the
-identical fit at control corridors either side of the seam, *pretending the seam
-is there* -- otherwise `a_pred` would refuse them for free and the null would be
-vacuous. If any control passes the same gates, the measurement is void and no
-number is published.
+**WITHDRAWN 2026-08-19: this estimator does not work, and no longer proposes
+anchors.** It is kept because the plumbing, the chromatic gate and the control
+machinery are reusable and because the negative result is specific enough to stop
+a fifth attempt repeating it. `measure()` reports its numbers and always returns
+`verdict="withdrawn"`; `anchors_from_measurement` refuses unconditionally.
+
+What it actually measures is a **step edge**, not an echo. A shirt against grass
+is a step, and two lobes fit a step better than one does, so `gain` rises on
+exactly the objects the chromatic gate is best at finding. `gain` is therefore
+*anti-correlated with truth* on this material. Measured at scale over 7,688
+frames / 28 games: seam acceptance 7.4% against control acceptance 6.3%
+(**1.18x**, against the 3.0 this module itself demands), `ctl-1200` accepting
+*more often* than the seam, d-histograms overlapping 0.85, and seam/control
+medians of 31/30 px which stay 31/30 after matching on colour decile and row
+band. On the one hand-verified frame with a real 18 px ghost it published
+**33.0 px**, because all three accepted candidates sat on a walking player's
+torso, shorts and leg 37-47 px from the seam while the ball's own band ranked
+15th chromatically and `max_fits=10` never fitted it. Forced onto the ball, the
+fit returns d=1.
+
+**Cross-frame agreement cannot rescue it either**: agreement is *better* at the
+controls (within-track IQR median 1.0 px, 74% <= 1 px) than at the seam (2.0 px,
+38%), and the steadiest landmark in the corpus is a control reading d = 35.0 px
+with IQR 0.0 over 25 looks where the truth is exactly 0.
+
+**And the null as written here was not the safeguard it claimed to be.** The
+guard reads `if ctl_ok and seam_rate < NULL_MARGIN * ctl_rate`: on a single
+frame the controls frequently accept nothing, `ctl_ok` is empty, and the guard is
+skipped altogether -- inert at precisely the sample size the button uses. A null
+that a small sample can switch off is not a null. That is why the scale run and
+the single-frame run disagreed about the same frame.
+
+Any future attempt has to discriminate a **ghost** from a **step**, which is new
+work with its own acceptance bar, not a parameter tweak. Per-candidate shards are
+at `F:/archive/duo3_stitch/harvest/report_shards_dense/` (78 `.npz`) so it can
+be re-analysed without re-decoding.
+
+**The null runs on every call** -- `measure` always fits the control corridors
+either side of the seam, *pretending the seam is there*, because otherwise
+`a_pred` would refuse them for free and the null would be vacuous. Its numbers
+are reported; they are what condemned the estimator.
 """
 
 from __future__ import annotations
@@ -246,8 +294,11 @@ class Candidate:
 
 @dataclass
 class EchoResult:
-    verdict: str = "refused"  # measured | refused | void
-    dx: float | None = None
+    verdict: str = "refused"  # withdrawn | refused | void
+    #: What the estimator would have said. Reported as evidence, never as a
+    #: proposal -- see the module docstring for why it is not trustworthy.
+    provisional_dx: float | None = None
+    dx: float | None = None  # always None: this estimator does not propose
     spread: float | None = None
     n_accepted: int = 0
     n_candidates: int = 0
@@ -261,7 +312,10 @@ class EchoResult:
     def to_api(self) -> dict[str, Any]:
         return {
             "verdict": self.verdict,
-            "dx": None if self.dx is None else round(self.dx, 2),
+            "dx": None,  # this estimator does not propose a value
+            "provisional_dx": (
+                None if self.provisional_dx is None else round(self.provisional_dx, 2)
+            ),
             "spread": None if self.spread is None else round(self.spread, 2),
             "n_accepted": self.n_accepted,
             "n_candidates": self.n_candidates,
@@ -412,18 +466,18 @@ def measure(
         result.verdict = "refused"
         result.remedy = (
             "Nothing in the seam is chromatically distinct from the pitch. "
-            "Stand a person -- or anything with a vertical edge and a colour "
-            "that is not grass -- in the seam, and press Auto again."
+            "Note that this estimator is withdrawn and never proposes a curve "
+            "even when it does find something -- calibrate by hand."
         )
         return result
     if len(accepted) < 3:
         result.verdict = "refused"
         best_lab = max(c.lab for c in result.candidates)
         result.remedy = (
-            f"{len(accepted)} of {len(result.candidates)} candidates carried a "
-            f"usable echo (need 3). Brightest colour distance seen was "
-            f"{best_lab:.0f}. Move the target into the seam itself -- the ghost "
-            "only exists within ~55 px of it -- and press Auto again."
+            f"{len(accepted)} of {len(result.candidates)} candidates cleared the "
+            f"gates (brightest colour distance {best_lab:.0f}). This estimator is "
+            "withdrawn and does not propose a curve in any case: it measures a "
+            "step edge rather than a ghost. Calibrate by hand."
         )
         return result
 
@@ -434,17 +488,25 @@ def measure(
         result.spread = spread
         result.remedy = (
             f"The {len(accepted)} usable candidates disagree (IQR {spread:.1f} px, "
-            f"lags {sorted(round(d) for d in ds)}). Agreement is the evidence, "
-            "not any single reading, so nothing is published. Disparity grows "
-            "with height above the ground, so a walking figure disagrees with "
-            "itself; stand a flat target -- a board, a sign, a cone -- in the "
-            "seam instead."
+            f"lags {sorted(round(d) for d in ds)}). Nothing is published -- and "
+            "note that agreement would not earn publication either: measured at "
+            "scale, agreement is BETTER at the control corridors, where the true "
+            "answer is zero. Calibrate by hand."
         )
         return result
-    result.verdict = "measured"
-    result.dx = float(np.median(ds))
+    # Everything above this point still runs: the numbers are the evidence, and
+    # a future attempt will want them. What does not happen is a proposal.
+    result.provisional_dx = float(np.median(ds))
     result.spread = spread
-    result.remedy = ""
+    result.verdict = "withdrawn"
+    result.remedy = (
+        f"{len(accepted)} candidates agreed on {result.provisional_dx:.1f} px, but "
+        "this estimator is withdrawn and does not propose anchors. It measures a "
+        "step edge, not an echo: a shirt against grass is a step, two lobes fit a "
+        "step better than one, and at scale it accepts off-seam corridors (6.3%) "
+        "almost as often as the seam (7.4%) with the same d distribution, where "
+        "the off-seam answer is exactly zero. Calibrate by hand."
+    )
     return result
 
 
@@ -458,6 +520,9 @@ def anchors_from_measurement(
     a roll model out of a single band. The operator can shape it by hand
     afterwards -- that is what the curve editor is for.
     """
-    if result.verdict != "measured" or result.dx is None:
-        raise ValueError("no measurement to build anchors from")
-    return [(float(y), float(result.dx)) for y in rows]
+    raise ValueError(
+        "seam_echo is withdrawn and cannot propose anchors: it measures step "
+        "edges rather than ghosts, and at scale it accepts control corridors "
+        "almost as often as the seam. Calibrate by hand in /stitch. See the "
+        "module docstring for the evidence."
+    )

@@ -95,7 +95,7 @@ def test_refuses_when_nothing_is_chromatically_distinct():
     result = seam_echo.measure([_pitch()], seam_x=SEAM, blend_w=BLEND)
     assert result.verdict == "refused"
     assert result.dx is None
-    assert "stand" in result.remedy.lower()
+    assert "chromatically distinct" in result.remedy.lower()
 
 
 def test_refuses_a_target_outside_the_mixing_corridor():
@@ -153,18 +153,40 @@ def test_null_runs_on_every_call_and_is_reported():
     assert result.controls or result.control_accepted == 0
 
 
-def test_anchors_refuse_to_be_built_from_a_refusal():
-    result = seam_echo.EchoResult(verdict="refused")
+def test_anchors_are_refused_unconditionally():
+    """The estimator is withdrawn: no result, however confident, may become a
+    curve. It measures step edges rather than ghosts, and at scale it accepts
+    control corridors -- true answer zero -- almost as often as the seam."""
+    for verdict in ("refused", "void", "withdrawn", "measured"):
+        result = seam_echo.EchoResult(verdict=verdict, provisional_dx=17.5, dx=17.5)
+        with pytest.raises(ValueError, match="withdrawn"):
+            seam_echo.anchors_from_measurement(result, (0, 540, 1080))
+
+
+def test_a_confident_agreeing_measurement_still_does_not_propose(monkeypatch):
+    """The failure mode that made this dangerous: on the one hand-verified frame
+    with a real 18 px ghost, three agreeing candidates on a walking player's
+    torso produced 33 px and the old code published it."""
+    agreeing = [
+        seam_echo.Candidate((0, 26), 3800, 120.0, d, 0.5, 0.5, 2.0, accepted=True)
+        for d in (33.0, 33.0, 34.0)
+    ]
+    # confident at the seam, quiet at the controls -- i.e. the single-frame
+    # case where the old null was inert and a number got published
+    monkeypatch.setattr(
+        seam_echo,
+        "_scan",
+        lambda dist, centre, **k: list(agreeing) if centre == SEAM else [],
+    )
+    img = _pitch()
+    _paint(img, SEAM, 120, 400)
+    result = seam_echo.measure([_ghosted(img)], seam_x=SEAM, blend_w=BLEND)
+    assert result.verdict == "withdrawn"
+    assert result.dx is None
+    assert result.to_api()["dx"] is None
+    assert result.provisional_dx is not None  # kept as evidence
     with pytest.raises(ValueError):
-        seam_echo.anchors_from_measurement(result, (0, 540, 1080))
-
-
-def test_anchors_are_flat_and_cover_every_requested_row():
-    result = seam_echo.EchoResult(verdict="measured", dx=17.5)
-    rows = (0, 540, 1080, 1620, 2159)
-    anchors = seam_echo.anchors_from_measurement(result, rows)
-    assert [y for y, _ in anchors] == list(rows)
-    assert {round(dx, 3) for _, dx in anchors} == {17.5}
+        seam_echo.anchors_from_measurement(result, (0, 1080))
 
 
 def test_colour_frames_are_required():

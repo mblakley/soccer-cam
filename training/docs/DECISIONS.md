@@ -1967,3 +1967,62 @@ which was left untouched here because it is live-verified and this change is rea
 `anchors.txt`, camera hook log `nothing is calibrated on this unit`; `factory_boot.bin` and
 `factory_vpe0.bin` byte-identical (md5 `7ac18ef2…`); seam `s` at mid-row 0.70018 against the
 independently documented 0.700.
+
+
+---
+
+## Decision: the interactive apply path picks its baseline the way the boot hook does (2026-08-19)
+
+**Context:** `apply_calibration` composed onto the **live** mesh unconditionally, while
+`S98_StitchCal` keeps `applied.sig` and composes onto the saved factory copy when the live mesh is
+its own last write. On a unit already carrying a calibration that produced `factory + old + new`
+interactively and `factory + new` after a reboot — the same stored anchors giving two different
+meshes. `--require-baseline` could not catch it, because the interactive path stamps the live crc it
+has just measured. It became urgent rather than theoretical the moment the editor started loading
+the installed calibration as its starting curve: "load, nudge, apply" is precisely the doubling
+sequence.
+
+**Decision:** mirror the boot hook rather than invent a second scheme. `mesh_signature()` uses the
+same byte range as `S98`'s `mesh_sig` (md5 of the table, 8-byte header skipped); if the live mesh
+matches `applied.sig`, compose from the saved factory copy; write `applied.sig` after a successful
+set so the two paths cannot drift apart. `tail -c +9` rather than `dd`, which `camsh` refuses.
+
+**Rejected:** comparing the re-dump against the baseline crc in the ordering guard. That is only
+correct on an uncalibrated unit; once our own correction is live it differs from the baseline by
+exactly that correction, so it would refuse every legitimate re-calibration while still missing the
+doubling. The guard now compares against the live signature observed at decision time, which is what
+"did someone else move it" actually means.
+
+**Verified live, writes included**, with expected crcs computed before writing: factory `8514014a`;
+apply A → `9604929c`; apply A again → `9604929c` unchanged (old code would have written `3cdcb4aa`);
+apply B → `83e3bedc` = factory+B, not `f18b0999` = factory+A+B. Unit restored to factory, md5
+`7ac18ef2...`, uncalibrated. Details in STITCH_CALIBRATION.md 16.5.
+
+
+---
+
+## Decision: seam auto-measure withdrawn; /stitch/auto is diagnostics only (2026-08-19)
+
+**Supersedes** "ship the seam auto-measure as a refusing instrument" (same date). That entry judged
+the estimator honest because it refused on the hand-verified frames. Run at scale it does not: on
+frame 1104, which carries a real 18 px ghost, the shipped module **published 33.0 px**, and across
+7,688 frames it accepts control corridors (6.3%) almost as often as the seam (7.4%) - 1.18x against
+its own `NULL_MARGIN` of 3.0 - with overlapping d distributions.
+
+**Why it fails:** it measures a **step edge**, not a ghost. Two lobes fit a shirt-against-grass step
+better than one, so `gain` is anti-correlated with truth on this material. Cross-frame agreement,
+which was expected to be the discriminator, is *better at the controls* than at the seam, so it
+cannot serve as the acceptance criterion either.
+
+**The null shipped here was also defective:** `if ctl_ok and seam_rate < NULL_MARGIN * ctl_rate` is
+skipped when the controls accept nothing, which is the common single-frame case - inert at exactly
+the sample size the button uses.
+
+**Decision:** keep the endpoint and the plumbing as **diagnostics**; remove the proposal.
+`measure()` always returns `verdict="withdrawn"` with its numbers as evidence, and
+`anchors_from_measurement` raises unconditionally so no result can become a curve. The UI has no
+adopt control. The seam is calibrated by hand from the camera's installed state.
+
+**Not attempted in this pass:** a fix. Colour gating was necessary and insufficient; discriminating a
+ghost from a step is new work with its own acceptance bar, not a parameter tweak. Shards for
+re-analysis: `F:/archive/duo3_stitch/harvest/report_shards_dense/`.
