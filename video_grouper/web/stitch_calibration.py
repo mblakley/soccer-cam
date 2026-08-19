@@ -239,6 +239,12 @@ class _Session:
     auto: dict | None = None
     auto_state: str = "idle"  # idle | running | ready | failed
     auto_error: str = ""
+    # What is actually installed on the camera. The editor starts from this
+    # instead of from a flat zero curve, so an operator's first adjustment is a
+    # delta from reality rather than from nothing.
+    camera_cal: dict | None = None
+    camera_cal_state: str = "idle"  # idle | running | ready | failed
+    camera_cal_error: str = ""
 
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -1121,6 +1127,72 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
         with _session.lock:
             return JSONResponse(_state_payload())
 
+    def _read_camera_cal_async(host: str) -> None:
+        """Read the camera's installed calibration off the request thread.
+
+        A mesh dump plus two 267 KB SD reads; seconds, not milliseconds, and it
+        must not sit inside `/stitch/state`, which the page polls.
+        """
+        camera_mod = load_toolkit()["camera"]
+        try:
+            state = camera_mod.read_calibration(host)
+            payload = state.to_api()
+            payload["anchors_at_rows"] = (
+                None
+                if state.anchors is None
+                else [list(a) for a in state.anchors_at(ANCHOR_ROWS)]
+            )
+            with _session.lock:
+                _session.camera_cal = payload
+                _session.camera_cal_state = "ready"
+                _session.camera_cal_error = ""
+            logger.info(
+                "STITCH: camera calibration live=%s factory=%s at_factory=%s anchors=%s",
+                payload["live_crc32"],
+                payload["factory_crc32"],
+                payload["at_factory"],
+                0 if state.anchors is None else len(state.anchors),
+            )
+        except Exception as exc:  # noqa: BLE001 -- an unreadable camera is a state
+            logger.warning("STITCH: could not read camera calibration: %s", exc)
+            with _session.lock:
+                _session.camera_cal_state = "failed"
+                _session.camera_cal_error = f"{type(exc).__name__}: {exc}"
+
+    @router.post("/stitch/camera")
+    def post_camera_cal() -> JSONResponse:
+        """Read what is installed on the camera: mesh, factory copy, anchors.
+
+        Read-only. Dumping the mesh reads the live VPE state into a file on the
+        SD card; nothing here calls `SetStitch` or writes a mesh.
+
+        Note what this deliberately does not do: it does not warp the snapshot.
+        `cmd=Snap` already returns the *fused* panorama -- the warp and the
+        stitcher have both run before the JPEG exists, which is why the blend
+        corridor is visible in it -- so applying the mesh to that image would
+        apply it twice. The mesh's honest contribution is its own per-row shape,
+        which is what `profile` carries.
+        """
+        camera_mod = load_toolkit()["camera"]
+        if camera_mod is None:
+            raise HTTPException(503, "stitch_apply is not importable")
+        cam = _reolink_camera(config_path)
+        host = _camera_host(cam)
+        with _session.lock:
+            if _session.camera_cal_state == "running":
+                return JSONResponse(_state_payload())
+            _session.camera_cal = None
+            _session.camera_cal_state = "running"
+            _session.camera_cal_error = ""
+        threading.Thread(
+            target=_read_camera_cal_async,
+            args=(host,),
+            daemon=True,
+            name="stitch-camera-cal",
+        ).start()
+        with _session.lock:
+            return JSONResponse(_state_payload())
+
     @router.post("/stitch/apply")
     def post_apply(body: dict = Body(default={})) -> JSONResponse:
         """Send the calibration to the camera, in the one order that is correct.
@@ -1243,6 +1315,9 @@ def _state_payload() -> dict:
         "auto": _session.auto,
         "auto_state": _session.auto_state,
         "auto_error": _session.auto_error,
+        "camera_cal": _session.camera_cal,
+        "camera_cal_state": _session.camera_cal_state,
+        "camera_cal_error": _session.camera_cal_error,
     }
 
 
@@ -1474,7 +1549,8 @@ var S = {
   imgs: {}, blink: 0, cursorRow: 1080, ready: false,
   metrics: null, baseline: null, quality: null, vertical: null,
   busy: false, pending: false, stale: false, scoredAt: null, netFails: 0,
-  spanX: 256, grab: 'curve', narrow: true, retry: null
+  spanX: 256, grab: 'curve', narrow: true, retry: null,
+  auto: null, cameraCal: null
 };
 // Geometry is taken from the frame the server actually fetched, never assumed.
 // These are only the pre-snapshot defaults.
@@ -2112,7 +2188,86 @@ function snap() {
       if (!res.ok) { $('dockstate').textContent = res.j.detail || 'snapshot failed'; return; }
       $('dockstate').textContent = 'live snapshot ' + new Date().toLocaleTimeString();
       loadFrame(res.j);
+      // Start the session from the camera's real calibration, not from zero.
+      if (!S.cameraCal) readCamera(true);
     }).catch(function (e) { $('snap').disabled = false; $('dockstate').textContent = String(e); });
+}
+
+// The camera's installed state. Read once per session so the curve starts from
+// what is really on the unit; `dx = 0` means the factory mesh untouched, because
+// the boot hook composes anchors onto the mesh the firmware just generated.
+function readCamera(thenInit) {
+  $('camread').disabled = true;
+  $('camstate').textContent = 'reading mesh and anchors…';
+  fetch('/stitch/camera', { method: 'POST', credentials: 'same-origin' })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) {
+        $('camread').disabled = false;
+        $('camstate').textContent = res.j.detail || 'could not read the camera';
+        return;
+      }
+      pollCamera(thenInit);
+    }).catch(function (e) { $('camread').disabled = false; $('camstate').textContent = String(e); });
+}
+
+function pollCamera(thenInit) {
+  fetch('/stitch/state', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (st) {
+      if (st.camera_cal_state === 'running') { setTimeout(function () { pollCamera(thenInit); }, 2000); return; }
+      $('camread').disabled = false;
+      if (st.camera_cal_state === 'failed') {
+        $('camstate').textContent = st.camera_cal_error || 'could not read the camera';
+        return;
+      }
+      showCamera(st.camera_cal, thenInit);
+    }).catch(function (e) { $('camread').disabled = false; $('camstate').textContent = String(e); });
+}
+
+function showCamera(c, thenInit) {
+  if (!c) { $('camstate').textContent = 'no camera state'; return; }
+  S.cameraCal = c;
+  var installed = c.anchors_at_rows;
+  $('camstate').textContent = installed
+    ? (installed.length + ' anchors installed — live mesh ' + c.live_crc32)
+    : ('at factory — live mesh ' + c.live_crc32 +
+       (c.at_factory ? ' matches ' + c.factory_name : ''));
+  $('camnote').textContent = c.note || '';
+  $('camcurrent').disabled = !installed;
+  drawCamProfile(c.profile);
+  if (thenInit) {
+    // Start from the camera, labelled as the camera's state rather than as an
+    // edit the operator made.
+    setAnchors((installed || S.anchors.map(function (p) { return [p[0], 0]; })),
+      installed ? 'loaded from the calibration installed on the camera'
+                : 'camera is at factory — curve starts at zero (factory mesh untouched)');
+  }
+}
+
+function drawCamProfile(profile) {
+  var cv = $('camprofile');
+  if (!profile || !profile.length) { cv.style.display = 'none'; return; }
+  cv.style.display = ''; $('camprofilecap').style.display = '';
+  var g = cv.getContext('2d'), W = cv.width, H = cv.height, pad = 30;
+  g.clearRect(0, 0, W, H);
+  var offs = profile.map(function (r) { return r.offset_px; });
+  var lo = Math.min.apply(null, offs), hi = Math.max.apply(null, offs);
+  if (hi - lo < 1e-6) hi = lo + 1;
+  g.strokeStyle = '#999'; g.lineWidth = 1;
+  g.strokeRect(pad, 6, W - pad - 6, H - pad - 6);
+  g.beginPath();
+  profile.forEach(function (r, i) {
+    var x = pad + (r.offset_px - lo) / (hi - lo) * (W - pad - 6);
+    var y = 6 + i / (profile.length - 1) * (H - pad - 6);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  });
+  g.strokeStyle = '#e08a2e'; g.lineWidth = 2; g.stroke();
+  g.fillStyle = '#777'; g.font = '10px sans-serif';
+  g.fillText(lo.toFixed(0) + ' px', pad, H - 16);
+  g.fillText(hi.toFixed(0) + ' px', W - 52, H - 16);
+  g.fillText('row 0', 2, 12);
+  g.fillText('row ' + profile[profile.length - 1].y.toFixed(0), 2, H - pad + 2);
 }
 
 // Class-agnostic seam measurement. It proposes or refuses; it never applies,
@@ -2411,8 +2566,19 @@ function init() {
   $('save').addEventListener('click', save);
   $('apply').addEventListener('click', function () { applyToCamera(false); });
   $('dryrun').addEventListener('click', function () { applyToCamera(true); });
+  $('camread').addEventListener('click', function () { readCamera(true); });
   $('reset').addEventListener('click', function () {
-    setAnchors(S.anchors.map(function (p) { return [p[0], 0]; }), 'curve reset to zero');
+    // dx = 0 IS the factory mesh: the boot hook composes anchors onto the mesh
+    // the firmware generates at boot, so an all-zero curve leaves it untouched.
+    // "reset to zero" and "back to factory" were the same button, so there is
+    // only one of them.
+    setAnchors(S.anchors.map(function (p) { return [p[0], 0]; }),
+      'back to factory — zero correction on the vendor mesh');
+  });
+  $('camcurrent').addEventListener('click', function () {
+    var c = S.cameraCal;
+    if (!c || !c.anchors_at_rows) return;
+    setAnchors(c.anchors_at_rows, 'back to the calibration installed on the camera');
   });
   $('suggest').addEventListener('click', function () {
     // The swept minimum, not `implied_dx`. The sweep descends the objective
@@ -2532,6 +2698,24 @@ __BANNER__
 <div class="grid">
 <div class="col">
 
+  <div class="panel" id="campanel">
+    <h2 class="sec">What the camera <span class="accent">already has</span></h2>
+    <p class="hint">The snapshot is the mesh's <em>output</em> &mdash;
+      <span class="mono">Snap</span> returns the fused panorama, after the warp and the
+      stitcher &mdash; so it is not re-warped here. What is shown instead is the shape the
+      camera's own optimiser chose, and the calibration installed on top of it.</p>
+    <div id="camstate" class="st">not read yet</div>
+    <div id="camnote" class="hint"></div>
+    <canvas id="camprofile" width="320" height="150"
+            style="width:100%;max-width:340px;display:none"></canvas>
+    <p class="faint" id="camprofilecap" style="display:none">Source-x displacement the factory
+      mesh applies down the seam column, per row. This is the vendor's stitch solution; your
+      curve is composed on top of it.</p>
+    <div class="btn-row">
+      <button class="btn btn-ghost btn-sm" id="camread">Read camera</button>
+    </div>
+  </div>
+
   <div class="panel" id="autopanel" style="display:none">
     <h2 class="sec">Automatic <span class="accent">measurement</span></h2>
     <p class="hint">Candidates are picked by <em>colour</em> distance from the
@@ -2612,7 +2796,8 @@ __BANNER__
       at a different height is what earns a roll.</p>
     <p class="faint" id="curvewhy"></p>
     <div class="btn-row">
-      <button class="btn btn-ghost btn-sm" id="reset">Reset to zero</button>
+      <button class="btn btn-ghost btn-sm" id="reset">Back to factory</button>
+      <button class="btn btn-ghost btn-sm" id="camcurrent" disabled>Back to camera current</button>
       <button class="btn btn-ghost btn-sm" id="suggest" disabled>Use measured dx</button>
     </div>
   </div>

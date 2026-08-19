@@ -38,8 +38,10 @@ from __future__ import annotations
 import json
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,11 +50,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime"))
 
 from camsh import sh  # noqa: E402
 from lut2d import (  # noqa: E402
+    DEFAULT_HALF_HEIGHT,
+    DEFAULT_HALF_WIDTH,
+    DEFAULT_PANORAMA_WIDTH,
+    FRAC_SCALE,
     Lut2D,
     Lut2DError,
     compose_from_anchors_file,
     crc32,
     format_anchors,
+    interp_dx,
+    parse_anchors,
 )
 
 CAM_DIR = "/mnt/sda/stitchcal"
@@ -205,6 +213,212 @@ def wait_for_stable_mesh(host: str, tries: int = 12, interval: float = 5.0) -> L
         f"the live mesh never stopped changing after {tries} reads -- refusing "
         "to compose onto a moving baseline"
     )
+
+
+# -- reading what is already on the camera ------------------------------------
+#
+# The editor has to start from the camera's real state rather than from a flat
+# zero curve, or the operator's first adjustment is a delta from nothing.
+#
+# One thing this deliberately does NOT do: apply the mesh to the snapshot.
+# `cmd=Snap` already returns the *fused* 7680x2160 panorama -- the VPE warp and
+# the stitcher have both run by the time the JPEG exists, which is precisely why
+# the blend corridor and its ghost are visible in it at all. Warping that image
+# by the mesh again would apply the correction twice. What the mesh can honestly
+# supply is its own *shape*, which is what `seam_profile` below extracts.
+
+#: Where the boot hook leaves this boot's dumped factory mesh. Both names are
+#: present on the unit and byte-identical (verified live 2026-08-19, md5
+#: 7ac18ef2988970d09fc4f5a36c6cd311); `factory_boot.bin` is the one
+#: `S98_StitchCal` writes and documents, so it is tried first.
+FACTORY_COPIES = ("factory_boot.bin", "factory_vpe0.bin")
+
+
+def seam_profile(
+    lut: Lut2D,
+    *,
+    dst_width: float = DEFAULT_HALF_WIDTH,
+    dst_height: float = DEFAULT_HALF_HEIGHT,
+) -> list[dict]:
+    """Per-row behaviour of a mesh at the seam column: the vendor's own solution.
+
+    The mesh maps destination grid points to *source* pixels, and the seam is
+    the left half's last column, so `src_x - dst_x` there is the horizontal
+    displacement the camera's optimiser chose for that row. `s` is the local
+    source-pixels-per-destination-pixel, computed exactly as
+    `compose_correction` computes it, because that is the factor an operator's
+    `dx` gets multiplied by: the composer writes `x + dx*s`. Showing both means
+    the operator can see the shape the camera chose *and* how far a given
+    correction will actually move things on each row.
+    """
+    n = lut.n
+    if n < 3:
+        raise Lut2DError(f"mesh too small to profile: n={n}")
+    du = (dst_width - 1.0) / (n - 1)
+    dv = (dst_height - 1.0) / (n - 1)
+    seam_col = n - 1
+    dst_x = seam_col * du
+    out: list[dict] = []
+    for row in range(n):
+        base = row * lut.stride
+        x_last = (lut.entries[base + seam_col] & 0xFFFF) / FRAC_SCALE
+        x_prev = (lut.entries[base + seam_col - 1] & 0xFFFF) / FRAC_SCALE
+        out.append(
+            {
+                "row": row,
+                "y": round(row * dv, 1),
+                "src_x": round(x_last, 3),
+                "offset_px": round(x_last - dst_x, 3),
+                "s": round((x_last - x_prev) / du, 5),
+            }
+        )
+    return out
+
+
+def _fetch_optional(host: str, sd_relative: str) -> bytes | None:
+    """Read a file off the SD card, or None if the camera does not have it.
+
+    A 404 here is information, not an error: no `anchors.txt` means this unit
+    has never been calibrated, which is a state the UI must state plainly.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            p = fetch_sd(host, sd_relative, Path(td) / "f")
+            return p.read_bytes()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    except urllib.error.URLError:
+        return None
+
+
+@dataclass
+class CameraCalibration:
+    """What is actually installed on the camera right now."""
+
+    live_crc32: int = 0
+    factory_crc32: int | None = None
+    factory_name: str = ""
+    at_factory: bool | None = None
+    anchors: list[tuple[float, float]] | None = None
+    anchors_meta: dict | None = None
+    anchors_error: str = ""
+    profile: list[dict] | None = None
+    note: str = ""
+
+    def anchors_at(
+        self,
+        rows: Sequence[float],
+        *,
+        src_width: float = DEFAULT_PANORAMA_WIDTH,
+        src_height: float = DEFAULT_HALF_HEIGHT,
+    ) -> list[tuple[float, float]] | None:
+        """The installed curve resampled onto `rows`, or None if uncalibrated.
+
+        Note the geometry: a "half" is half in *width* only, so the panorama
+        and the half share a height of `DEFAULT_HALF_HEIGHT`. Treating that
+        constant as a half-height silently halves every row.
+
+        `anchors.txt` records the geometry it was authored against, and the
+        editor works in the geometry of the frame currently loaded. Those are
+        both 7680x2160 in the shipping setup, but a calibration recovered from a
+        downscaled still is exactly the case that would otherwise apply a
+        proportionally wrong curve with nothing complaining.
+        """
+        if not self.anchors:
+            return None
+        meta = self.anchors_meta or {}
+        file_h = float(meta.get("src_height") or src_height)
+        file_w = float(meta.get("src_width") or src_width)
+        y_scale = file_h / src_height if src_height else 1.0
+        dx_scale = src_width / file_w if file_w else 1.0
+        return [
+            (float(y), interp_dx(self.anchors, y * y_scale) * dx_scale) for y in rows
+        ]
+
+    def to_api(self) -> dict:
+        return {
+            "live_crc32": f"{self.live_crc32:08x}",
+            "factory_crc32": (
+                None if self.factory_crc32 is None else f"{self.factory_crc32:08x}"
+            ),
+            "factory_name": self.factory_name,
+            "at_factory": self.at_factory,
+            "anchors": (
+                None if self.anchors is None else [list(a) for a in self.anchors]
+            ),
+            "anchors_meta": self.anchors_meta,
+            "anchors_error": self.anchors_error,
+            "profile": self.profile,
+            "note": self.note,
+        }
+
+
+def read_calibration(
+    host: str = DEFAULT_HOST, *, with_profile: bool = True
+) -> CameraCalibration:
+    """Read the camera's current calibration state. Read-only.
+
+    Dumping the mesh is a read of the live VPE state -- it writes only a file on
+    the SD card and never touches the VPE or flash. Nothing here calls
+    `set_stitch` or `lut2d_ioctl set`.
+    """
+    dump_mesh(host, name="baseline.bin")
+    live = read_mesh(host, "baseline.bin")
+    state = CameraCalibration(live_crc32=crc32(live))
+    if with_profile:
+        state.profile = seam_profile(live)
+
+    for name in FACTORY_COPIES:
+        blob = _fetch_optional(host, f"stitchcal/{name}")
+        if blob is None:
+            continue
+        try:
+            state.factory_crc32 = crc32(Lut2D.from_bytes(blob))
+        except Lut2DError as exc:
+            state.anchors_error = f"{name} is unreadable: {exc}"
+            continue
+        state.factory_name = name
+        state.at_factory = state.factory_crc32 == state.live_crc32
+        break
+
+    raw = _fetch_optional(host, "stitchcal/anchors.txt")
+    if raw is not None:
+        try:
+            anchors, meta = parse_anchors(raw.decode("utf-8", "replace"))
+            state.anchors, state.anchors_meta = anchors, meta
+        except Lut2DError as exc:
+            state.anchors_error = f"anchors.txt is unparseable: {exc}"
+
+    if state.anchors is None and state.at_factory:
+        state.note = (
+            "This unit is at factory: no anchors.txt is installed and the live "
+            "mesh is byte-identical to the factory copy. Nothing has been applied."
+        )
+    elif state.anchors is None and state.at_factory is False:
+        state.note = (
+            "No anchors.txt is installed, but the live mesh differs from the "
+            "factory copy. Something changed the mesh outside this tool."
+        )
+    elif state.anchors is not None:
+        # The boot hook composes anchors onto the mesh the firmware just
+        # generated, so anchors are always relative to *factory*. The
+        # interactive apply path composes onto the *live* mesh instead, so
+        # re-applying while a calibration is installed stacks on top of it
+        # until the next reboot re-composes from factory. Say so rather than
+        # letting an operator discover it.
+        state.note = (
+            f"{len(state.anchors)} anchors are installed"
+            f"{' (' + state.anchors_meta['calibration_id'] + ')' if state.anchors_meta and state.anchors_meta.get('calibration_id') else ''}"
+            ". Anchors are relative to the factory mesh, which is what the boot "
+            "hook composes against. Applying again from here replaces this "
+            "curve at the next boot, but the immediate on-camera result is "
+            "composed onto the live mesh -- reboot to make the two agree."
+        )
+    return state
 
 
 # -- the ordered sequence -----------------------------------------------------

@@ -1311,6 +1311,83 @@ it. It proposes; it never applies. Applying still goes through
 
 ---
 
+## 16. Starting the editor from the camera's current state
+
+Added 2026-08-19. Previously every session began at a flat zero curve, so an operator's first
+adjustment was a delta from nothing rather than from what is installed.
+
+### 16.1 The snapshot is already the mesh's output — do not re-warp it
+
+`cmd=Snap` returns the **fused** 7680x2160 panorama: the VPE warp and the stitcher have both run
+before the JPEG exists, which is exactly why the blend corridor and its ghost are visible in it
+(§15.2). Applying the live mesh to that image would apply the correction **twice**. So the editor
+never warps the snapshot. What the mesh can honestly contribute is its own *shape*, which is what
+`stitch_apply.seam_profile` extracts.
+
+### 16.2 What is read, and from where
+
+`stitch_apply.read_calibration(host)` — read-only; it dumps the live VPE state to a file on the SD
+card and never calls `SetStitch` or `lut2d_ioctl set`:
+
+| source | what it answers |
+|---|---|
+| `lut2d_ioctl get 0` → `baseline.bin` | the live mesh, and its crc32 |
+| `/mnt/sda/stitchcal/factory_boot.bin` | is this unit still at factory? |
+| `/mnt/sda/stitchcal/anchors.txt` | the installed calibration — **this is the starting curve** |
+| `GetStitch` current vs `initial` | the vendor scalars (already surfaced) |
+
+Both `factory_boot.bin` and `factory_vpe0.bin` exist on the unit and are **byte-identical**
+(verified live 2026-08-19, md5 `7ac18ef2988970d09fc4f5a36c6cd311`). `factory_boot.bin` is the name
+`S98_StitchCal` writes and documents, so it is tried first.
+
+**Measured on Mark's unit, live, 2026-08-19:** live mesh crc32 `8514014a`, `factory_boot.bin` crc32
+`8514014a`, no `anchors.txt`, and the camera's own hook log says
+`NOT APPLIED: no /mnt/sda/stitchcal/anchors.txt -- nothing is calibrated on this unit`. The UI says
+so in those terms rather than showing a zero curve that looks like a calibration.
+
+### 16.3 The vendor's own solution, per row
+
+The mesh maps destination grid points to **source** pixels and the seam is the left half's last
+column, so `src_x - dst_x` there is the horizontal displacement the vendor's optimiser chose for
+that row. Measured on the factory mesh:
+
+| | value |
+|---|---|
+| offset at the seam column | **-586.25 px** (row 0) to **-441.25 px** (mid frame) |
+| `s`, source-px per destination-px | 0.6002 .. 0.7168, **0.70018 at mid-row** |
+
+That `s` is an independent cross-check: `compose_correction` documents `s_at_seam` = 0.700 and the
+archived compose report measured 0.7002. `s` matters to the operator because the composer writes
+`x + dx*s` — a 10 px correction moves source pixels by ~7 px at the seam, not 10.
+
+### 16.4 `dx = 0` **is** factory, so there are two reset buttons and not three
+
+§7.1 is what makes this true: the correction is stored as anchors and composed at **every boot**
+against the mesh the firmware just generated. Anchors are therefore always relative to factory, and
+an all-zero curve leaves the vendor mesh untouched. "Reset to zero" and "back to factory" were the
+same button; there is now one, labelled **Back to factory**, plus **Back to camera current** which
+loads `anchors.txt` resampled onto the editor's rows.
+
+### 16.5 A divergence this exposed, in the existing apply path
+
+`apply_calibration` composes onto `wait_for_stable_mesh()` — the **live** mesh — while
+`S98_StitchCal` composes onto `factory_boot.bin` — the **factory** mesh. When a calibration is
+already installed those are not the same baseline:
+
+- immediately after an interactive apply: `factory ⊕ old ⊕ new`
+- after the next reboot: `factory ⊕ new`
+
+The `--require-baseline` guard does not catch it: `format_anchors` stamps the *live* crc it just
+measured, so the interactive compose trivially agrees with itself, and the boot hook deliberately
+does not set the flag (§7.3). This does not bite today — Mark's unit is at factory with no
+`anchors.txt` — but it bites the first time anyone re-calibrates an already-calibrated unit, which
+is precisely the case this feature exists to support. `read_calibration` therefore surfaces it in
+the note shown next to the loaded curve rather than leaving it to be discovered. **Fixing it belongs
+in `apply_calibration`** (compose onto the factory copy, not the live mesh) and was left alone here
+because that path is live-verified end-to-end and out of scope for a read-only change.
+
+---
+
 ## Appendix: reproducing the measurements
 
 ```sh

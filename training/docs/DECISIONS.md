@@ -1933,3 +1933,37 @@ for the human-in-the-loop workflow and wrong for this measurement.
 measurements), estimate per row band, or — the clean lead — pull the two sensor
 contributions separately (§14 question 1), which turns this from inferring an
 unobservable mixture into direct registration.
+
+
+---
+
+## Decision: the seam editor starts from the camera's installed calibration (2026-08-19)
+
+**Context:** Mark asked for the phone app to "pull the current mesh from the camera and apply that
+to the snapshot ... show what the camera automatically generated". The premise needed correcting:
+`cmd=Snap` already returns the **fused** panorama — the VPE warp and the stitcher have both run
+before the JPEG exists, which is why the blend corridor is visible in it at all — so applying the
+mesh to that image would apply it twice.
+
+**Decision:** do not re-warp the snapshot. Instead (a) read the camera's real state on session start
+— live mesh crc32, whether it still matches the on-camera factory copy, and `anchors.txt` if present
+— and initialise the curve from it, labelled as the camera's state rather than as the operator's
+edit; (b) show the *vendor's* solution as the per-row source-x displacement its mesh applies down
+the seam column, which is the honest reading of "what the camera automatically generated".
+
+**Consequences.** `dx = 0` **is** factory, because §7.1 stores the correction as anchors and
+composes at every boot against the mesh the firmware just generated. So "reset to zero" and "back to
+factory" were one button wearing two names; there is now **Back to factory** and **Back to camera
+current**, two buttons with two meanings, and the third was removed rather than left ambiguous.
+
+**Hazard found and surfaced, not fixed:** `apply_calibration` composes onto the *live* mesh while
+the boot hook composes onto the *factory* mesh, so re-calibrating an already-calibrated unit yields
+`factory ⊕ old ⊕ new` until the next reboot, when it becomes `factory ⊕ new`. `--require-baseline`
+cannot catch it (the interactive path stamps the live crc it just measured). Recorded in
+STITCH_CALIBRATION.md §16.5 and surfaced in the UI note; the fix belongs in `apply_calibration`,
+which was left untouched here because it is live-verified and this change is read-only.
+
+**Verified live** (read-only, 2026-08-19): live mesh crc32 `8514014a` == `factory_boot.bin`, no
+`anchors.txt`, camera hook log `nothing is calibrated on this unit`; `factory_boot.bin` and
+`factory_vpe0.bin` byte-identical (md5 `7ac18ef2…`); seam `s` at mid-row 0.70018 against the
+independently documented 0.700.
