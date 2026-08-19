@@ -1879,3 +1879,150 @@ in decision 8 (that guard required a `truncated_start` flag that does not exist 
 and cannot be derived in-detector). **Fast-follow:** replace the NTFY 5-min walk fallback with a
 single detector-seeded "is this the kickoff?" confirmation (the S3 verify, moved ahead of the trim).
 **Files:** `video_grouper/task_processors/phase_game_start.py`, `tests/test_phase_game_start.py`
+
+---
+
+## Decision: ship the seam auto-measure as a refusing instrument, not a number generator (2026-08-19)
+
+**Context:** five passes have tried to measure the Duo 3 stitch misregistration
+automatically. Four built a detector for an object class (ball, person) and each
+measured something else — grass texture, a parked car, a shirt, a pair of
+shorts. This pass abandoned object detection for class-agnostic echo estimation:
+inside the blend `s(x) = a·b(x) + (1−a)·b(x−d)` for *whatever* `b` is, so only
+horizontal gradient and position in the corridor matter, never identity.
+
+**What was established** (evidence in `reolink-firmware-patching/docs/STITCH_CALIBRATION.md`
+§15). Grey-level echo estimation fails its null: it recovers a synthetic `a`=0.5,
+`d`=18 ghost injected into the same real grass at 0.23–0.57, but the real
+corridor reads 0.03–0.06, and across 40 archived frames **seam median ÷ control
+p90 = 0.68**. Chroma changes that — excluding L (mown grass *is* a luminance
+texture), a target separates from grass by **9.7–13.3×** and from worst-case
+foreground grass by **6.6–8.7×**. In the chroma channel frame 1104's profile
+shows two lobes 17 px apart at amplitude ratio ~0.45, and a two-copy fit returns
+**d = 18.0** (gain 1.99) against 1.06–1.19 for the three negative cases and four
+control corridors — matching the hand-verified 17–19 px and `a` = 0.451.
+
+**What is not established:** automatic candidate selection ranks by chroma and
+on frame 1104 prefers a walking person, whose bands vote 21–35 px. A loose
+agreement gate published their median, **25.5 px, against a hand-verified
+17–19**. The disagreement is physical: the factory mesh nulls the ground plane,
+so residual disparity scales with height above it, and a walking figure's boots,
+shorts and head legitimately differ.
+
+**Decision:** ship `vpe/seam_echo.py` + `POST /stitch/auto` as an instrument that
+**proposes or refuses, and never applies**. The null is inside `measure()` and
+cannot be skipped (identical fit at control corridors, pretending the seam is
+there, so `a_pred` cannot refuse them for free); the agreement gate is tight
+enough that every hand-verified case refuses rather than publishing a wrong
+number; chroma distance is reported on every candidate as the audit trail the
+previous four passes lacked. Applying still goes through `apply_calibration()`
+via the existing `/stitch/apply`.
+
+**Rejected alternative:** publishing the median anyway. A button that emits a
+number which failed its own controls is worse than no button — that is exactly
+how the previous four passes produced confident wrong answers.
+
+**Consequences:** (a) scale does not rescue the grey-level version — averaging
+more rows/frames averages more *unghosted* pixels; (b) a per-row `dx(y)` shear
+cannot represent a height-dependent residual, since at one row the ground and a
+person's head need different `dx`; (c) the calibration target should be flat and
+single-height (a board, a sign, a cone), not a person — a person remains right
+for the human-in-the-loop workflow and wrong for this measurement.
+
+**Reversible:** widen/refine the `d` search (fits pinning at `D_MAX`=36 are not
+measurements), estimate per row band, or — the clean lead — pull the two sensor
+contributions separately (§14 question 1), which turns this from inferring an
+unobservable mixture into direct registration.
+
+
+---
+
+## Decision: the seam editor starts from the camera's installed calibration (2026-08-19)
+
+**Context:** Mark asked for the phone app to "pull the current mesh from the camera and apply that
+to the snapshot ... show what the camera automatically generated". The premise needed correcting:
+`cmd=Snap` already returns the **fused** panorama — the VPE warp and the stitcher have both run
+before the JPEG exists, which is why the blend corridor is visible in it at all — so applying the
+mesh to that image would apply it twice.
+
+**Decision:** do not re-warp the snapshot. Instead (a) read the camera's real state on session start
+— live mesh crc32, whether it still matches the on-camera factory copy, and `anchors.txt` if present
+— and initialise the curve from it, labelled as the camera's state rather than as the operator's
+edit; (b) show the *vendor's* solution as the per-row source-x displacement its mesh applies down
+the seam column, which is the honest reading of "what the camera automatically generated".
+
+**Consequences.** `dx = 0` **is** factory, because §7.1 stores the correction as anchors and
+composes at every boot against the mesh the firmware just generated. So "reset to zero" and "back to
+factory" were one button wearing two names; there is now **Back to factory** and **Back to camera
+current**, two buttons with two meanings, and the third was removed rather than left ambiguous.
+
+**Hazard found and surfaced, not fixed:** `apply_calibration` composes onto the *live* mesh while
+the boot hook composes onto the *factory* mesh, so re-calibrating an already-calibrated unit yields
+`factory ⊕ old ⊕ new` until the next reboot, when it becomes `factory ⊕ new`. `--require-baseline`
+cannot catch it (the interactive path stamps the live crc it just measured). Recorded in
+STITCH_CALIBRATION.md §16.5 and surfaced in the UI note; the fix belongs in `apply_calibration`,
+which was left untouched here because it is live-verified and this change is read-only.
+
+**Verified live** (read-only, 2026-08-19): live mesh crc32 `8514014a` == `factory_boot.bin`, no
+`anchors.txt`, camera hook log `nothing is calibrated on this unit`; `factory_boot.bin` and
+`factory_vpe0.bin` byte-identical (md5 `7ac18ef2…`); seam `s` at mid-row 0.70018 against the
+independently documented 0.700.
+
+
+---
+
+## Decision: the interactive apply path picks its baseline the way the boot hook does (2026-08-19)
+
+**Context:** `apply_calibration` composed onto the **live** mesh unconditionally, while
+`S98_StitchCal` keeps `applied.sig` and composes onto the saved factory copy when the live mesh is
+its own last write. On a unit already carrying a calibration that produced `factory + old + new`
+interactively and `factory + new` after a reboot — the same stored anchors giving two different
+meshes. `--require-baseline` could not catch it, because the interactive path stamps the live crc it
+has just measured. It became urgent rather than theoretical the moment the editor started loading
+the installed calibration as its starting curve: "load, nudge, apply" is precisely the doubling
+sequence.
+
+**Decision:** mirror the boot hook rather than invent a second scheme. `mesh_signature()` uses the
+same byte range as `S98`'s `mesh_sig` (md5 of the table, 8-byte header skipped); if the live mesh
+matches `applied.sig`, compose from the saved factory copy; write `applied.sig` after a successful
+set so the two paths cannot drift apart. `tail -c +9` rather than `dd`, which `camsh` refuses.
+
+**Rejected:** comparing the re-dump against the baseline crc in the ordering guard. That is only
+correct on an uncalibrated unit; once our own correction is live it differs from the baseline by
+exactly that correction, so it would refuse every legitimate re-calibration while still missing the
+doubling. The guard now compares against the live signature observed at decision time, which is what
+"did someone else move it" actually means.
+
+**Verified live, writes included**, with expected crcs computed before writing: factory `8514014a`;
+apply A → `9604929c`; apply A again → `9604929c` unchanged (old code would have written `3cdcb4aa`);
+apply B → `83e3bedc` = factory+B, not `f18b0999` = factory+A+B. Unit restored to factory, md5
+`7ac18ef2...`, uncalibrated. Details in STITCH_CALIBRATION.md 16.5.
+
+
+---
+
+## Decision: seam auto-measure withdrawn; /stitch/auto is diagnostics only (2026-08-19)
+
+**Supersedes** "ship the seam auto-measure as a refusing instrument" (same date). That entry judged
+the estimator honest because it refused on the hand-verified frames. Run at scale it does not: on
+frame 1104, which carries a real 18 px ghost, the shipped module **published 33.0 px**, and across
+7,688 frames it accepts control corridors (6.3%) almost as often as the seam (7.4%) - 1.18x against
+its own `NULL_MARGIN` of 3.0 - with overlapping d distributions.
+
+**Why it fails:** it measures a **step edge**, not a ghost. Two lobes fit a shirt-against-grass step
+better than one, so `gain` is anti-correlated with truth on this material. Cross-frame agreement,
+which was expected to be the discriminator, is *better at the controls* than at the seam, so it
+cannot serve as the acceptance criterion either.
+
+**The null shipped here was also defective:** `if ctl_ok and seam_rate < NULL_MARGIN * ctl_rate` is
+skipped when the controls accept nothing, which is the common single-frame case - inert at exactly
+the sample size the button uses.
+
+**Decision:** keep the endpoint and the plumbing as **diagnostics**; remove the proposal.
+`measure()` always returns `verdict="withdrawn"` with its numbers as evidence, and
+`anchors_from_measurement` raises unconditionally so no result can become a curve. The UI has no
+adopt control. The seam is calibrated by hand from the camera's installed state.
+
+**Not attempted in this pass:** a fix. Colour gating was necessary and insufficient; discriminating a
+ghost from a step is new work with its own acceptance bar, not a parameter tweak. Shards for
+re-analysis: `F:/archive/duo3_stitch/harvest/report_shards_dense/`.

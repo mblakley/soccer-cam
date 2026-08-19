@@ -3960,3 +3960,90 @@ truncation-framed question) -> `phase_game_start.resolve_truncated_start`: trim 
 signals (~min); a follow-up can cache the phase_detect-step signals for an instant re-fuse.
 **Still to do:** a "still playing" END-task tap for `truncated_end`, and a truncated toggle in the T2
 app for the confident-but-truncated games that never get the walk (05.09 / 06.06-Fairport).
+
+---
+
+## EXP-STITCH-01: class-agnostic seam echo — grey fails, chroma works, automation does not yet (2026-08-19)
+
+**Goal (Mark):** an operator "Auto" button measuring the stitch misregistration
+from *whatever* is at the seam — person, car, chair, field marking — with no
+detector for any object class.
+
+**Instrument validated first.** Synthetic `a`=0.5, `d`=18 injected into real
+grass from the GT frames is recovered at the correct lag in 6/6 bands, 0.23–0.57
+vs clean-control 0.03–0.09.
+
+**Grey-level echo — negative, fails its null:**
+- GT frame 1104 (ball at x=3846 visibly doubled, required 17–19 px): full-height
+  band×lag map at the seam statistically identical to ±400 controls (0.03–0.06,
+  scattered lags). A tight window **on the doubled ball** reads 0.029–0.058 vs
+  controls 0.049–0.076.
+- Motion-isolated (temporal-median) variants: seam z = +0.04 vs controls.
+  Blob-restricted ACF gives a systematic lag 9–11 everywhere — it measures blob
+  **width**.
+- 40 archived frames, many placements: seam median +0.050/p90 +0.095 vs control
+  median +0.039/p90 +0.074 → **seam ÷ control p90 = 0.68**. The one 10× outlier
+  is **two players standing 16 px apart**, confirmed by eye.
+
+**Chroma — positive.** Excluding L (mown grass is a luminance texture), target
+vs grass separates **9.7–13.3×**, and vs worst foreground grass **6.6–8.7×**
+(with L: 3.9× and 1.35×). Frame 1104's chroma profile shows two lobes, ~45 at
+−14 px and ~33 at +3 px with a dip between → separation ~17 px, ratio ~0.45.
+Two-copy fit on those rows: **d = 18.0, gain 1.99**, against gain 1.14/1.19 for
+frames 1088/1120 and 1.06–1.12 for four control corridors. `a` is predicted from
+geometry (`a_pred` = 0.086 for the 1088 ball), making those refusals geometric.
+
+**Automation — not yet reliable.** Chroma ranking prefers a walking person over
+the ball on frame 1104; its bands vote 21–35 px, several pinned at the `D_MAX`
+grid edge, and a loose gate published the median **25.5 px against 17–19**. The
+disagreement is physical — the mesh nulls the ground plane, so disparity scales
+with height, and a walking figure disagrees with itself.
+
+**Shipped:** `vpe/seam_echo.py` + `POST /stitch/auto`, proposing or refusing,
+never applying; null baked into `measure()` (0/325 control candidates accepted
+vs 12–18 at the seam on the same archive frames); chroma reported per candidate.
+Every hand-verified case refuses and says what would fix it: a flat single-height
+target. Full write-up: `reolink-firmware-patching/docs/STITCH_CALIBRATION.md` §15.
+
+
+---
+
+## EXP-STITCH-02: seam echo withdrawn at scale - it measures a step edge (2026-08-19)
+
+**What was tested:** the shipped `vpe/seam_echo.py` (chromatic candidate selection + two-copy fit on
+the Lab-chroma profile, `a` predicted from geometry), run unmodified over the archive.
+
+**Acceptance tests - failed:**
+
+| frame | required | reported |
+|---|---|---|
+| 1104 (+6 px, real 18 px ghost) | 17-19 px | **33.0 px, published** |
+| 1088 (+106 px) | ~0 / refuse | void |
+| 1120 (-51 px) | ~0 / refuse | void |
+
+**Null at scale** - 7,688 frames, 46,088 seam candidates, 90,609 controls, 28 games: seam acceptance
+7.4% vs control 6.3% (**1.18x**, against the module's own `NULL_MARGIN` of 3.0). `ctl-1200` accepts
+more often than the seam. d-histogram overlap 0.85; seam/control median d 31/30 px, unchanged after
+matching on colour decile and row band. 96 gate settings swept, none both quiet off-seam and correct
+on it.
+
+**Mechanism:** a step edge (shirt against grass) is fitted better by two lobes than by one, so `gain`
+rises on precisely the objects the chromatic gate finds best - `gain` is anti-correlated with truth
+here. On f1104 all three accepted candidates were a walking player's torso/shorts/leg 37-47 px from
+the seam; the ball's band ranked 15th chromatically and `max_fits=10` never fitted it. Forced onto
+the ball, the fit returns d=1.
+
+**Agreement inverts and cannot be the criterion:** within-track IQR median 1.0 px / 74% <=1 px at
+*controls* vs 2.0 px / 38% at the seam. The steadiest landmark in the corpus is a control reading
+d=35.0 px with IQR 0.0 over 25 looks, where truth is 0.
+
+**Own-code flaw worth keeping:** the null guard `if ctl_ok and seam_rate < NULL_MARGIN * ctl_rate`
+is skipped entirely when the controls accept nothing, which is common on a single frame - inert at
+exactly the sample size the button uses, and the reason single-frame and scale runs disagreed. A null
+a small sample can switch off is not a null.
+
+**Outcome:** `/stitch/auto` is diagnostics only. `measure()` always returns `verdict="withdrawn"`
+and `anchors_from_measurement` raises unconditionally; the UI has no adopt control. Colour gating was
+necessary but insufficient - a fix must discriminate a **ghost** from a **step**, which is new work
+with its own acceptance bar. Shards: `F:/archive/duo3_stitch/harvest/report_shards_dense/` (78
+`.npz`). Full write-up: `reolink-firmware-patching/docs/STITCH_CALIBRATION.md` section 15.5.

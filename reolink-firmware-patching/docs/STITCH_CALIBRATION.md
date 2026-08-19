@@ -1189,10 +1189,283 @@ Not fixed here — this branch is design only — but they are real, reproduced,
    remains unmeasured on this unit. Answering it needs the deliberate target of §10 step 4, or the
    pre-stitch source images of question 1 — which would turn this from an extrapolation problem into
    a direct registration one and is now the highest-value lead in the document for this reason too.
-7. **Is there anything to correct on outdoor footage at all?** 52 of 96 archived frames sit below the
-   SSR noise floor **[M]**. SSR saturates past ~4 px so this is not proof of sub-pixel registration,
-   but before more effort goes into Workflow A it is worth establishing whether the far-field seam on
-   a tripod-mounted unit is misregistered by an amount detection cares about.
+7. ~~**Is there anything to correct on outdoor footage at all?**~~ **Answered, mostly "no" — §15.**
+   52 of 96 archived frames sat below the SSR noise floor **[M]**; §15 adds an independent instrument
+   that says the corridor at large carries no ghost on 39 of 40 placements, and explains why.
+
+---
+
+## 15. Auto-measure: what works, what does not, and the evidence for both
+
+Attempted 2026-08-19. **Outcome: the mechanism is established and shipped as an
+instrument (`vpe/seam_echo.py`); the fully automatic path is not yet reliable and
+therefore refuses rather than publishing.** The goal was an operator "Auto"
+button that reads `dx` off whatever happens to be standing in the seam, with no
+detector for any object class.
+
+### 15.1 Grey-level echo estimation fails its null — and the instrument is sound
+
+Inside the blend `s(x) = a·b(x) + (1−a)·b(x−d)` for whatever `b` is there, so a
+2-tap echo has an autocorrelation peak at lag `d` of height
+`a(1−a)/(a²+(1−a)²)` — 0.5 at `a`=0.5, independent of `b`. Estimator: horizontal
+gradient → per-row normalised autocorrelation → row-average → median-detrend in
+lag → peak.
+
+Injecting a synthetic ghost (`a`=0.5, `d`=18) into **real grass from these very
+frames** recovers lag 18 in 6/6 row bands at 0.23–0.57, against clean-control
+0.03–0.09. The instrument is not the problem.
+
+On real footage it is nonetheless flat:
+
+- Frame 1104 (`heat__2026.06.06_vs_Fairport_away`, ball at x=3846 visibly two
+  copies, required `d` = 17–19): full-height band×lag map at the seam is
+  statistically identical to controls at ±400 px; peaks 0.03–0.06, scattered
+  lags. A tight grey-level window **on the doubled ball itself** reads
+  0.029–0.058 against controls at 0.049–0.076.
+- 40 archived frames, many placements, gated by the calibrated
+  `vertical_structure`: seam median +0.050 / p90 +0.095 against control median
+  +0.039 / p90 +0.074 — **seam median ÷ control p90 = 0.68**, i.e. the seam sits
+  *below* its own controls. The single 10× outlier was checked by eye and is
+  **two players standing 16 px apart**, both sharp — the same "measured the
+  wrong thing" failure as the four detector passes.
+
+**Why:** in grey level a window on the seam is ~33 px of ghosted ball against
+~60 px of high-gradient **unghosted** grass, and the grass wins. Averaging more
+rows and frames averages more unghosted pixels, so scale does not rescue it.
+
+### 15.2 Colour changes the answer
+
+Grass has enormous luminance texture and almost no colour distinctiveness, which
+is why every gradient-energy gate let it through. Measured on the hand-verified
+frames, **chroma** distance (Lab a,b — L deliberately excluded, since mown grass
+*is* a luminance texture) from the local pitch colour:
+
+| | target | same-row grass | worst foreground grass |
+|---|---|---|---|
+| chroma distance p95 | 18.8–27.4 | 1.4–2.8 | 2.8–3.2 |
+| ratio to target | — | **9.7–13.3×** | **6.6–8.7×** |
+
+Keeping L in the distance collapses those ratios to 3.9× and 1.35×. In the
+chroma channel the grass falls to ~0 and the object's two copies are the only
+signal left. The ghost is then plainly legible: frame 1104's profile shows two
+lobes, ~45 at −14 px and ~33 at +3 px with a dip between, i.e. **separation ~17
+px at an amplitude ratio near 0.45** — matching the hand-verified 17–19 px and
+`a` = 0.451. A two-copy fit on those rows returns **d = 18.0** with the two-copy
+model halving the residual against one lobe (gain 1.99), while the same fit on
+frame 1088's ball (106 px out), frame 1120's ball, and four control corridors
+gains only 1.06–1.19.
+
+**`a` is predicted, not fitted.** `a(x) = 0.5 − (x − seam)/(2·blend_w)`, so a
+ball 106 px out sits at `a_pred` = 0.086 — an 8.6% ghost, which nothing should
+be believed on. (An earlier two-copy fit reported "separation 16.1 px" there,
+where the truth is 0.) Confining candidates to `a_pred` ∈ [0.29, 0.71] makes
+that a geometric refusal rather than a statistical one.
+
+### 15.3 What is still not reliable — the automatic path
+
+Candidate selection ranks by chroma and, on frame 1104, prefers a **walking
+person** over the ball. Its bands vote `d` = 21, 24, 28, 31, 32, 33, 34, 35,
+several pinned near the search-grid edge. A loose agreement gate published their
+median, **25.5 px, where the hand-verified answer is 17–19**. That is the single
+most important negative result here and the reason `MAX_SPREAD` is tight.
+
+The disagreement is physical, not noise. The factory mesh nulls the **ground
+plane** — grass, painted lines and feet are registered, which is what §15.1 and
+the SSR noise floor both say — so residual disparity scales with **height above
+the ground**. A walking figure is therefore not one measurement: boots, shorts
+and head sit at different heights and legitimately disagree. Two consequences:
+
+1. **Band agreement is not guaranteed even for a genuine target**, so it cannot
+   be used as the sole discriminator without also constraining target height.
+2. A per-row `dx(y)` shear cannot represent the residual anyway — at one row the
+   ground and a person's head need different `dx`. That is stronger than §12's
+   list of things the mesh does not fix.
+
+### 15.4 What would make it reliable
+
+- **A single-height target**: a board, a sign, a cone — something flat and
+  vertical whose whole extent sits at one height above the ground. The remedy
+  text says so. A person is the wrong calibration target for this measurement
+  even though they are the right one for the human-in-the-loop workflow.
+- **Widen and refine the `d` search** (fits pinning at `D_MAX` = 36 are not
+  measurements) and estimate `d` per row band rather than pooling.
+- **§14 question 1 remains the clean lead.** `VIDEOPROC 2` out port 1 (256×2160)
+  or `stitch_ori_snap` would expose the two contributions *separately*, turning
+  this from echo estimation under an unknown mixture into direct registration.
+
+### 15.5 Withdrawn at scale: it measures a step edge, not a ghost
+
+The estimator of 15.2 was run unmodified over the archive and **fails**. It no longer proposes
+anchors. This is the fourth withdrawn estimator, so the reasons are recorded specifically enough to
+stop a fifth repeating them.
+
+**Acceptance tests, against the shipped module:**
+
+| frame | required | reported |
+|---|---|---|
+| 1104 (+6 px, real 18 px ghost) | 17-19 px | **33.0 px, published** |
+| 1088 (+106 px) | ~0 / refuse | void |
+| 1120 (-51 px) | ~0 / refuse | void |
+
+Publishing 33.0 on the one frame that carries a real ghost is worse than refusing.
+
+**The mechanism.** A **step edge** -- a shirt against grass -- is fitted better by two lobes than by
+one, so `gain` rises on exactly the objects the chromatic gate is best at finding. `gain` is
+therefore *anti-correlated with truth* on this material. On frame 1104 all three accepted candidates
+sat on a walking player's torso, shorts and leg, 37-47 px left of the seam; the ball's own row band
+ranked **15th** chromatically and `max_fits=10` never fitted it. Forced onto the ball, the fit
+returns d=1.
+
+**The null, at scale** (7,688 frames, 46,088 seam candidates, 90,609 controls, 28 games):
+
+| | value |
+|---|---|
+| seam acceptance | 7.4% |
+| control acceptance | 6.3% |
+| ratio | **1.18x**, against the module's own `NULL_MARGIN` of 3.0 |
+| `ctl-1200` | accepts **more often** than the seam |
+| d-histogram overlap | 0.85 |
+| seam / control median d | 31 / 30 px -- unchanged at 31 / 30 after matching on colour decile and row band |
+
+96 gate settings were swept; none is both quiet off-seam and correct on it.
+
+**Cross-frame agreement does not rescue it, and inverts.** Within-track IQR is *better at the
+controls* (median 1.0 px, 74% <= 1 px) than at the seam (2.0 px, 38%). The steadiest landmark in the
+corpus is a **control** reading d = 35.0 px with IQR 0.0 across 25 looks, where the truth is exactly
+zero. So agreement cannot be the acceptance criterion.
+
+**And the null as originally written was not a safeguard.** The guard read
+`if ctl_ok and seam_rate < NULL_MARGIN * ctl_rate`: on a single frame the controls frequently accept
+nothing, `ctl_ok` is empty, and the guard is skipped entirely -- inert at exactly the sample size the
+button uses. That is why the single-frame and scale runs disagreed about the same frame. **A null a
+small sample can switch off is not a null.**
+
+`HV_sheet_control_top_lab.png` is the picture of it: a page of ordinary single, unghosted players in
+*control* corridors, accepted at 19-35 px.
+
+**What a future attempt must do differently.** Colour gating was necessary and insufficient -- it
+correctly finds chromatically distinct objects, and distinct objects have step edges. Any fix has to
+discriminate a **ghost** from a **step**, which is new work with its own acceptance bar, not a
+parameter tweak. Per-candidate shards with every fitted profile are at
+`F:/archive/duo3_stitch/harvest/report_shards_dense/` (78 `.npz`), so it can be re-analysed without
+re-decoding.
+
+### 15.6 What shipped
+
+`vpe/seam_echo.py` and `POST /stitch/auto`, as **diagnostics only**. `measure()` reports its
+candidates, its control corridors and what it would have said (`provisional_dx`), and always returns
+`verdict = "withdrawn"`; `anchors_from_measurement` raises unconditionally, so no result however
+confident can become a curve. The UI has no adopt control. The chromatic gate, the control machinery
+and the plumbing are kept because they are reusable and because the numbers are the evidence.
+
+**The seam is calibrated by hand** (section 11), starting from the camera's installed state
+(section 16).
+
+---
+
+## 16. Starting the editor from the camera's current state
+
+Added 2026-08-19. Previously every session began at a flat zero curve, so an operator's first
+adjustment was a delta from nothing rather than from what is installed.
+
+### 16.1 The snapshot is already the mesh's output — do not re-warp it
+
+`cmd=Snap` returns the **fused** 7680x2160 panorama: the VPE warp and the stitcher have both run
+before the JPEG exists, which is exactly why the blend corridor and its ghost are visible in it
+(§15.2). Applying the live mesh to that image would apply the correction **twice**. So the editor
+never warps the snapshot. What the mesh can honestly contribute is its own *shape*, which is what
+`stitch_apply.seam_profile` extracts.
+
+### 16.2 What is read, and from where
+
+`stitch_apply.read_calibration(host)` — read-only; it dumps the live VPE state to a file on the SD
+card and never calls `SetStitch` or `lut2d_ioctl set`:
+
+| source | what it answers |
+|---|---|
+| `lut2d_ioctl get 0` → `baseline.bin` | the live mesh, and its crc32 |
+| `/mnt/sda/stitchcal/factory_boot.bin` | is this unit still at factory? |
+| `/mnt/sda/stitchcal/anchors.txt` | the installed calibration — **this is the starting curve** |
+| `GetStitch` current vs `initial` | the vendor scalars (already surfaced) |
+
+Both `factory_boot.bin` and `factory_vpe0.bin` exist on the unit and are **byte-identical**
+(verified live 2026-08-19, md5 `7ac18ef2988970d09fc4f5a36c6cd311`). `factory_boot.bin` is the name
+`S98_StitchCal` writes and documents, so it is tried first.
+
+**Measured on Mark's unit, live, 2026-08-19:** live mesh crc32 `8514014a`, `factory_boot.bin` crc32
+`8514014a`, no `anchors.txt`, and the camera's own hook log says
+`NOT APPLIED: no /mnt/sda/stitchcal/anchors.txt -- nothing is calibrated on this unit`. The UI says
+so in those terms rather than showing a zero curve that looks like a calibration.
+
+### 16.3 The vendor's own solution, per row
+
+The mesh maps destination grid points to **source** pixels and the seam is the left half's last
+column, so `src_x - dst_x` there is the horizontal displacement the vendor's optimiser chose for
+that row. Measured on the factory mesh:
+
+| | value |
+|---|---|
+| offset at the seam column | **-586.25 px** (row 0) to **-441.25 px** (mid frame) |
+| `s`, source-px per destination-px | 0.6002 .. 0.7168, **0.70018 at mid-row** |
+
+That `s` is an independent cross-check: `compose_correction` documents `s_at_seam` = 0.700 and the
+archived compose report measured 0.7002. `s` matters to the operator because the composer writes
+`x + dx*s` — a 10 px correction moves source pixels by ~7 px at the seam, not 10.
+
+### 16.4 `dx = 0` **is** factory, so there are two reset buttons and not three
+
+§7.1 is what makes this true: the correction is stored as anchors and composed at **every boot**
+against the mesh the firmware just generated. Anchors are therefore always relative to factory, and
+an all-zero curve leaves the vendor mesh untouched. "Reset to zero" and "back to factory" were the
+same button; there is now one, labelled **Back to factory**, plus **Back to camera current** which
+loads `anchors.txt` resampled onto the editor's rows.
+
+### 16.5 The double-compose, and its fix
+
+**Found while building 16.2, fixed and verified live 2026-08-19.**
+
+`apply_calibration` took `wait_for_stable_mesh()` -- the **live** mesh -- as its baseline
+unconditionally. `S98_StitchCal` does not: it keeps `applied.sig`, and when the live mesh matches
+its own last write it composes from the saved `factory_boot.bin` instead (that is the idempotency
+verified on hardware in #135). So on a unit already carrying a calibration the two paths disagreed:
+
+| | mesh |
+|---|---|
+| immediately after an interactive Apply | `factory (+) old (+) new` |
+| after the next reboot | `factory (+) new` |
+
+Same stored anchors, two meshes, differing only by whether the unit had been power-cycled.
+`--require-baseline` could not catch it: `format_anchors` stamps the live crc it just measured, so
+the interactive compose trivially agreed with itself.
+
+This lands squarely on 16.2 -- "load the installed calibration, nudge it by 2 px, Apply" is exactly
+the sequence that doubles.
+
+**The fix mirrors the boot hook rather than inventing a second scheme.** `apply_calibration` now
+computes `mesh_signature()` -- `md5` of the table with the 8-byte header skipped, the same byte range
+as `S98`'s `dd bs=8 skip=1` -- and if the live mesh matches `applied.sig`, composes from the saved
+factory copy. It writes `applied.sig` after a successful set (via `tail -c +9`, because `camsh`
+refuses `dd`), so the interactive and boot paths cannot drift apart. The ordering guard now compares
+the re-dump against the **live signature seen at decision time** rather than against the baseline
+crc: those are the same thing only on an uncalibrated unit, and a baseline comparison would have
+refused every legitimate re-calibration while still missing the doubling.
+
+**Verified live end-to-end on the unit, writes included.** Expected crcs were computed host-side
+*before* any write, so the doubling was falsifiable rather than assumed:
+
+| step | baseline chosen | resulting mesh crc32 | expected |
+|---|---|---|---|
+| start | — | `8514014a` | factory |
+| apply A (dx = 4 px) | live mesh | **`9604929c`** | `factory (+) A` |
+| apply A **again** | saved factory copy | **`9604929c`** unchanged | idempotent (old code: `3cdcb4aa`) |
+| apply B (dx = 8 px) | saved factory copy | **`83e3bedc`** | `factory (+) B`, **not** `f18b0999` = `factory (+) A (+) B` |
+| restore | — | `8514014a` | factory |
+
+Every write was read-back verified by the camera (`read-back matches: the mesh is live`). The unit
+was returned to exactly the state it was found in: all three mesh files back to md5
+`7ac18ef2988970d09fc4f5a36c6cd311`, `anchors.txt` / `applied.sig` / `mesh_apply.bin` /
+`recheck.bin` removed, and `read_calibration` reporting at-factory and uncalibrated. No reboot, no
+flash, no `netstate` change.
 
 ---
 
@@ -1223,9 +1496,9 @@ Seam profile from `snap.jpg` (numpy):
 
 ```python
 band = gray[300:2150]
-cm   = band.mean(axis=0)                          # row-independent = photometric
-res  = band - cm[None, :]                         # structural
-E    = (np.diff(res, axis=1) ** 2).mean(axis=0)   # detrended gradient energy per column
+cm = band.mean(axis=0)  # row-independent = photometric
+res = band - cm[None, :]  # structural
+E = (np.diff(res, axis=1) ** 2).mean(axis=0)  # detrended gradient energy per column
 # fit log E quadratically over x in [3328,3712) u (3968,4352]; SSR = mean(E/fit) over [3712,3968]
 ```
 
