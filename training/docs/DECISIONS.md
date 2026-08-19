@@ -1879,3 +1879,57 @@ in decision 8 (that guard required a `truncated_start` flag that does not exist 
 and cannot be derived in-detector). **Fast-follow:** replace the NTFY 5-min walk fallback with a
 single detector-seeded "is this the kickoff?" confirmation (the S3 verify, moved ahead of the trim).
 **Files:** `video_grouper/task_processors/phase_game_start.py`, `tests/test_phase_game_start.py`
+
+---
+
+## Decision: ship the seam auto-measure as a refusing instrument, not a number generator (2026-08-19)
+
+**Context:** five passes have tried to measure the Duo 3 stitch misregistration
+automatically. Four built a detector for an object class (ball, person) and each
+measured something else — grass texture, a parked car, a shirt, a pair of
+shorts. This pass abandoned object detection for class-agnostic echo estimation:
+inside the blend `s(x) = a·b(x) + (1−a)·b(x−d)` for *whatever* `b` is, so only
+horizontal gradient and position in the corridor matter, never identity.
+
+**What was established** (evidence in `reolink-firmware-patching/docs/STITCH_CALIBRATION.md`
+§15). Grey-level echo estimation fails its null: it recovers a synthetic `a`=0.5,
+`d`=18 ghost injected into the same real grass at 0.23–0.57, but the real
+corridor reads 0.03–0.06, and across 40 archived frames **seam median ÷ control
+p90 = 0.68**. Chroma changes that — excluding L (mown grass *is* a luminance
+texture), a target separates from grass by **9.7–13.3×** and from worst-case
+foreground grass by **6.6–8.7×**. In the chroma channel frame 1104's profile
+shows two lobes 17 px apart at amplitude ratio ~0.45, and a two-copy fit returns
+**d = 18.0** (gain 1.99) against 1.06–1.19 for the three negative cases and four
+control corridors — matching the hand-verified 17–19 px and `a` = 0.451.
+
+**What is not established:** automatic candidate selection ranks by chroma and
+on frame 1104 prefers a walking person, whose bands vote 21–35 px. A loose
+agreement gate published their median, **25.5 px, against a hand-verified
+17–19**. The disagreement is physical: the factory mesh nulls the ground plane,
+so residual disparity scales with height above it, and a walking figure's boots,
+shorts and head legitimately differ.
+
+**Decision:** ship `vpe/seam_echo.py` + `POST /stitch/auto` as an instrument that
+**proposes or refuses, and never applies**. The null is inside `measure()` and
+cannot be skipped (identical fit at control corridors, pretending the seam is
+there, so `a_pred` cannot refuse them for free); the agreement gate is tight
+enough that every hand-verified case refuses rather than publishing a wrong
+number; chroma distance is reported on every candidate as the audit trail the
+previous four passes lacked. Applying still goes through `apply_calibration()`
+via the existing `/stitch/apply`.
+
+**Rejected alternative:** publishing the median anyway. A button that emits a
+number which failed its own controls is worse than no button — that is exactly
+how the previous four passes produced confident wrong answers.
+
+**Consequences:** (a) scale does not rescue the grey-level version — averaging
+more rows/frames averages more *unghosted* pixels; (b) a per-row `dx(y)` shear
+cannot represent a height-dependent residual, since at one row the ground and a
+person's head need different `dx`; (c) the calibration target should be flat and
+single-height (a board, a sign, a cone), not a person — a person remains right
+for the human-in-the-loop workflow and wrong for this measurement.
+
+**Reversible:** widen/refine the `d` search (fits pinning at `D_MAX`=36 are not
+measurements), estimate per row band, or — the clean lead — pull the two sensor
+contributions separately (§14 question 1), which turns this from inferring an
+unobservable mixture into direct registration.

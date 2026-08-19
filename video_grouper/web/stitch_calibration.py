@@ -163,6 +163,7 @@ def load_toolkit() -> dict[str, Any]:
         "metric": None,
         "camera": None,
         "vertical": None,
+        "echo": None,
         "errors": [],
     }
     vpe = _vpe_dir()
@@ -178,6 +179,7 @@ def load_toolkit() -> dict[str, Any]:
     for key, name in (
         ("metric", "seam_metric"),
         ("vertical", "seam_vertical"),
+        ("echo", "seam_echo"),
         ("camera", "stitch_apply"),
     ):
         try:
@@ -231,6 +233,12 @@ class _Session:
     scene_source: str = ""
     scene_vertical: dict | None = None
     vertical: dict | None = None
+    # The automatic seam measurement (`seam_echo`). Kept beside the manual
+    # numbers rather than replacing them: the operator reviews a proposal, and
+    # a measurement that refuses must still say so on the page.
+    auto: dict | None = None
+    auto_state: str = "idle"  # idle | running | ready | failed
+    auto_error: str = ""
 
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -1026,6 +1034,93 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
             {"path": str(target), "archived": str(archive), "profile": profile}
         )
 
+    def _auto_measure_async(version: int, frames: list[Any], seam_x: int) -> None:
+        """Run `seam_echo.measure` off the request thread.
+
+        Comparable in cost to the SCR detection this page already runs in the
+        background (37-50 s), for the same reason: the operator should be
+        looking at the picture long before the numbers arrive.
+        """
+        echo = load_toolkit()["echo"]
+        try:
+            result = echo.measure(frames, seam_x=seam_x, blend_w=BLEND_W)
+            payload = result.to_api()
+            with _session.lock:
+                if _session.version != version:
+                    return
+                _session.auto = payload
+                _session.auto_state = "ready"
+                _session.auto_error = ""
+            logger.info(
+                "STITCH: auto measure %s dx=%s (seam %d/%d, control %d/%d)",
+                payload["verdict"],
+                payload["dx"],
+                payload["n_accepted"],
+                payload["n_candidates"],
+                payload["control_accepted"],
+                len(result.controls),
+            )
+        except Exception as exc:  # noqa: BLE001 -- report, never publish a guess
+            logger.error("STITCH: auto measure failed: %s", exc)
+            with _session.lock:
+                if _session.version == version:
+                    _session.auto_state = "failed"
+                    _session.auto_error = f"{type(exc).__name__}: {exc}"
+
+    @router.post("/stitch/auto")
+    def post_auto(body: dict = Body(default={})) -> JSONResponse:
+        """Measure `dx` from whatever is standing in the seam, or refuse.
+
+        Class-agnostic by construction: candidates are selected by *colour*
+        distance from the pitch, never by object class, because grass has
+        enormous luminance texture and almost no colour distinctiveness and
+        that is what defeated every gradient-gated attempt. See `seam_echo`.
+
+        Several frames are used when the source is the live camera -- the
+        camera is on a tripod and `Snap` is read-only, so a couple of seconds
+        of them is free and turns one lucky reading into an agreement test.
+        """
+        echo = load_toolkit()["echo"]
+        if echo is None:
+            raise HTTPException(503, "seam_echo is not importable")
+        n = max(1, min(int(body.get("frames") or 3), 8))
+        with _session.lock:
+            base, seam_x = _session.frame, _session.width // 2
+            live = bool(_session.frame is not None and not _session.source_path)
+            version = _session.version
+        if base is None:
+            raise HTTPException(409, "take a snapshot first")
+        if base.ndim != 3:
+            raise HTTPException(
+                415,
+                "the seam measurement needs a colour frame: a target is "
+                "separable from grass by colour, not by luminance",
+            )
+
+        frames = [base]
+        if live:
+            for _ in range(n - 1):
+                try:
+                    extra, _cam, _host = _live_frame()
+                except HTTPException:
+                    break  # a short series still measures; a failed one does not
+                frames.append(extra)
+
+        with _session.lock:
+            if _session.version != version:
+                raise HTTPException(409, "the snapshot changed; press Auto again")
+            _session.auto = None
+            _session.auto_state = "running"
+            _session.auto_error = ""
+        threading.Thread(
+            target=_auto_measure_async,
+            args=(version, frames, seam_x),
+            daemon=True,
+            name="stitch-auto",
+        ).start()
+        with _session.lock:
+            return JSONResponse(_state_payload())
+
     @router.post("/stitch/apply")
     def post_apply(body: dict = Body(default={})) -> JSONResponse:
         """Send the calibration to the camera, in the one order that is correct.
@@ -1145,6 +1240,9 @@ def _state_payload() -> dict:
             "width": SCENE_W,
         },
         "last_apply": _session.last_apply,
+        "auto": _session.auto,
+        "auto_state": _session.auto_state,
+        "auto_error": _session.auto_error,
     }
 
 
@@ -2017,6 +2115,67 @@ function snap() {
     }).catch(function (e) { $('snap').disabled = false; $('dockstate').textContent = String(e); });
 }
 
+// Class-agnostic seam measurement. It proposes or refuses; it never applies,
+// and it never publishes a number that its own control corridors also produced.
+function autoMeasure() {
+  $('auto').disabled = true;
+  $('autopanel').style.display = '';
+  $('autoverdict').textContent = 'measuring…';
+  $('autodetail').textContent = '';
+  $('autoadopt').style.display = 'none';
+  fetch('/stitch/auto', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ frames: 3 })
+  }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) {
+        $('auto').disabled = false;
+        $('autoverdict').textContent = res.j.detail || 'measurement failed';
+        return;
+      }
+      pollAuto();
+    }).catch(function (e) { $('auto').disabled = false; $('autoverdict').textContent = String(e); });
+}
+
+function pollAuto() {
+  fetch('/stitch/state', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (st) {
+      if (st.auto_state === 'running') { setTimeout(pollAuto, 1500); return; }
+      $('auto').disabled = false;
+      if (st.auto_state === 'failed') {
+        $('autoverdict').textContent = st.auto_error || 'measurement failed';
+        return;
+      }
+      showAuto(st.auto);
+    }).catch(function (e) { $('auto').disabled = false; $('autoverdict').textContent = String(e); });
+}
+
+function showAuto(a) {
+  if (!a) { $('autoverdict').textContent = 'no measurement'; return; }
+  S.auto = a;
+  var best = null;
+  (a.candidates || []).forEach(function (c) {
+    if (c.accepted && (best === null || c.lab > best.lab)) best = c;
+  });
+  var chroma = best ? (', strongest colour distance ' + best.lab) : '';
+  if (a.verdict === 'measured') {
+    $('autoverdict').textContent = 'dx = ' + a.dx + ' px (spread ' + a.spread +
+      ' px over ' + a.n_accepted + ' candidates)';
+    $('autoadopt').style.display = '';
+  } else if (a.verdict === 'void') {
+    $('autoverdict').textContent = 'void — the control corridors measured too';
+    $('autoadopt').style.display = 'none';
+  } else {
+    $('autoverdict').textContent = 'no measurement published';
+    $('autoadopt').style.display = 'none';
+  }
+  $('autodetail').textContent = (a.remedy || '') +
+    ' [seam ' + a.n_accepted + '/' + a.n_candidates + ', controls ' +
+    a.control_accepted + chroma + ']';
+}
+
 function loadFrame(res) {
   var v = res.version, n = 0;
   S.imgs = {};
@@ -2237,6 +2396,16 @@ function init() {
   syncControls();
   $('aim').addEventListener('click', aim);
   $('snap').addEventListener('click', snap);
+  $('auto').addEventListener('click', autoMeasure);
+  $('autoadopt').addEventListener('click', function () {
+    var a = S.auto;
+    if (!a || a.verdict !== 'measured' || a.dx === null) return;
+    // Flat, deliberately: the measurement establishes one dx at the rows the
+    // target occupied. Shaping it is the operator's job, which is what the
+    // curve editor is for.
+    setAnchors(S.anchors.map(function (p) { return [p[0], a.dx]; }),
+      'proposed by the automatic measurement, dx=' + a.dx + ' px');
+  });
   $('browse').addEventListener('click', browse);
   $('open').addEventListener('click', openFrame);
   $('save').addEventListener('click', save);
@@ -2356,11 +2525,24 @@ __BANNER__
 <div class="dock">
   <button class="btn btn-ghost" id="aim">Aim</button>
   <button class="btn" id="snap">Snap</button>
+  <button class="btn btn-ghost" id="auto">Auto</button>
   <span class="st" id="dockstate">no frame loaded</span>
 </div>
 
 <div class="grid">
 <div class="col">
+
+  <div class="panel" id="autopanel" style="display:none">
+    <h2 class="sec">Automatic <span class="accent">measurement</span></h2>
+    <p class="hint">Candidates are picked by <em>colour</em> distance from the
+      pitch, never by what they are &mdash; a shirt, a chair, a car, a cone and a
+      ball all qualify; grass does not. The same fit runs at control corridors
+      either side of the seam, where the answer must be nothing; if they measure
+      too, no number is published.</p>
+    <div id="autoverdict" class="st"></div>
+    <div id="autodetail" class="hint"></div>
+    <button class="btn btn-ghost" id="autoadopt" style="display:none">Use this curve</button>
+  </div>
 
   <div class="panel" id="scenepanel">
     <h2 class="sec">Where the seam <span class="accent">falls</span></h2>

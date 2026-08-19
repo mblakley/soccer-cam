@@ -3960,3 +3960,47 @@ truncation-framed question) -> `phase_game_start.resolve_truncated_start`: trim 
 signals (~min); a follow-up can cache the phase_detect-step signals for an instant re-fuse.
 **Still to do:** a "still playing" END-task tap for `truncated_end`, and a truncated toggle in the T2
 app for the confident-but-truncated games that never get the walk (05.09 / 06.06-Fairport).
+
+---
+
+## EXP-STITCH-01: class-agnostic seam echo — grey fails, chroma works, automation does not yet (2026-08-19)
+
+**Goal (Mark):** an operator "Auto" button measuring the stitch misregistration
+from *whatever* is at the seam — person, car, chair, field marking — with no
+detector for any object class.
+
+**Instrument validated first.** Synthetic `a`=0.5, `d`=18 injected into real
+grass from the GT frames is recovered at the correct lag in 6/6 bands, 0.23–0.57
+vs clean-control 0.03–0.09.
+
+**Grey-level echo — negative, fails its null:**
+- GT frame 1104 (ball at x=3846 visibly doubled, required 17–19 px): full-height
+  band×lag map at the seam statistically identical to ±400 controls (0.03–0.06,
+  scattered lags). A tight window **on the doubled ball** reads 0.029–0.058 vs
+  controls 0.049–0.076.
+- Motion-isolated (temporal-median) variants: seam z = +0.04 vs controls.
+  Blob-restricted ACF gives a systematic lag 9–11 everywhere — it measures blob
+  **width**.
+- 40 archived frames, many placements: seam median +0.050/p90 +0.095 vs control
+  median +0.039/p90 +0.074 → **seam ÷ control p90 = 0.68**. The one 10× outlier
+  is **two players standing 16 px apart**, confirmed by eye.
+
+**Chroma — positive.** Excluding L (mown grass is a luminance texture), target
+vs grass separates **9.7–13.3×**, and vs worst foreground grass **6.6–8.7×**
+(with L: 3.9× and 1.35×). Frame 1104's chroma profile shows two lobes, ~45 at
+−14 px and ~33 at +3 px with a dip between → separation ~17 px, ratio ~0.45.
+Two-copy fit on those rows: **d = 18.0, gain 1.99**, against gain 1.14/1.19 for
+frames 1088/1120 and 1.06–1.12 for four control corridors. `a` is predicted from
+geometry (`a_pred` = 0.086 for the 1088 ball), making those refusals geometric.
+
+**Automation — not yet reliable.** Chroma ranking prefers a walking person over
+the ball on frame 1104; its bands vote 21–35 px, several pinned at the `D_MAX`
+grid edge, and a loose gate published the median **25.5 px against 17–19**. The
+disagreement is physical — the mesh nulls the ground plane, so disparity scales
+with height, and a walking figure disagrees with itself.
+
+**Shipped:** `vpe/seam_echo.py` + `POST /stitch/auto`, proposing or refusing,
+never applying; null baked into `measure()` (0/325 control candidates accepted
+vs 12–18 at the seam on the same archive frames); chroma reported per candidate.
+Every hand-verified case refuses and says what would fix it: a flat single-height
+target. Full write-up: `reolink-firmware-patching/docs/STITCH_CALIBRATION.md` §15.

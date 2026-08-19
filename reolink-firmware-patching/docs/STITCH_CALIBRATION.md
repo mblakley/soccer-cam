@@ -1189,10 +1189,125 @@ Not fixed here — this branch is design only — but they are real, reproduced,
    remains unmeasured on this unit. Answering it needs the deliberate target of §10 step 4, or the
    pre-stitch source images of question 1 — which would turn this from an extrapolation problem into
    a direct registration one and is now the highest-value lead in the document for this reason too.
-7. **Is there anything to correct on outdoor footage at all?** 52 of 96 archived frames sit below the
-   SSR noise floor **[M]**. SSR saturates past ~4 px so this is not proof of sub-pixel registration,
-   but before more effort goes into Workflow A it is worth establishing whether the far-field seam on
-   a tripod-mounted unit is misregistered by an amount detection cares about.
+7. ~~**Is there anything to correct on outdoor footage at all?**~~ **Answered, mostly "no" — §15.**
+   52 of 96 archived frames sat below the SSR noise floor **[M]**; §15 adds an independent instrument
+   that says the corridor at large carries no ghost on 39 of 40 placements, and explains why.
+
+---
+
+## 15. Auto-measure: what works, what does not, and the evidence for both
+
+Attempted 2026-08-19. **Outcome: the mechanism is established and shipped as an
+instrument (`vpe/seam_echo.py`); the fully automatic path is not yet reliable and
+therefore refuses rather than publishing.** The goal was an operator "Auto"
+button that reads `dx` off whatever happens to be standing in the seam, with no
+detector for any object class.
+
+### 15.1 Grey-level echo estimation fails its null — and the instrument is sound
+
+Inside the blend `s(x) = a·b(x) + (1−a)·b(x−d)` for whatever `b` is there, so a
+2-tap echo has an autocorrelation peak at lag `d` of height
+`a(1−a)/(a²+(1−a)²)` — 0.5 at `a`=0.5, independent of `b`. Estimator: horizontal
+gradient → per-row normalised autocorrelation → row-average → median-detrend in
+lag → peak.
+
+Injecting a synthetic ghost (`a`=0.5, `d`=18) into **real grass from these very
+frames** recovers lag 18 in 6/6 row bands at 0.23–0.57, against clean-control
+0.03–0.09. The instrument is not the problem.
+
+On real footage it is nonetheless flat:
+
+- Frame 1104 (`heat__2026.06.06_vs_Fairport_away`, ball at x=3846 visibly two
+  copies, required `d` = 17–19): full-height band×lag map at the seam is
+  statistically identical to controls at ±400 px; peaks 0.03–0.06, scattered
+  lags. A tight grey-level window **on the doubled ball itself** reads
+  0.029–0.058 against controls at 0.049–0.076.
+- 40 archived frames, many placements, gated by the calibrated
+  `vertical_structure`: seam median +0.050 / p90 +0.095 against control median
+  +0.039 / p90 +0.074 — **seam median ÷ control p90 = 0.68**, i.e. the seam sits
+  *below* its own controls. The single 10× outlier was checked by eye and is
+  **two players standing 16 px apart**, both sharp — the same "measured the
+  wrong thing" failure as the four detector passes.
+
+**Why:** in grey level a window on the seam is ~33 px of ghosted ball against
+~60 px of high-gradient **unghosted** grass, and the grass wins. Averaging more
+rows and frames averages more unghosted pixels, so scale does not rescue it.
+
+### 15.2 Colour changes the answer
+
+Grass has enormous luminance texture and almost no colour distinctiveness, which
+is why every gradient-energy gate let it through. Measured on the hand-verified
+frames, **chroma** distance (Lab a,b — L deliberately excluded, since mown grass
+*is* a luminance texture) from the local pitch colour:
+
+| | target | same-row grass | worst foreground grass |
+|---|---|---|---|
+| chroma distance p95 | 18.8–27.4 | 1.4–2.8 | 2.8–3.2 |
+| ratio to target | — | **9.7–13.3×** | **6.6–8.7×** |
+
+Keeping L in the distance collapses those ratios to 3.9× and 1.35×. In the
+chroma channel the grass falls to ~0 and the object's two copies are the only
+signal left. The ghost is then plainly legible: frame 1104's profile shows two
+lobes, ~45 at −14 px and ~33 at +3 px with a dip between, i.e. **separation ~17
+px at an amplitude ratio near 0.45** — matching the hand-verified 17–19 px and
+`a` = 0.451. A two-copy fit on those rows returns **d = 18.0** with the two-copy
+model halving the residual against one lobe (gain 1.99), while the same fit on
+frame 1088's ball (106 px out), frame 1120's ball, and four control corridors
+gains only 1.06–1.19.
+
+**`a` is predicted, not fitted.** `a(x) = 0.5 − (x − seam)/(2·blend_w)`, so a
+ball 106 px out sits at `a_pred` = 0.086 — an 8.6% ghost, which nothing should
+be believed on. (An earlier two-copy fit reported "separation 16.1 px" there,
+where the truth is 0.) Confining candidates to `a_pred` ∈ [0.29, 0.71] makes
+that a geometric refusal rather than a statistical one.
+
+### 15.3 What is still not reliable — the automatic path
+
+Candidate selection ranks by chroma and, on frame 1104, prefers a **walking
+person** over the ball. Its bands vote `d` = 21, 24, 28, 31, 32, 33, 34, 35,
+several pinned near the search-grid edge. A loose agreement gate published their
+median, **25.5 px, where the hand-verified answer is 17–19**. That is the single
+most important negative result here and the reason `MAX_SPREAD` is tight.
+
+The disagreement is physical, not noise. The factory mesh nulls the **ground
+plane** — grass, painted lines and feet are registered, which is what §15.1 and
+the SSR noise floor both say — so residual disparity scales with **height above
+the ground**. A walking figure is therefore not one measurement: boots, shorts
+and head sit at different heights and legitimately disagree. Two consequences:
+
+1. **Band agreement is not guaranteed even for a genuine target**, so it cannot
+   be used as the sole discriminator without also constraining target height.
+2. A per-row `dx(y)` shear cannot represent the residual anyway — at one row the
+   ground and a person's head need different `dx`. That is stronger than §12's
+   list of things the mesh does not fix.
+
+### 15.4 What would make it reliable
+
+- **A single-height target**: a board, a sign, a cone — something flat and
+  vertical whose whole extent sits at one height above the ground. The remedy
+  text says so. A person is the wrong calibration target for this measurement
+  even though they are the right one for the human-in-the-loop workflow.
+- **Widen and refine the `d` search** (fits pinning at `D_MAX` = 36 are not
+  measurements) and estimate `d` per row band rather than pooling.
+- **§14 question 1 remains the clean lead.** `VIDEOPROC 2` out port 1 (256×2160)
+  or `stitch_ori_snap` would expose the two contributions *separately*, turning
+  this from echo estimation under an unknown mixture into direct registration.
+
+### 15.5 What shipped
+
+`vpe/seam_echo.py` and `POST /stitch/auto`. The null is built into `measure()`
+and cannot be skipped: the identical fit runs at control corridors either side
+of the seam, *pretending the seam is there* (otherwise `a_pred` would refuse
+them for free and the null would be vacuous), and the seam must clear the
+controls by `NULL_MARGIN`. Chroma distance is reported on every candidate, so a
+reviewer can see the estimator ran on something actually distinct from the
+pitch — the audit trail the previous four passes lacked. On the archive the fair
+null is clean: 0 of 325 control candidates accepted against 12–18 at the seam on
+the same frames.
+
+On every hand-verified case the shipped path **refuses** and says what would fix
+it. It proposes; it never applies. Applying still goes through
+`apply_calibration()` via `/stitch/apply`, unchanged.
 
 ---
 
@@ -1223,9 +1338,9 @@ Seam profile from `snap.jpg` (numpy):
 
 ```python
 band = gray[300:2150]
-cm   = band.mean(axis=0)                          # row-independent = photometric
-res  = band - cm[None, :]                         # structural
-E    = (np.diff(res, axis=1) ** 2).mean(axis=0)   # detrended gradient energy per column
+cm = band.mean(axis=0)  # row-independent = photometric
+res = band - cm[None, :]  # structural
+E = (np.diff(res, axis=1) ** 2).mean(axis=0)  # detrended gradient energy per column
 # fit log E quadratically over x in [3328,3712) u (3968,4352]; SSR = mean(E/fit) over [3712,3968]
 ```
 
