@@ -123,14 +123,14 @@ def check(cmd: str) -> None:
                 )
 
 
-def _send(
+def _send_bytes(
     cmd: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, timeout: int = 40
-) -> str:
-    """Put `cmd` on the wire and return its output. NO refusal checks.
+) -> bytes:
+    """Put `cmd` on the wire and return its output as raw bytes. NO refusal checks.
 
-    Private. Every caller from outside this module goes through `sh()`, which
-    checks first; the only other user is the override pair below, which sends
-    two fixed strings and no free-form input.
+    Private. Every caller from outside this module goes through `sh()` or
+    `sh_bytes()`, which check first; the only other user is the override pair
+    below, which sends two fixed strings and no free-form input.
     """
     s = socket.create_connection((host, port), timeout=timeout)
     try:
@@ -147,7 +147,13 @@ def _send(
             pass
     finally:
         s.close()
-    return b"".join(chunks).decode(errors="replace")
+    return b"".join(chunks)
+
+
+def _send(
+    cmd: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, timeout: int = 40
+) -> str:
+    return _send_bytes(cmd, host, port, timeout).decode(errors="replace")
 
 
 def sh(
@@ -160,6 +166,22 @@ def sh(
     """
     check(cmd)
     return _send(cmd, host, port, timeout)
+
+
+def sh_bytes(
+    cmd: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, timeout: int = 40
+) -> bytes:
+    """`sh()` without the decode, for retrieving a binary file with `cat`.
+
+    `cat` through this shell is binary-safe in both directions -- a 16.6 MB
+    transfer came back with an exact md5 -- and the device has no `base64`, so
+    raw `cat` is the retrieval path rather than an encoding. Decoding it as text
+    would corrupt every byte that is not valid UTF-8, which for an image plane
+    is most of them. Refusal checks are identical to `sh()`; only the return
+    type differs.
+    """
+    check(cmd)
+    return _send_bytes(cmd, host, port, timeout)
 
 
 def hold_recording_override(

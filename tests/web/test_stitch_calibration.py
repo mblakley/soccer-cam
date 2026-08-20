@@ -31,6 +31,7 @@ from video_grouper.web import stitch_calibration as sc
 VPE_DIR = Path(__file__).resolve().parents[2] / "reolink-firmware-patching" / "vpe"
 sys.path.insert(0, str(VPE_DIR))
 
+import seam_layers  # noqa: E402
 import seam_metric  # noqa: E402
 import seam_vertical  # noqa: E402
 
@@ -187,6 +188,7 @@ def client(tmp_path, calls, monkeypatch):
             "metric": seam_metric,
             "vertical": seam_vertical,
             "camera": _fake_camera(calls),
+            "layers": seam_layers,
             "errors": [],
         }
     )
@@ -225,8 +227,15 @@ def test_page_renders_and_states_the_constraints_it_must_state(client):
     # The two things the design says must be visible in the interface, not
     # merely true of the code.
     assert "already a mixture" in body, "the fused-JPEG caveat must be UI text"
-    assert "the window is inference" in body.lower()
     assert "camera can only move the left" in body.lower()
+    # The caveat is now scoped rather than blanket: it applies to the fused
+    # view and is explicitly lifted for the layer pair, which really is two
+    # separated sensors. Both halves of that have to be UI text -- a caveat
+    # that outlived its cause would send an operator to the weaker surface.
+    low = body.lower()
+    assert "these views are inference" in low
+    assert "the layer panel above is not" in low
+    assert "does not have this limitation" in low
 
 
 def test_the_page_is_built_for_the_phone_that_will_actually_run_it(client):
@@ -848,6 +857,7 @@ def test_a_non_reolink_camera_is_refused_with_a_reason(tmp_path, calls):
             "metric": seam_metric,
             "vertical": seam_vertical,
             "camera": _fake_camera(calls),
+            "layers": seam_layers,
             "errors": [],
         }
     )
@@ -859,3 +869,115 @@ def test_a_non_reolink_camera_is_refused_with_a_reason(tmp_path, calls):
     assert r.status_code == 400
     assert "dual-lens" in r.json()["detail"]
     sc._toolkit_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# The two-layer alignment surface
+# ---------------------------------------------------------------------------
+
+
+def test_the_layer_pair_is_served_with_its_panorama_columns(client):
+    """The descriptor IS the contract with the browser, so pin its shape."""
+    r = client.post("/stitch/layers", json={"source": "synthetic"})
+    assert r.status_code == 200, r.text
+    d = r.json()["layers"]
+    # Where the layers live, not how they were obtained.
+    assert d["left"]["x0"] == d["right"]["x0"] == 3776
+    assert d["overlap"] == {"x0": 3776, "x1": 3904, "w": 128}
+    assert d["seam_x"] == 3840
+    assert d["height"] == 2160
+    # ...and that a drag on them means something.
+    assert d["authoritative"] is True
+    assert d["space"] == "panorama"
+    assert d["exact"] is True
+    # served window is reported separately, because for a wider source it
+    # will not equal the layer's full extent.
+    assert d["left"]["served"]["w"] == 128
+
+
+def test_layers_are_png_so_the_difference_view_is_honest(client):
+    """JPEG ringing at the edges being aligned would read as residual."""
+    client.post("/stitch/layers", json={"source": "synthetic"})
+    for side in ("left", "right"):
+        r = client.get(f"/stitch/layer.png?side={side}")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/png"
+        assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+        img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_UNCHANGED)
+        assert img.shape == (2160, 128)
+
+
+def test_the_layer_pair_round_trips_without_losing_a_grey_level(client):
+    """Lossless, checked against the source rather than asserted."""
+    r = client.post("/stitch/layers", json={"source": "synthetic"})
+    assert r.status_code == 200
+    served = cv2.imdecode(
+        np.frombuffer(client.get("/stitch/layer.png?side=left").content, np.uint8),
+        cv2.IMREAD_UNCHANGED,
+    )
+    truth = seam_layers.synthetic(
+        dx=6.0, roll=12.0
+    ).left  # same seed, same construction
+    assert np.array_equal(served, truth)
+
+
+def test_a_registration_number_comes_back_with_the_pair(client):
+    r = client.post("/stitch/layers", json={"source": "synthetic"})
+    reg = r.json()["layers"]["registration"]
+    assert reg["mad"] is not None and reg["n"] == 2160 * 128
+    assert -1.0 <= reg["ncc"] <= 1.0
+
+
+def test_an_unknown_layer_source_is_refused(client):
+    r = client.post("/stitch/layers", json={"source": "wishful"})
+    assert r.status_code == 400
+    assert "wishful" in r.json()["detail"]
+
+
+def test_the_file_source_needs_a_path_and_says_which_sources_were_tried(client):
+    r = client.post("/stitch/layers", json={"source": "file"})
+    assert r.status_code == 502
+    assert "path" in r.json()["detail"]
+
+
+def test_serving_a_layer_before_pulling_one_is_a_404(client):
+    assert client.get("/stitch/layer.png?side=left").status_code == 404
+
+
+def test_state_carries_the_layer_descriptor_for_a_reloading_page(client):
+    client.post("/stitch/layers", json={"source": "synthetic"})
+    st = client.get("/stitch/state").json()
+    assert st["layers"]["overlap"]["w"] == 128
+    assert st["layers_version"] == 1
+
+
+def test_sensor_views_are_served_as_context_and_never_as_authoritative(
+    client, monkeypatch
+):
+    """The whole-lens views must not be mistakable for the alignment surface."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (3840, 2160), "black").save(buf, format="JPEG")
+    blob = buf.getvalue()
+
+    monkeypatch.setattr(
+        seam_layers,
+        "capture_sensor_views",
+        lambda host, **kw: seam_layers.SensorViews(
+            left=blob, right=blob, width=3840, height=2160, stamp="20260819191557000"
+        ),
+    )
+    r = client.post("/stitch/sensors", json={})
+    assert r.status_code == 200, r.text
+    d = r.json()["sensors"]
+    assert d["authoritative"] is False
+    assert d["space"] == "sensor"
+    assert d["width"] == 3840
+    # and no panorama mapping is offered anywhere in the payload
+    assert "overlap" not in d and "seam_x" not in d
+    img = client.get("/stitch/sensor.jpg?side=left")
+    assert img.status_code == 200
+    assert img.headers["content-type"] == "image/jpeg"
