@@ -1012,10 +1012,16 @@ That last one is what makes the two workflows genuinely one tool: the human is d
 objective the automated solver optimises, so their output is directly comparable and directly
 mergeable.
 
-**One honesty caveat, stated in the UI.** In a fused JPEG the blend window is already mixed, so modes
-1, 2 and 4 operate on *extrapolations from the shoulders*, not on separated layers. They show what
-registration implies, not ground truth inside the window. If the pre-stitch snapshot path of §9.1
-turns out to be reachable, these modes become exact and the caveat is deleted.
+**One honesty caveat, stated in the UI — now scoped, not deleted.** In a fused JPEG the blend window
+is already mixed, so modes 1, 2 and 4 operate on *extrapolations from the shoulders*, not on
+separated layers. They show what registration implies, not ground truth inside the window.
+
+This section originally said: *"If the pre-stitch snapshot path of §9.1 turns out to be reachable,
+these modes become exact and the caveat is deleted."* **It is reachable — see §17.** The caveat is
+therefore *scoped to the fused view* rather than removed outright, because the fused view still
+exists and is still an extrapolation. The UI says both halves: the fused panel keeps its caveat and
+points at the layer panel; the layer panel states that its overlay, difference, anaglyph and blink
+are true separated layers.
 
 **Transmit.** One "Apply", which does exactly what `correction_owner` says: `SetStitch` over HTTP for
 scalars; the §6.2 push plus §7 install for the mesh; nothing at all for downstream. Then it
@@ -1506,3 +1512,203 @@ Measured on the live frame: transition centred x ≈ 3840–3845; derivative ene
 over x ∈ [3812, 3868]; raw SSR 3.29, detrended 3.19; synthetic-disparity response tabulated in §9.2.
 The frame is an indoor IR scene at ~0.3 m against an 8 m stitch setting, so its absolute values are a
 mechanism check, **not** a field baseline.
+
+---
+
+## 17. The pre-blend layer pair — the caveat's cause, removed (2026-08-19)
+
+§11 promised that if the pre-stitch snapshot path became reachable, blink/anaglyph would stop being
+extrapolations. It is reachable. This section records what it is, what it is *not*, and how the two
+were kept from being confused.
+
+### 17.1 What was found
+
+**`VIDEOPROC 2 out[1]` (ISF path `0x00930001`) carries two separable 128×2160 views of the same
+overlap region** — the two sensors, un-blended, linear, already resampled into the panorama's output
+frame **[M]**. With `L = strip[:, 0:128]` and `R = strip[:, 128:256]`:
+
+```
+panorama[:, 3776+k] = (1 - w_k)*L[:,k] + w_k*R[:,k]        k = 0..127
+```
+
+`aL + aR = 1.000` at every one of the 128 columns, the ramp is monotone, the crossover is exactly at
+panorama x = 3840, and reconstruction error is **1.56 grey levels**. The blend band is panorama
+columns **3776–3903**.
+
+Two consequences:
+
+1. **The pair is pre-rectified.** An L-to-R displacement is residual disparity *in output pixels*.
+   It converts straight to `dx_anchors` — no lens model, no homography, no rescale. This is what
+   makes dragging the layers a calibration rather than a picture.
+2. **Blink, anaglyph and difference on this pair are exact**, not inference. §11's caveat is
+   accordingly scoped to the fused view rather than deleted, because the fused view still exists.
+
+### 17.2 What the full-resolution per-sensor frames are — and are not
+
+The vendor's own snap is reachable with no upload, no build and no login:
+
+```sh
+export LD_LIBRARY_PATH=/lib:/usr/lib:/usr/local/lib:/mnt/app
+/mnt/app/rpctool -s -t SNAP -c 13010 -m 02000000000000000000000000000000
+sleep 5; ls -la /mnt/tmp/*.jpg
+```
+
+Message **13010**, not 13003 (which hardcodes a task class that can only build `yuv_snap`). The
+parameter must be exactly 32 hex characters or the call returns `-803`. It writes
+`/mnt/tmp/01_<ts>.jpg` and `02_<ts>.jpg`; an identical timestamp means a matched pair. Success is
+silent, failure prints `to:SNAP error,ret :-822`. `/mnt/tmp` is a 55 MB tmpfs, so the files are
+removed by exact path afterwards.
+
+**These frames are 3840×2160 [M]** — read from the SOF0 headers of three fresh captures, and
+independently re-read here on four archived files. Ten fresh pairs across two agents are ten for ten
+at 3840×2160. 3840 is the native width of `VIDEOPROC 0/1 out[0]`, the full sensor view, so these
+frames are in **sensor coordinates, before the warp**.
+
+An earlier reading reported 3904×2160 and argued that the extra 64 columns per side were the overlap
+margin (64 + 64 = the 128 blended columns). **That does not reproduce.** It also turned out not to
+matter, for the reason below: the real margin is an order of magnitude larger, so 64 columns was
+noise. Do not build on 3904.
+
+**The overlap in these frames is ~450–530 columns per sensor, and the sensor→panorama warp is
+measured.** AKAZE is useless on this 0.3 m desk scene, so the mapping was recovered by matching
+panorama patches into each sensor frame *outside* the blend band — where every panorama column has
+exactly one source and there is no depth term — then fitting a 2-D cubic (`OVL_fit_map2.py`,
+`OVL_fit_s{0,1}_{A,B}.npz` in `F:\archive\duo3_stitch\prestitch`).
+
+Re-verified here independently, by resampling each sensor frame through the fitted map and
+differencing against the real panorama **[M]**:
+
+| sensor | mean abs err | p90 | panorama x = 3840 maps to sensor column |
+|---|---|---|---|
+| s0 | **2.29** grey levels | 6.0 | 3311 — i.e. 529 columns of margin past the seam |
+| s1 | **4.83** grey levels | 11.0 | 453 — i.e. 453 columns of margin before it |
+
+So the earlier statement that "this project does not have" the warp is **withdrawn**: it does, to a
+few grey levels, and it is re-derivable in ~10 minutes from one panorama plus one pair with no
+camera state change.
+
+**What shipped, and why.** The full frames are served as **context** in this build —
+`authoritative: false`, no gesture binding — and the 128-px strip pair is the working surface. That
+is a scope choice, not a claim of impossibility:
+
+- the strip pair is **pre-rectified by the hardware**, so it carries no fit error term at all, while
+  the full-frame route adds ~3 px rms of fitted warp on top of whatever the operator is judging;
+- the fitted maps are archived artifacts on a server share, not something a camera-manager install
+  has, so a customer path would need them derived or shipped;
+- the fit is tied to the **current mesh**, and installing a calibration changes the mesh — so the
+  map is downstream of the very thing being edited, and that coupling needs thinking through rather
+  than wiring in at speed.
+
+**Next step, designed but not built:** resample each sensor frame through its fitted map into
+panorama columns and hand the result back as an ordinary `LayerPair` with `left_x0 ≈ 3311`-derived
+and `right_x0` per the map — roughly a 950-column overlap instead of 128. The type already supports
+layers with different origins and a derived overlap (§17.4), so this is a new source function and
+**no UI change**, which is exactly what that abstraction was for.
+
+### 17.3 Keeping the two apart, structurally
+
+Both surfaces could be described as "two images of the same scene from the two sensors", and that
+shared description is the trap. They are therefore **two types**, not one type with a flag:
+
+| | `LayerPair` | `SensorViews` |
+|---|---|---|
+| space | panorama output columns | sensor, pre-warp |
+| converts to `dx_anchors` | yes, directly | not without the fitted map (§17.2) |
+| carries `overlap` / `seam_x` | yes | **no such field exists** |
+| UI may bind a gesture | yes | refused |
+
+Note the second row is a statement about *this type*, not about what is knowable. A sensor frame
+resampled through the fitted map stops being `SensorViews` and becomes a `LayerPair` — which is the
+right outcome, because by then it genuinely is in panorama coordinates. The type boundary tracks the
+coordinate space, so it stays correct when the full-frame surface is wired.
+
+`applyToCurve()` checks `authoritative` off the server's descriptor before writing anything, so the
+refusal is enforced rather than captioned. A test asserts `SensorViews.to_api()` exposes no
+panorama mapping at all, so making it look alignable requires deleting a test that asks what warp
+justified it.
+
+### 17.4 The endpoint's contract is deliberately thin
+
+`POST /stitch/layers` returns **"a left layer, a right layer, and the panorama columns they
+correspond to"** and nothing else. Each layer carries its *own* origin (`left_x0`, `right_x0`); the
+overlap is *derived* as their intersection; the cross-fade centre is derived as the middle of that
+overlap. No caller writes 128 or 3776.
+
+This is not speculative generality — it was load-bearing within hours. Deriving the seam from the
+overlap rather than from half the packed buffer is the difference between 3840 and 3904, and a test
+pins it. A hypothetical full-frame layer pair with origins 0 and 3776 derives the same seam, 3840,
+from completely different inputs; that test exists and passes without any hardware.
+
+Sources today: `camera` (live pull), `file` (an archived dump), `synthetic` (below). Adding one is a
+new entry in `SOURCES` and no UI change.
+
+### 17.5 Why the interaction was developed against a synthetic pair
+
+**The archived real pair cannot be aligned, and no disparity should be quoted from it.** It is a desk
+scene at ~0.3 m: sensor 1 is defocused and blown out, sensor 0 sees near-black desk, and there is no
+shared texture — AKAZE gets **0 keypoints** on this exact pair, while the same matcher recovers an
+injected (17, 9) shift *exactly* on either layer against itself. The instrument is sound; the scene
+is not matchable. Measured on a fresh live pull here: `mad = 135.4`, `ncc = -0.57` — anti-correlated,
+which is what "one layer dark, the other blown out" looks like numerically.
+
+So `seam_layers.synthetic()` builds a textured pair with a known offset and roll, and the gestures
+are validated against it. Driven through the real handlers in a real browser at 390×844:
+
+| state | dx | roll | mean abs(L−R) | NCC |
+|---|---|---|---|---|
+| unaligned | 0 | 0 | 41.76 | 0.357 |
+| after a 42 px one-finger drag | **5.95** | 0 | 26.30 | 0.668 |
+| after a two-finger twist | 5.95 | **12.00** | **1.85** | **0.9985** |
+
+The drag was predicted to give 5.95 px (42 CSS px ÷ 7.06 px per panorama column) and gave 5.947. The
+twist was asked for +12 px of roll and gave 12.000. The built-in answer was `dx=6, roll=12`.
+
+### 17.6 Gestures write the curve, never a parallel model
+
+Translation adds a constant to every anchor; rotation adds a ramp linear in the row, which is
+exactly `dx = -θ·y`, the shape a relative lens roll makes (§2). Both go through the same
+`setAnchors()` the sliders and the typed anchor boxes use, and the layer view repaints from the same
+`draw()` entry point — so dragging a layer moves the numeric anchors, and typing an anchor moves the
+layers. **The anchor curve remains the only stored artifact.** Applying is unchanged: the existing
+`/stitch/apply` → `apply_calibration()` path, which is live-verified end to end.
+
+Two-finger pinch and twist come off the same two pointers, because on a touchscreen they are one
+motion. The rotation mapping is `Δroll = -Δφ·(H-1)·sgn`, isotropic scaling in the view being what
+makes an on-screen twist equal a source-space rotation.
+
+### 17.7 Transport notes that cost time
+
+- **The pull ioctl returns `-14` regardless; the real result is `arg[0]`.** `arg[4]` is a
+  **millisecond timeout**, not a flag word — 200 ms.
+- **out[1]'s Y address rotates over at least five buffers**, and an address from an earlier pull gets
+  *repurposed for another producer*. Dumping a remembered address yields a foreign buffer that still
+  looks like a plausible image. The pull and the dump therefore go out as **one shell invocation**
+  and the address never returns to Python before being used.
+- `pemdump` mmaps `/dev/mem`, so the offset must be **4 KB aligned**; unaligned silently produces no
+  file. The transfer is verified by *size*, not by exit status.
+- **`camsh.check()` refuses any command containing both `rm` and a glob metacharacter, scanning the
+  whole string.** The pull command contains `phys_Y[168]` in its `sed` expression, so combining it
+  with a cleanup `rm` trips the guard on a `[` nowhere near the `rm`. The guard is right to be blunt
+  about deletion; the *command* was split instead of the rule being weakened.
+- Retrieval is plain `cat` over tcp/2323, which is binary-safe in both directions. There is **no
+  `base64`** on the device. `camsh.sh_bytes()` exists for this — same refusal checks as `sh()`,
+  without the decode that would corrupt every non-UTF-8 byte.
+- Upload of the two helpers is one `wget` per file against a short-lived HTTP server on the host.
+
+### 17.8 A performance defect worth recording
+
+At a useful inspection zoom the layer view shows **tens of rows out of 2160**, and handing the whole
+image to `drawImage` asks the compositor to rasterise roughly 900×15000 px per band. This does **not**
+show up in the `drawImage` call's own timing — it returned in 5 ms — and then wedges the compositor
+hard enough that screenshots time out. Clipping is not enough: the clip bounds the *output*, the
+source rectangle bounds the *work*. `drawLayerInto()` now intersects each band with the visible row
+range and skips bands entirely off screen.
+
+### 17.9 Camera end-state (measured, after this work)
+
+- **Mesh md5 = `7ac18ef2988970d09fc4f5a36c6cd311`** (267,288 B) — the factory baseline, re-measured
+  after the live pulls.
+- `/mnt/tmp` restored to stock (208 KB); `isfpull2`, `pemdump`, the strip dump and both sensor JPEGs
+  removed by exact path.
+- No `/mnt/sda/anchors.txt`; `/mnt/sda/netstate` = `{log}` only, no override.
+- Read-only throughout: no `SetStitch`, no mesh write, no flash.

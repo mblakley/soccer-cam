@@ -63,18 +63,34 @@ is a *step* in this interface, not a tip, the tool checks whether they actually
 are in it before believing any number, and the reported residual leads with the
 subset of structures that can see `dx` at all.
 
-**The picture is a fused JPEG, so parts of it are already a mixture.** The
-camera blends the two sensors over a 256-px window, so nothing inside it is
-evidence about registration and there is no second layer to reveal. Blink and
-anaglyph therefore draw the *fitted* structures -- the same extrapolation the
-metric performs -- rather than smearing replicated pixels across the window.
-That is stated in the interface, not just here: an honest caveat in a source
-comment is a caveat nobody reads.
+**Two surfaces, and only one of them is a measurement.**
 
-What crosses the wire is two 640x2160 JPEG strips (~76 KB each), not the
-730 KB panorama: the operator only ever looks at the seam, and the browser can
-shear a strip with an affine transform far more smoothly than a server can
-re-render one per drag frame.
+*The layer pair* (`/stitch/layers`) is the two sensors' own contributions to the
+overlap, pulled *before* the camera cross-fades them. Both are already resampled
+into the panorama's output frame, so an L-to-R displacement measured there is
+residual disparity in output pixels and converts straight to `dx_anchors` -- no
+lens model, no homography, no rescale. Overlay, difference, anaglyph and blink on
+this pair are **exact**. This is where the gestures bind.
+
+*The fused `Snap`* is the older surface and is still a mixture over the 256-px
+blend window, so blink and anaglyph there draw the *fitted* structures -- the
+same extrapolation the metric performs -- rather than smearing replicated pixels
+across a window that has no second layer in it. That distinction is stated in the
+interface, not just here: an honest caveat in a source comment is a caveat nobody
+reads.
+
+*The whole-lens views* (`/stitch/sensors`) are a third thing and are **context
+only**. They come back at each sensor's native width, which puts them in sensor
+coordinates, before the warp; a displacement there is not a seam correction. The
+UI refuses to author a curve from them, on the descriptor's `authoritative` flag
+rather than on a caption.
+
+What crosses the wire for the fused view is two 640x2160 JPEG strips (~76 KB
+each), not the 730 KB panorama: the operator only ever looks at the seam, and the
+browser can shear a strip with an affine transform far more smoothly than a
+server can re-render one per drag frame. The layer pair is PNG, because the
+difference view subtracts one layer from the other and JPEG ringing at the very
+edges being aligned would read as residual that no drag can null.
 """
 
 from __future__ import annotations
@@ -164,6 +180,7 @@ def load_toolkit() -> dict[str, Any]:
         "camera": None,
         "vertical": None,
         "echo": None,
+        "layers": None,
         "errors": [],
     }
     vpe = _vpe_dir()
@@ -181,6 +198,7 @@ def load_toolkit() -> dict[str, Any]:
         ("vertical", "seam_vertical"),
         ("echo", "seam_echo"),
         ("camera", "stitch_apply"),
+        ("layers", "seam_layers"),
     ):
         try:
             out[key] = importlib.import_module(name)
@@ -245,6 +263,22 @@ class _Session:
     camera_cal: dict | None = None
     camera_cal_state: str = "idle"  # idle | running | ready | failed
     camera_cal_error: str = ""
+    # The two separated sensor layers over the overlap, and the panorama
+    # columns they occupy. Versioned independently of the fused snapshot
+    # because they arrive by a different door and neither implies the other:
+    # an operator can align layers with no `Snap` at all, and a `Snap` says
+    # nothing about the pair.
+    layers: dict[str, bytes] = field(default_factory=dict)
+    layers_desc: dict | None = None
+    layers_version: int = 0
+    layers_at: float = 0.0
+    layers_error: str = ""
+    # Whole-lens context views, in SENSOR coordinates. Held separately from
+    # `layers` and never merged into them: these cannot produce a calibration,
+    # and one dict holding both kinds is how that distinction would get lost.
+    sensors: dict[str, bytes] = field(default_factory=dict)
+    sensors_desc: dict | None = None
+    sensors_version: int = 0
 
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -313,6 +347,58 @@ def _encode_scene(frame: Any) -> bytes:
     if not ok:
         raise HTTPException(500, "could not encode the scene overview")
     return bytes(buf.tobytes())
+
+
+#: How much context outside the overlap to ship with each layer.
+#:
+#: The overlap is the only region where both layers exist, and therefore the
+#: only region a registration measure can read -- but an operator dragging a
+#: layer needs somewhere for content to come *from*, or the image runs out at
+#: the edge of the gesture. With the strip source there is no context to be had
+#: (the layers are exactly the overlap) and this clips to nothing. With full
+#: per-sensor frames it bounds the payload: 512 px per layer instead of 3840,
+#: without the UI knowing which source it got.
+LAYER_CONTEXT = 192
+
+#: PNG, not JPEG, and this is not a preference. The difference view subtracts
+#: one layer from the other, so JPEG ringing at exactly the high-contrast edges
+#: the operator is aligning to would show up as residual that no drag can null.
+#: A 128x2160 greyscale PNG is ~60 KB; the honesty is free.
+LAYER_MAX_SERVE_W = 1024
+
+
+def _encode_layers(pair: Any) -> tuple[dict[str, bytes], dict]:
+    """PNG each layer over a bounded window, and say which columns were sent.
+
+    Returns (images, descriptor). The descriptor is the whole contract with the
+    browser: per side, the panorama columns actually served. Nothing downstream
+    may assume those match the layer's full extent, because for a full-frame
+    source they will not.
+    """
+    import cv2
+    import numpy as np
+
+    lo, hi = pair.overlap
+    want_lo, want_hi = lo - LAYER_CONTEXT, hi + LAYER_CONTEXT
+    desc = pair.to_api()
+    out: dict[str, bytes] = {}
+    for side in ("left", "right"):
+        img = pair.left if side == "left" else pair.right
+        x0 = pair.left_x0 if side == "left" else pair.right_x0
+        sx0 = max(x0, want_lo)
+        sx1 = min(x0 + img.shape[1], want_hi)
+        if sx1 - sx0 > LAYER_MAX_SERVE_W:  # centre the cap on the overlap
+            mid = (lo + hi) // 2
+            sx0 = max(sx0, mid - LAYER_MAX_SERVE_W // 2)
+            sx1 = min(sx1, sx0 + LAYER_MAX_SERVE_W)
+        crop = np.ascontiguousarray(img[:, sx0 - x0 : sx1 - x0])
+        ok, buf = cv2.imencode(".png", crop)
+        if not ok:
+            raise HTTPException(500, f"could not encode the {side} layer")
+        out[side] = bytes(buf.tobytes())
+        desc[side]["served"] = {"x0": int(sx0), "x1": int(sx1), "w": int(sx1 - sx0)}
+    desc["context"] = LAYER_CONTEXT
+    return out, desc
 
 
 def _vertical_profile(frame: Any, seam_x: int) -> dict | None:
@@ -935,6 +1021,169 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
             headers={"Cache-Control": "no-store", "X-Stitch-Version": str(version)},
         )
 
+    @router.post("/stitch/layers")
+    def post_layers(body: dict = Body(default={})) -> JSONResponse:
+        """Fetch the two sensors' un-blended contributions to the overlap.
+
+        THE POINT OF THIS ENDPOINT. Everything else on this page works from the
+        fused panorama, where the two sensors are already mixed over the blend
+        window and cannot be pulled apart. This returns them *before* the
+        cross-fade: two real images of the same output columns, one per sensor.
+        Aligning them by hand is therefore direct measurement rather than
+        inference from the shoulders either side.
+
+        THE SOURCE IS DELIBERATELY NOT PART OF THE CONTRACT. The reply is
+        "a left layer, a right layer, and the panorama columns they correspond
+        to" and nothing else. Today `camera` lifts a 128-px pair out of one ISF
+        buffer. When the vendor's two-channel full-resolution snap becomes
+        reachable it is a third entry in `seam_layers.SOURCES` and *no change
+        here or in the UI*: the layers get wider, their origins stop coinciding,
+        the overlap stops being the whole image, and every one of those is
+        already a field the descriptor carries.
+
+        `auto` tries the camera and falls back to the archived dump, so the tool
+        comes up on a desk with no camera on the link.
+        """
+        toolkit = load_toolkit()
+        mod = toolkit["layers"]
+        if mod is None:
+            raise HTTPException(
+                503, "; ".join(toolkit["errors"]) or "seam_layers missing"
+            )
+        want = str(body.get("source") or "auto").strip().lower()
+        path = str(body.get("path") or "").strip()
+        attempts: list[str] = []
+
+        def _from_camera() -> Any:
+            cam = _reolink_camera(config_path)
+            return mod.capture(cam.device_ip)
+
+        def _from_file() -> Any:
+            if not path:
+                raise mod.LayerCaptureError(
+                    "the file source needs `path`: a raw dump of the packed pair"
+                )
+            return mod.load_file(path)
+
+        order: list[tuple[str, Any]]
+        if want == "auto":
+            order = [("camera", _from_camera)]
+            if path:
+                order.append(("file", _from_file))
+        elif want == "camera":
+            order = [("camera", _from_camera)]
+        elif want == "file":
+            order = [("file", _from_file)]
+        elif want == "synthetic":
+            order = [
+                (
+                    "synthetic",
+                    lambda: mod.synthetic(
+                        dx=float(body.get("dx", 6.0)),
+                        roll=float(body.get("roll", 12.0)),
+                    ),
+                )
+            ]
+        else:
+            raise HTTPException(400, f"unknown layer source {want!r}")
+
+        pair = None
+        for name, fn in order:
+            try:
+                pair = fn()
+                break
+            except Exception as exc:  # noqa: BLE001 -- every source fails differently
+                attempts.append(f"{name}: {type(exc).__name__}: {exc}")
+                logger.warning("STITCH: layer source %s failed: %s", name, exc)
+        if pair is None:
+            raise HTTPException(
+                502,
+                "could not obtain a layer pair. " + " | ".join(attempts),
+            )
+
+        images, desc = _encode_layers(pair)
+        desc["registration"] = pair.registration()
+        desc["attempts"] = attempts
+        with _session.lock:
+            _session.layers = images
+            _session.layers_version += 1
+            _session.layers_at = time.time()
+            _session.layers_desc = desc
+            _session.layers_error = " | ".join(attempts)
+            desc["version"] = _session.layers_version
+            payload = _state_payload()
+        payload["layers"] = desc
+        return JSONResponse(payload)
+
+    @router.get("/stitch/layer.png")
+    def get_layer(side: str = "left", v: int = 0) -> Response:
+        with _session.lock:
+            data = _session.layers.get(side)
+            version = _session.layers_version
+        if data is None:
+            raise HTTPException(404, "no layer pair pulled yet")
+        del v  # cache-buster only
+        return Response(
+            data,
+            media_type="image/png",
+            headers={"Cache-Control": "no-store", "X-Stitch-Layers": str(version)},
+        )
+
+    @router.post("/stitch/sensors")
+    def post_sensors(body: dict = Body(default={})) -> JSONResponse:
+        """Two whole-lens stills, so the operator can see what each lens sees.
+
+        CONTEXT ONLY, AND THE ENDPOINT SAYS SO IN ITS PAYLOAD. These come back
+        3840x2160 -- each sensor's native output width -- which puts them in
+        sensor coordinates, before the warp. A displacement measured here does
+        not convert to `dx_anchors`, because the warp between sensor space and
+        panorama space is not a thing this tool has.
+
+        They are worth serving anyway: two whole lens views tell an operator at
+        a tripod what each camera is actually pointed at, which the 128-px
+        overlap strip cannot. Orientation first, then precision work on the
+        pair that is pre-rectified. `authoritative: false` travels with every
+        response so the UI cannot accidentally treat them as the other thing.
+        """
+        toolkit = load_toolkit()
+        mod = toolkit["layers"]
+        if mod is None:
+            raise HTTPException(
+                503, "; ".join(toolkit["errors"]) or "seam_layers missing"
+            )
+        left, right = str(body.get("left") or ""), str(body.get("right") or "")
+        try:
+            if left and right:
+                views = mod.load_sensor_views(left, right)
+            else:
+                cam = _reolink_camera(config_path)
+                views = mod.capture_sensor_views(cam.device_ip)
+        except Exception as exc:  # noqa: BLE001 -- report, never fabricate
+            logger.warning("STITCH: sensor views failed: %s", exc)
+            raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
+        desc = views.to_api()
+        with _session.lock:
+            _session.sensors = {"left": views.left, "right": views.right}
+            _session.sensors_version += 1
+            desc["version"] = _session.sensors_version
+            _session.sensors_desc = desc
+            payload = _state_payload()
+        return JSONResponse(payload)
+
+    @router.get("/stitch/sensor.jpg")
+    def get_sensor(side: str = "left", v: int = 0) -> Response:
+        with _session.lock:
+            data = _session.sensors.get(side)
+            version = _session.sensors_version
+        if data is None:
+            raise HTTPException(404, "no sensor views pulled yet")
+        del v  # cache-buster only
+        return Response(
+            data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store", "X-Stitch-Sensors": str(version)},
+        )
+
     @router.post("/stitch/measure")
     def post_measure(body: dict = Body(default={})) -> JSONResponse:
         """Score a candidate curve against the metric the solver minimises.
@@ -1320,6 +1569,11 @@ def _state_payload() -> dict:
         "camera_cal": _session.camera_cal,
         "camera_cal_state": _session.camera_cal_state,
         "camera_cal_error": _session.camera_cal_error,
+        "layers": _session.layers_desc,
+        "layers_version": _session.layers_version,
+        "layers_at": _session.layers_at,
+        "sensors": _session.sensors_desc,
+        "sensors_version": _session.sensors_version,
     }
 
 
@@ -1446,6 +1700,29 @@ canvas { display:block; background:#000; image-rendering:pixelated; width:100%;
   touch-action:none; -webkit-user-select:none; user-select:none; }
 #zoomwrap, #viewwrap { border:1px solid var(--rule); position:relative; }
 #zoomwrap { margin-bottom:8px; }
+
+/* Two-layer alignment. The canvas inherits touch-action:none above, which is
+   what stops the browser claiming the drag and the two-finger twist for its
+   own scroll and zoom -- without it the primary gesture of this tool reaches
+   the page about one time in three. */
+#layercvwrap { border:1px solid var(--rule); position:relative; margin-bottom:6px; }
+#layercvwrap.locked { outline:2px solid var(--signal-warn); outline-offset:-2px; }
+/* 44 px, not the 38 the secondary mode buttons use: these are pressed with a
+   thumb, mid-task, while the other hand holds the phone. */
+#layermodes button, #layerpanel .btn-sm { min-height:44px; }
+.layerread { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 2px; }
+.lnum { flex:1 1 44%; min-width:120px; background:var(--bg-elev);
+  border:1px solid var(--rule); padding:8px 10px; }
+.lnum b { display:block; font-family:var(--display); font-size:23px; line-height:1.1;
+  font-weight:700; }
+.lnum span { font-family:var(--mono); font-size:10.5px; color:var(--text-mute);
+  letter-spacing:.03em; }
+.lnum.good b { color:var(--signal-on); }
+.lnum.good { border-color:var(--signal-on); }
+img.lens { display:block; width:100%; border:1px solid var(--rule); margin-bottom:8px;
+  background:#000; }
+.lenscap { font-family:var(--mono); font-size:10.5px; color:var(--text-mute);
+  letter-spacing:.06em; text-transform:uppercase; margin:2px 0 3px; }
 .modes { display:flex; gap:5px; flex-wrap:wrap; margin:9px 0 6px; }
 .modes button, .seg button {
   font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
@@ -1476,7 +1753,9 @@ label.row .lbl {
   display:flex; justify-content:space-between; align-items:baseline; gap:8px;
 }
 label.row .val { color:var(--accent); font-weight:600; }
-input[type=range] { width:100%; margin:2px 0 0; accent-color:var(--accent); height:38px; }
+/* 44 px: the slider is dragged with a thumb on a phone held one-handed, and
+   38 put it under the minimum target size at a 390 px viewport. */
+input[type=range] { width:100%; margin:2px 0 0; accent-color:var(--accent); height:44px; }
 input[type=number], input[type=text], select {
   background:var(--bg-input); color:var(--text); border:1px solid var(--rule);
   padding:9px 8px; font-family:var(--mono); font-size:15px; width:100%; min-height:42px;
@@ -1552,7 +1831,13 @@ var S = {
   metrics: null, baseline: null, quality: null, vertical: null,
   busy: false, pending: false, stale: false, scoredAt: null, netFails: 0,
   spanX: 256, grab: 'curve', narrow: true, retry: null,
-  auto: null, cameraCal: null
+  auto: null, cameraCal: null,
+  // Two-layer alignment. `layers` is the descriptor the server sent -- the
+  // panorama columns each layer occupies -- and everything drawn is derived
+  // from it, so a source with different geometry needs no change here.
+  layers: null, layerImgs: {}, layerMode: 'alpha', layerAlpha: 0.5,
+  layerGain: 4, layerSpan: 128, layerCx: 3840, layerCy: 1080,
+  layerReg: null, layerBest: null, layerBusy: false, layerPath: ''
 };
 // Geometry is taken from the frame the server actually fetched, never assumed.
 // These are only the pre-snapshot defaults.
@@ -1788,6 +2073,16 @@ function draw() {
 
   $('zoomlabel').textContent = 'rows ' + Math.round(top) + '-' + Math.round(top + zoomRows())
     + ' \u00b7 ' + (zoomScale()).toFixed(1) + 'x \u00b7 ' + Math.round(S.spanX) + ' px wide';
+
+  // The layer view is repainted from the SAME entry point, so it tracks the
+  // curve however the curve changed -- a drag here, a nudge button, the roll
+  // slider, a typed anchor, or a reset. One artifact, several lenses onto it.
+  var lc = $('layercv');
+  if (lc) { fitCanvas(lc, layerCssH()); drawLayers(); renderLayerLabel(); }
+}
+
+function layerCssH() {
+  return S.narrow ? Math.round(clamp(window.innerHeight * 0.42, 240, 460)) : 460;
 }
 
 // ---------------------------------------------------------------------------
@@ -2237,6 +2532,7 @@ function showCamera(c, thenInit) {
        (c.at_factory ? ' matches ' + c.factory_name : ''));
   $('camnote').textContent = c.note || '';
   $('camcurrent').disabled = !installed;
+  if ($('lcamcurrent')) $('lcamcurrent').disabled = !installed;
   drawCamProfile(c.profile);
   if (thenInit) {
     // Start from the camera, labelled as the camera's state rather than as an
@@ -2416,6 +2712,378 @@ function applyToCamera(dry) {
 }
 
 // ---------------------------------------------------------------------------
+// Two-layer alignment.
+//
+// This is the only view on the page that shows the two sensors SEPARATELY. The
+// rest of the page works from the fused panorama, where the blend window is
+// already a mixture and blink/anaglyph can only draw extrapolations from the
+// shoulders. Here both layers are real images of the same panorama columns,
+// captured before the cross-fade, so overlaying them IS the measurement.
+//
+// It authors nothing of its own. Every gesture lands in `S.anchors` through the
+// same `setAnchors` / `nudge` / `setRoll` the sliders use, so the curve stays
+// the single artifact and this view stays a lens onto it. Drag a layer here and
+// the numeric anchors below change; type an anchor below and the layers move.
+// ---------------------------------------------------------------------------
+
+// Geometry of the inspection view, in PANORAMA columns and rows. Isotropic on
+// purpose: a rotation gesture only reads correctly if x and y are at the same
+// scale, and this view exists to judge rotation.
+function layerGeo(c) {
+  var W = c.width, Hc = c.height;
+  var scale = W / S.layerSpan;
+  return {
+    left: S.layerCx - S.layerSpan / 2,
+    top: S.layerCy - (Hc / scale) / 2,
+    scale: scale, scaleY: scale,
+    rows: Hc / scale
+  };
+}
+
+// One layer, sheared by its share of the curve, in panorama coordinates.
+//
+// Same piecewise-linear decomposition as the fused view: each straight segment
+// of the anchor curve is one affine draw rather than 2160 per-row blits, which
+// is what keeps a drag at 60 fps on a phone with no round trip.
+function drawLayerInto(ctx, side, geo, opt) {
+  opt = opt || {};
+  var img = S.layerImgs[side], desc = S.layers && S.layers[side];
+  if (!img || !desc || !desc.served) return;
+  var sgn = signFor(side), x0 = desc.served.x0, bs = bands();
+  // Only the rows on screen. At a useful inspection zoom this view shows tens
+  // of rows out of 2160, and handing the whole image to drawImage asks the
+  // compositor to rasterise something like 900x15000 px per band -- which does
+  // not show up in the drawImage call's own timing (it returned in 5 ms) and
+  // then wedges the compositor. Clipping alone is not enough: the clip bounds
+  // the output, the source rectangle is what bounds the work.
+  var vTop = Math.max(0, Math.floor(geo.top) - 1);
+  var vBot = Math.min(img.height, Math.ceil(geo.top + geo.rows) + 1);
+  if (vBot <= vTop) return;
+  ctx.save();
+  ctx.globalAlpha = opt.alpha === undefined ? 1 : opt.alpha;
+  if (opt.composite) ctx.globalCompositeOperation = opt.composite;
+  for (var i = 0; i < bs.length; i++) {
+    var y0 = Math.max(bs[i][0], vTop), y1 = Math.min(bs[i][1], vBot);
+    if (y1 <= y0) continue;                     // band entirely off screen
+    var a = bs[i][2], b = bs[i][3];
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.beginPath();
+    ctx.rect(0, (y0 - geo.top) * geo.scaleY, ctx.canvas.width, (y1 - y0) * geo.scaleY);
+    ctx.clip();
+    // image column u, row v  ->  panorama x = x0 + u + sgn*(a*v + b)
+    //                       ->  canvas  x = (panx - geo.left) * geo.scale
+    ctx.setTransform(
+      geo.scale, 0,
+      geo.scale * sgn * a, geo.scaleY,
+      geo.scale * (x0 + sgn * b - geo.left), -geo.scaleY * geo.top
+    );
+    // Source and destination are the same rectangle in image space; the
+    // transform above puts it on screen.
+    ctx.drawImage(img, 0, y0, img.width, y1 - y0, 0, y0, img.width, y1 - y0);
+    ctx.restore(); ctx.save();
+    ctx.globalAlpha = opt.alpha === undefined ? 1 : opt.alpha;
+    if (opt.composite) ctx.globalCompositeOperation = opt.composite;
+  }
+  ctx.restore();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+// Tint one layer into a single colour channel, for the anaglyph. Done on an
+// offscreen canvas because 'multiply' against the main canvas would pick up
+// whatever is already drawn there.
+var _tintCv = {};
+function tinted(side, colour, w, h, geo) {
+  var cv = _tintCv[side] || (_tintCv[side] = document.createElement('canvas'));
+  cv.width = w; cv.height = h;
+  var cx = cv.getContext('2d');
+  cx.setTransform(1, 0, 0, 1, 0, 0);
+  cx.clearRect(0, 0, w, h);
+  drawLayerInto(cx, side, geo, {});
+  cx.setTransform(1, 0, 0, 1, 0, 0);
+  cx.globalCompositeOperation = 'multiply';
+  cx.fillStyle = colour;
+  cx.fillRect(0, 0, w, h);
+  // keep the layer's own alpha, so outside-the-image stays transparent
+  cx.globalCompositeOperation = 'destination-in';
+  drawLayerInto(cx, side, geo, {});
+  cx.globalCompositeOperation = 'source-over';
+  return cv;
+}
+
+function paintLayers() {
+  var c = $('layercv');
+  if (!c) return;
+  var ctx = c.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, c.width, c.height);
+  if (!S.layers || !S.layerImgs.left || !S.layerImgs.right) {
+    ctx.fillStyle = '#5e616b';
+    ctx.font = '13px ui-monospace, monospace';
+    ctx.fillText(S.layerBusy ? 'pulling the layer pair…'
+      : 'no layer pair yet — press Pull layers', 10, 22);
+    return;
+  }
+  var geo = layerGeo(c), m = S.layerMode;
+
+  if (m === 'diff') {
+    // |L - R|. Registered content goes black; every misregistered edge lights
+    // up. The gain is there because a 1 px residual on a soft edge is a few
+    // grey levels and would otherwise be invisible on a phone in daylight.
+    drawLayerInto(ctx, 'left', geo, {});
+    drawLayerInto(ctx, 'right', geo, { composite: 'difference' });
+    if (S.layerGain > 1 && ('filter' in ctx)) {
+      var snap = document.createElement('canvas');
+      snap.width = c.width; snap.height = c.height;
+      snap.getContext('2d').drawImage(c, 0, 0);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.filter = 'brightness(' + S.layerGain + ')';
+      ctx.drawImage(snap, 0, 0);
+      ctx.filter = 'none';
+    }
+  } else if (m === 'anaglyph') {
+    // Left red, right cyan. Registered content reads neutral grey; anything
+    // out of register fringes red on one side and cyan on the other, and the
+    // direction of the fringe tells you which way to drag.
+    ctx.drawImage(tinted('left', '#ff0000', c.width, c.height, geo), 0, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(tinted('right', '#00ffff', c.width, c.height, geo), 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+  } else if (m === 'blink') {
+    // Motion is the most sensitive misalignment detector a human has, and
+    // unlike on the fused frame these really are the two layers alternating.
+    drawLayerInto(ctx, S.blink ? 'right' : 'left', geo, {});
+  } else {
+    // alpha: both at once, the baseline view. The layer ON TOP is the one the
+    // operator is moving -- fading the thing under your finger over a fixed
+    // reference is what makes a misregistration readable. So the top layer is
+    // `movingSide()`, which is the left half for the camera mesh and flips to
+    // the right for the downstream corrector, and the other half sits beneath
+    // it fully opaque. Only the top layer takes the opacity control; a second
+    // slider on the reference would only dim the thing you are aligning to.
+    var top = movingSide(), base = top === 'left' ? 'right' : 'left';
+    drawLayerInto(ctx, base, geo, {});
+    drawLayerInto(ctx, top, geo, { alpha: S.layerAlpha });
+  }
+
+  // Overlap bounds and the cross-fade centre, in panorama columns. Drawn from
+  // the descriptor, never from a constant -- with full-resolution layers these
+  // move and the drawing has to follow.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  var X = function (px) { return (px - geo.left) * geo.scale; };
+  var ov = S.layers.overlap;
+  if (ov && ov.w > 0) {
+    ctx.strokeStyle = 'rgba(148,163,184,.45)'; ctx.lineWidth = 1;
+    ctx.setLineDash([5, 5]);
+    [ov.x0, ov.x1].forEach(function (px) {
+      ctx.beginPath(); ctx.moveTo(X(px) + .5, 0); ctx.lineTo(X(px) + .5, c.height); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+  }
+  ctx.strokeStyle = 'rgba(251,146,60,.85)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(X(S.layers.seam_x) + .5, 0);
+  ctx.lineTo(X(S.layers.seam_x) + .5, c.height);
+  ctx.stroke();
+
+  // Where in the 2160 rows this window is sitting.
+  var track = 4, ty = (geo.top / H) * c.height, th = (geo.rows / H) * c.height;
+  ctx.fillStyle = 'rgba(255,255,255,.10)';
+  ctx.fillRect(c.width - track, 0, track, c.height);
+  ctx.fillStyle = 'rgba(34,197,94,.75)';
+  ctx.fillRect(c.width - track, ty, track, Math.max(3, th));
+}
+
+// The number that turns dragging into a task with an end.
+//
+// Computed in the browser, on the pixels actually on screen, so it responds to
+// the drag itself rather than to a round trip. Both layers are rendered into
+// offscreen buffers over the OVERLAP ONLY -- the one region where both have
+// content and a comparison means anything -- and compared where both are
+// opaque, so content sliding out of the window stops counting instead of
+// counting as black.
+var _regCv = {};
+function computeRegistration() {
+  if (!S.layers || !S.layerImgs.left || !S.layerImgs.right) return null;
+  var ov = S.layers.overlap;
+  if (!ov || ov.w <= 0) return null;
+  var W = Math.min(ov.w, 192), ROWS = 240;
+  var geo = { left: ov.x0, top: 0, scale: W / ov.w, scaleY: ROWS / H, rows: H };
+  var data = {};
+  ['left', 'right'].forEach(function (side) {
+    var cv = _regCv[side] || (_regCv[side] = document.createElement('canvas'));
+    cv.width = W; cv.height = ROWS;
+    var cx = cv.getContext('2d', { willReadFrequently: true });
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.clearRect(0, 0, W, ROWS);
+    drawLayerInto(cx, side, geo, {});
+    data[side] = cx.getImageData(0, 0, W, ROWS).data;
+  });
+  var a = data.left, b = data.right;
+  var n = 0, sa = 0, sb = 0, sad = 0;
+  for (var i = 0; i < a.length; i += 4) {
+    if (a[i + 3] < 250 || b[i + 3] < 250) continue;   // one layer absent here
+    n++; sa += a[i]; sb += b[i]; sad += Math.abs(a[i] - b[i]);
+  }
+  if (n < 64) return { mad: null, ncc: null, n: n };
+  var ma = sa / n, mb = sb / n, num = 0, va = 0, vb = 0;
+  for (var j = 0; j < a.length; j += 4) {
+    if (a[j + 3] < 250 || b[j + 3] < 250) continue;
+    var da = a[j] - ma, db = b[j] - mb;
+    num += da * db; va += da * da; vb += db * db;
+  }
+  var den = Math.sqrt(va * vb);
+  return { mad: sad / n, ncc: den > 0 ? num / den : null, n: n };
+}
+
+function renderLayerReadout() {
+  if (!$('layerread')) return;
+  var t = meanDx(), r = rollAmp();
+  var reg = S.layerReg;
+  var best = S.layerBest;
+  var html = '<div class="lnum"><b>' + (t >= 0 ? '+' : '') + t.toFixed(2)
+    + '</b><span>px translate</span></div>'
+    + '<div class="lnum"><b>' + (r >= 0 ? '+' : '') + r.toFixed(2)
+    + '</b><span>px rotate, top&rarr;bottom</span></div>';
+  if (reg && reg.mad !== null && reg.mad !== undefined) {
+    var better = (best !== null && best !== undefined && reg.mad <= best + 1e-9);
+    html += '<div class="lnum' + (better ? ' good' : '') + '"><b>' + reg.mad.toFixed(2)
+      + '</b><span>mean |L&minus;R|' + (better ? ' &mdash; best yet' : '') + '</span></div>'
+      + '<div class="lnum"><b>' + (reg.ncc === null ? '--' : reg.ncc.toFixed(4))
+      + '</b><span>correlation, 1.0 is perfect</span></div>';
+  }
+  $('layerread').innerHTML = html;
+}
+
+function refreshRegistration() {
+  S.layerReg = computeRegistration();
+  if (S.layerReg && S.layerReg.mad !== null) {
+    if (S.layerBest === null || S.layerReg.mad < S.layerBest) S.layerBest = S.layerReg.mad;
+  }
+  renderLayerReadout();
+}
+
+function drawLayers() {
+  paintLayers();
+  refreshRegistration();
+}
+
+function setLayerSpan(v) {
+  S.layerSpan = clamp(v, 16, 4096);
+  drawLayers();
+  renderLayerLabel();
+}
+function renderLayerLabel() {
+  var c = $('layercv'); if (!c || !S.layers) return;
+  var geo = layerGeo(c);
+  $('layerlabel').textContent =
+    'panorama x ' + Math.round(geo.left) + '-' + Math.round(geo.left + S.layerSpan)
+    + ' · rows ' + Math.round(geo.top) + '-' + Math.round(geo.top + geo.rows)
+    + ' · ' + geo.scale.toFixed(1) + '×';
+}
+
+function pullLayers(source) {
+  var body = { source: source || 'auto' };
+  if (S.layerPath) body.path = S.layerPath;
+  S.layerBusy = true;
+  $('layerstate').textContent = 'pulling the pre-blend pair…';
+  drawLayers();
+  fetch('/stitch/layers', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      S.layerBusy = false;
+      if (!res.ok) {
+        $('layerstate').innerHTML = '<span class="worse">'
+          + (res.j.detail || 'the pull failed') + '</span>';
+        drawLayers(); return;
+      }
+      applyState(res.j);
+      var d = res.j.layers;
+      S.layers = d;
+      S.layerBest = null;
+      // The curve's row space must match the layers' height. With no fused
+      // snapshot to take it from, the pair is the authority -- and a source
+      // whose layers are not 2160 rows tall must not silently author a curve
+      // addressing rows that do not exist.
+      if (!res.j.has_snapshot && d.height && d.height !== H) {
+        H = d.height;
+        S.anchors = S.anchors.map(function (p, i, all) {
+          return [i === all.length - 1 ? H - 1 : Math.round(p[0] * (H - 1) / 2159), p[1]];
+        });
+        S.cursorRow = Math.min(S.cursorRow, H - 1);
+        syncControls();
+      }
+      // Frame the overlap, centred on the cross-fade, at a zoom where a
+      // single pixel of misregistration is a visible step.
+      S.layerSpan = Math.max(32, d.overlap.w);
+      S.layerCx = d.seam_x;
+      S.layerCy = Math.round(d.height / 2);
+      var pending = 2;
+      ['left', 'right'].forEach(function (side) {
+        var img = new Image();
+        img.onload = function () {
+          S.layerImgs[side] = img;
+          if (--pending === 0) { drawLayers(); renderLayerLabel(); }
+        };
+        img.onerror = function () { if (--pending === 0) drawLayers(); };
+        img.src = '/stitch/layer.png?side=' + side + '&v=' + d.version;
+      });
+      var truth = d.truth
+        ? ' · built-in answer dx=' + d.truth.dx.toFixed(2)
+          + ' roll=' + d.truth.roll.toFixed(2)
+        : '';
+      $('layerstate').innerHTML = '<b>' + d.source + '</b> · ' + d.detail
+        + ' · overlap = panorama x ' + d.overlap.x0 + '-' + d.overlap.x1
+        + ' (' + d.overlap.w + ' px), cross-fade at ' + d.seam_x + truth;
+      $('layerattempts').textContent = (d.attempts && d.attempts.length)
+        ? 'fell back after: ' + d.attempts.join(' | ') : '';
+    }).catch(function (e) {
+      S.layerBusy = false;
+      $('layerstate').innerHTML = '<span class="worse">' + e + '</span>';
+      drawLayers();
+    });
+}
+
+// Whole-lens context. Two <img> and a caption -- no canvas, no gestures, no
+// curve. It exists so an operator can see what each lens is pointed at before
+// working a 128-px strip, and it is drawn plainly on purpose: anything that
+// looked like the alignment surface would invite a drag that cannot mean
+// anything in sensor coordinates.
+function pullSensors() {
+  $('sensorstate').textContent = 'asking the camera for a per-sensor pair…';
+  fetch('/stitch/sensors', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(S.sensorPaths || {})
+  }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) {
+        $('sensorstate').innerHTML = '<span class="worse">'
+          + (res.j.detail || 'the per-sensor snap failed') + '</span>';
+        return;
+      }
+      applyState(res.j);
+      renderSensors(res.j.sensors);
+    }).catch(function (e) {
+      $('sensorstate').innerHTML = '<span class="worse">' + e + '</span>';
+    });
+}
+
+function renderSensors(d) {
+  if (!d) return;
+  $('sensorwrap').style.display = '';
+  $('sensorL').src = '/stitch/sensor.jpg?side=left&v=' + d.version;
+  $('sensorR').src = '/stitch/sensor.jpg?side=right&v=' + d.version;
+  $('sensorstate').innerHTML = '<b>' + d.width + '&times;' + d.height + '</b> per sensor · '
+    + 'matched at ' + d.stamp + ' · <b class="worse">context only</b> — ' + d.why;
+}
+
+// ---------------------------------------------------------------------------
 // Gestures. Pointer Events, so one implementation serves a thumb and a mouse.
 // One finger is axis-locked -- across is the calibration, down is navigation --
 // and two fingers zoom. Nothing here touches the network.
@@ -2436,6 +3104,113 @@ function setSpan(v) {
   S.spanX = clamp(v, 48, 2 * STRIP);
   draw();
 }
+// Translate and rotate, both written into the anchor curve.
+//
+// A constant offset added to every anchor is a translation. A ramp that is
+// linear in y is a rotation -- `dx = -theta*y` is exactly the shape a relative
+// lens roll produces, which is why this tool models roll and not an arbitrary
+// warp. So a two-finger twist and the roll slider are the same edit arriving by
+// different routes, and both leave the curve as the only stored thing.
+function applyToCurve(before, dTranslate, dRoll, why) {
+  // A gesture may only author against a pair that is in PANORAMA output
+  // coordinates, because only there is a measured displacement already the
+  // correction. The whole-lens context views are in sensor coordinates, before
+  // the warp, and a drag on them would convert to nothing. Enforced rather
+  // than captioned: `authoritative` comes off the server's descriptor.
+  if (!S.layers || !S.layers.authoritative) {
+    $('curvewhy').textContent =
+      'That surface is context only — it is in sensor coordinates, before the '
+      + 'warp, so a displacement there is not a seam correction.';
+    return;
+  }
+  var mid = (H - 1) / 2;
+  setAnchors(before.map(function (p) {
+    return [p[0], p[1] + dTranslate + dRoll * (p[0] - mid) / (H - 1)];
+  }), why);
+}
+
+function pang(pts) {
+  var a = [];
+  pts.forEach(function (v) { a.push(v); });
+  return Math.atan2(a[1].y - a[0].y, a[1].x - a[0].x);
+}
+function angdiff(b, a) {
+  var d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+function bindLayerGestures(c) {
+  var pts = new Map(), one = null, two = null;
+  c.addEventListener('pointerdown', function (ev) {
+    try { c.setPointerCapture(ev.pointerId); } catch (e) { void e; }
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pts.size === 2) {
+      two = {
+        d: pdist(pts), ang: pang(pts), span: S.layerSpan,
+        before: S.anchors.slice()
+      };
+      one = null;
+      return;
+    }
+    if (pts.size !== 1) return;
+    one = {
+      x: ev.clientX, y: ev.clientY, mode: null,
+      before: S.anchors.slice(), cy: S.layerCy
+    };
+  });
+  c.addEventListener('pointermove', function (ev) {
+    if (!pts.has(ev.pointerId)) return;
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (two && pts.size >= 2) {
+      // Pinch and twist come off the same two fingers, because on a
+      // touchscreen they are one motion and forcing them into separate modes
+      // makes both feel broken.
+      var d = pdist(pts);
+      if (d > 6 && two.d > 6) S.layerSpan = clamp(two.span * two.d / d, 16, 4096);
+      var dphi = angdiff(pang(pts), two.ang);
+      // Screen y runs downward, so a clockwise twist is +dphi, and a rotation
+      // by phi displaces row y by -phi*(y-mid). The moving layer realises that
+      // through `sgn`, so the stored roll carries the sign back out.
+      var sgn = signFor(movingSide()) || 1;
+      applyToCurve(two.before, 0, -dphi * (H - 1) * sgn,
+        'rotated ' + (dphi * 180 / Math.PI).toFixed(2) + '°');
+      renderLayerLabel();
+      return;
+    }
+    if (!one) return;
+    var dx = ev.clientX - one.x, dy = ev.clientY - one.y;
+    if (!one.mode) {
+      if (Math.hypot(dx, dy) < 7) return;
+      one.mode = Math.abs(dx) >= Math.abs(dy) ? 'shift' : 'row';
+    }
+    var geo = layerGeo(c), rect = c.getBoundingClientRect();
+    var cssScale = geo.scale * (rect.width / c.width);   // CSS px per panorama px
+    if (one.mode === 'row') {
+      S.layerCy = clamp(one.cy - dy / cssScale, 0, H - 1);
+      drawLayers(); renderLayerLabel();
+    } else {
+      var sgn2 = signFor(movingSide()) || 1;
+      var moved = (dx / cssScale) * sgn2;
+      applyToCurve(one.before, moved, 0,
+        'layers dragged ' + (moved >= 0 ? '+' : '') + moved.toFixed(2) + ' px');
+    }
+  });
+  function release(ev) {
+    pts.delete(ev.pointerId);
+    if (pts.size < 2) two = null;
+    if (pts.size === 0) one = null;
+  }
+  c.addEventListener('pointerup', release);
+  c.addEventListener('pointercancel', release);
+  c.addEventListener('lostpointercapture', release);
+  c.addEventListener('wheel', function (ev) {
+    ev.preventDefault();
+    setLayerSpan(S.layerSpan * (ev.deltaY > 0 ? 1.12 : 0.89));
+  }, { passive: false });
+}
+
 function bindGestures(c, kind) {
   var pts = new Map(), start = null, pinch = null;
   function rowAt(ev) {
@@ -2530,7 +3305,13 @@ function surfaceChanged() {
     + 'downstream corrector rolls the right half. The stored curve is unchanged &mdash; '
     + 'only which half you see move, and the direction it moves, have flipped.';
   $('applywrap').style.display = $('owner').value === 'downstream' ? 'none' : '';
+  // The opacity slider always names the half it acts on, because which half is
+  // on top flips with the surface and a slider labelled for the wrong layer is
+  // worse than an unlabelled one.
+  var al = $('alphaLbl');
+  if (al) al.textContent = '(' + moving + ')';
   draw();
+  drawLayers();
 }
 
 function onResize() {
@@ -2551,19 +3332,55 @@ function init() {
   $('apply').addEventListener('click', function () { applyToCamera(false); });
   $('dryrun').addEventListener('click', function () { applyToCamera(true); });
   $('camread').addEventListener('click', function () { readCamera(true); });
-  $('reset').addEventListener('click', function () {
+  // The two resets are one behaviour each, reachable from both the curve panel
+  // and the layer panel -- an operator working the layers with a thumb should
+  // not have to scroll back up to undo.
+  function resetFactory() {
     // dx = 0 IS the factory mesh: the boot hook composes anchors onto the mesh
     // the firmware generates at boot, so an all-zero curve leaves it untouched.
     // "reset to zero" and "back to factory" were the same button, so there is
     // only one of them.
     setAnchors(S.anchors.map(function (p) { return [p[0], 0]; }),
       'back to factory — zero correction on the vendor mesh');
-  });
-  $('camcurrent').addEventListener('click', function () {
+    S.layerBest = null;
+  }
+  function resetCameraCurrent() {
     var c = S.cameraCal;
     if (!c || !c.anchors_at_rows) return;
     setAnchors(c.anchors_at_rows, 'back to the calibration installed on the camera');
+    S.layerBest = null;
+  }
+  $('reset').addEventListener('click', resetFactory);
+  $('camcurrent').addEventListener('click', resetCameraCurrent);
+  $('lreset').addEventListener('click', resetFactory);
+  $('lcamcurrent').addEventListener('click', resetCameraCurrent);
+
+  $('pulllayers').addEventListener('click', function () { pullLayers('auto'); });
+  $('pullsynth').addEventListener('click', function () { pullLayers('synthetic'); });
+  $('pullsensors').addEventListener('click', pullSensors);
+  $('alpha').addEventListener('input', function (e) {
+    S.layerAlpha = parseFloat(e.target.value) / 100;
+    $('alphaV').textContent = Math.round(S.layerAlpha * 100) + '%';
+    drawLayers();
   });
+  var lmodes = document.querySelectorAll('#layermodes button');
+  for (var lm = 0; lm < lmodes.length; lm++) {
+    lmodes[lm].addEventListener('click', function (e) {
+      S.layerMode = e.currentTarget.getAttribute('data-lmode');
+      for (var k = 0; k < lmodes.length; k++) lmodes[k].classList.remove('on');
+      e.currentTarget.classList.add('on');
+      $('alpharow').style.display = S.layerMode === 'alpha' ? '' : 'none';
+      drawLayers();
+    });
+  }
+  var lnudges = document.querySelectorAll('#layernudge button');
+  for (var ln = 0; ln < lnudges.length; ln++) {
+    lnudges[ln].addEventListener('click', function (e) {
+      applyToCurve(S.anchors.slice(),
+        parseFloat(e.currentTarget.getAttribute('data-d')), 0, 'nudged from the layer view');
+    });
+  }
+  bindLayerGestures($('layercv'));
   $('suggest').addEventListener('click', function () {
     // The swept minimum, not `implied_dx`. The sweep descends the objective
     // itself; the regression behind `implied_dx` returned -17, +159 and -7 px
@@ -2610,7 +3427,15 @@ function init() {
     if (ev.key === 'ArrowUp') { S.cursorRow = clamp(S.cursorRow - 20, 0, H - 1); draw(); ev.preventDefault(); }
     if (ev.key === 'ArrowDown') { S.cursorRow = clamp(S.cursorRow + 20, 0, H - 1); draw(); ev.preventDefault(); }
   });
-  setInterval(function () { if (S.mode === 'blink' && S.imgs.left) { S.blink ^= 1; draw(); } }, 250);
+  // ~2 Hz. Drives the fused view's blink and the layer view's, so the two
+  // never disagree about which side is showing.
+  setInterval(function () {
+    var fused = (S.mode === 'blink' && S.imgs.left);
+    var layers = (S.layerMode === 'blink' && S.layerImgs.left);
+    if (!fused && !layers) return;
+    S.blink ^= 1;
+    if (fused) draw(); else drawLayers();
+  }, 250);
   window.addEventListener('resize', onResize);
   window.addEventListener('orientationchange', onResize);
   if (!S.narrow) {
@@ -2725,6 +3550,76 @@ __BANNER__
       measured session, so press it as often as you like while someone walks into position.</p>
   </div>
 
+  <div class="panel" id="layerpanel">
+    <h2 class="sec">Line up the <span class="accent">two layers</span></h2>
+    <p class="hint">These are the two sensors' <em>own</em> contributions to the
+      overlap, pulled before the camera cross-fades them &mdash; two real images of the
+      same panorama columns. Overlay them and drag until they coincide. Unlike every
+      other view on this page, nothing here is extrapolated.</p>
+    <div class="btn-row">
+      <button class="btn btn-sm" id="pulllayers">Pull layers</button>
+      <button class="btn btn-ghost btn-sm" id="pullsynth">Self-test pair</button>
+    </div>
+    <div id="layerstate" class="st">no layer pair yet</div>
+    <div id="layerattempts" class="faint mono"></div>
+
+    <div id="layercvwrap"><canvas id="layercv"></canvas></div>
+    <p class="faint mono" id="layerlabel"></p>
+
+    <div class="modes" id="layermodes">
+      <button data-lmode="alpha" class="on">Overlay</button>
+      <button data-lmode="diff">Difference</button>
+      <button data-lmode="anaglyph">Anaglyph</button>
+      <button data-lmode="blink">Blink</button>
+    </div>
+    <label class="row" id="alpharow"><span class="lbl">Opacity of the moving layer
+      <span class="val" id="alphaLbl">(left)</span>
+      <span class="val" id="alphaV">50%</span></span>
+      <input type="range" id="alpha" min="0" max="100" step="1" value="50"></label>
+
+    <div class="layerread" id="layerread"></div>
+    <p class="faint">Mean |L&minus;R| falls as the layers coincide and correlation rises
+      toward 1.0 &mdash; both are computed in your browser on the pixels on screen, over
+      the overlap only, so they answer the drag itself. They are aids: the picture is
+      the instrument.</p>
+
+    <div class="nudge" id="layernudge">
+      <button data-d="-1">&minus;1</button>
+      <button data-d="-0.25">&minus;&frac14;</button>
+      <button data-d="0.25">+&frac14;</button>
+      <button data-d="1">+1</button>
+    </div>
+    <p class="faint"><b>One finger across</b> translates &middot; <b>one finger up/down</b>
+      travels the rows &middot; <b>two fingers</b> pinch to zoom and twist to rotate.
+      Rotation is a ramp linear in the row &mdash; <span class="mono">dx = &minus;&theta;&middot;y</span>,
+      the shape a relative lens roll actually makes.</p>
+    <div class="btn-row">
+      <button class="btn btn-ghost btn-sm" id="lreset">Back to factory</button>
+      <button class="btn btn-ghost btn-sm" id="lcamcurrent" disabled>Back to camera current</button>
+    </div>
+  </div>
+
+  <div class="panel" id="sensorpanel">
+    <h2 class="sec">What each lens <span class="accent">sees</span></h2>
+    <p class="hint">Two whole-lens stills, for orientation before precision work &mdash; what each
+      lens is actually pointed at, which a 128&nbsp;px strip cannot show you.
+      <b>Context, not the alignment surface.</b> They arrive at each sensor's native width,
+      which puts them in sensor coordinates, before the warp; the mapping into panorama
+      columns has been measured (to a few grey levels) but is not wired into this build, so
+      the tool will not let you author a correction from them. Use the layer panel above &mdash;
+      it is pre-rectified by the camera itself, so it carries no fitted-warp error at all.</p>
+    <div class="btn-row">
+      <button class="btn btn-ghost btn-sm" id="pullsensors">Show both lenses</button>
+    </div>
+    <div id="sensorstate" class="st">not pulled</div>
+    <div id="sensorwrap" style="display:none">
+      <div class="lenscap">sensor 0 &mdash; left</div>
+      <img id="sensorL" class="lens" alt="whole view from sensor 0">
+      <div class="lenscap">sensor 1 &mdash; right</div>
+      <img id="sensorR" class="lens" alt="whole view from sensor 1">
+    </div>
+  </div>
+
   <div class="panel">
     <h2 class="sec">The <span class="accent">seam</span></h2>
     <div id="zoomwrap"><canvas id="zoom"></canvas></div>
@@ -2744,17 +3639,20 @@ __BANNER__
       showing.</p>
     <div class="caption" id="caption"></div>
     <div id="vertical" style="display:none"></div>
-    <div class="caveat"><strong>What these views can and cannot show.</strong>
-      The camera fuses the two sensors before it hands out a JPEG, blending them over the
-      256&nbsp;px window shaded above. Every pixel in there is already a mixture of both, so
-      there is no second layer to reveal and no honest way to paint one. Blink and anaglyph
-      therefore draw the <em>fitted</em> structures instead: each one measured independently on
-      the left shoulder (red) and the right shoulder (cyan) and extrapolated to the seam, solid
-      where there is real image behind it and dashed where it is extrapolation. A gap between a
-      red line and its cyan partner at the seam is that structure's residual. Structures too
-      near horizontal to respond to a horizontal shift are drawn grey, because they cannot tell
-      you anything about what you are adjusting. The shoulders either side of the window are
-      real; the window is inference.</div>
+    <div class="caveat"><strong>These views are inference; the layer panel above is not.</strong>
+      A <span class="mono">Snap</span> is already fused &mdash; every pixel in the shaded window
+      is a mixture of both sensors &mdash; so blink and anaglyph <em>here</em> cannot reveal a
+      second layer and do not pretend to. They draw the <em>fitted</em> structures instead: each
+      measured independently on the left shoulder (red) and the right shoulder (cyan) and
+      extrapolated to the seam, solid where there is real image behind it and dashed where it is
+      extrapolation. A gap between a red line and its cyan partner is that structure's residual.
+      Structures too near horizontal to respond to a horizontal shift are drawn grey, because
+      they cannot tell you anything about what you are adjusting.
+      <br><br>The <b>Line up the two layers</b> panel above does not have this limitation: it
+      pulls the two sensors' contributions <em>before</em> the cross-fade, so its overlay,
+      difference, anaglyph and blink are the true separated layers rather than an
+      extrapolation. Prefer it. This view remains useful for the shoulders either side of the
+      window, which are real image in both.</div>
   </div>
 
   <div class="panel">

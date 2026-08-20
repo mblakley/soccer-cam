@@ -25,3 +25,7 @@ recover/helix/ESP8266Audio/
 recover/helix/build/
 *.a
 *.o
+
+# Build outputs for the seam layer helpers: C sources are tracked, binaries
+# are built (builds/build_seam_helpers.sh). Same rule as the rest of the tree.
+builds/out/
