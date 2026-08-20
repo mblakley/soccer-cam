@@ -2856,9 +2856,16 @@ function paintLayers() {
     // unlike on the fused frame these really are the two layers alternating.
     drawLayerInto(ctx, S.blink ? 'right' : 'left', geo, {});
   } else {
-    // alpha: both at once, the baseline view.
-    drawLayerInto(ctx, 'left', geo, {});
-    drawLayerInto(ctx, 'right', geo, { alpha: S.layerAlpha });
+    // alpha: both at once, the baseline view. The layer ON TOP is the one the
+    // operator is moving -- fading the thing under your finger over a fixed
+    // reference is what makes a misregistration readable. So the top layer is
+    // `movingSide()`, which is the left half for the camera mesh and flips to
+    // the right for the downstream corrector, and the other half sits beneath
+    // it fully opaque. Only the top layer takes the opacity control; a second
+    // slider on the reference would only dim the thing you are aligning to.
+    var top = movingSide(), base = top === 'left' ? 'right' : 'left';
+    drawLayerInto(ctx, base, geo, {});
+    drawLayerInto(ctx, top, geo, { alpha: S.layerAlpha });
   }
 
   // Overlap bounds and the cross-fade centre, in panorama columns. Drawn from
@@ -3298,7 +3305,13 @@ function surfaceChanged() {
     + 'downstream corrector rolls the right half. The stored curve is unchanged &mdash; '
     + 'only which half you see move, and the direction it moves, have flipped.';
   $('applywrap').style.display = $('owner').value === 'downstream' ? 'none' : '';
+  // The opacity slider always names the half it acts on, because which half is
+  // on top flips with the surface and a slider labelled for the wrong layer is
+  // worse than an unlabelled one.
+  var al = $('alphaLbl');
+  if (al) al.textContent = '(' + moving + ')';
   draw();
+  drawLayers();
 }
 
 function onResize() {
@@ -3559,7 +3572,8 @@ __BANNER__
       <button data-lmode="anaglyph">Anaglyph</button>
       <button data-lmode="blink">Blink</button>
     </div>
-    <label class="row" id="alpharow"><span class="lbl">Top layer opacity
+    <label class="row" id="alpharow"><span class="lbl">Opacity of the moving layer
+      <span class="val" id="alphaLbl">(left)</span>
       <span class="val" id="alphaV">50%</span></span>
       <input type="range" id="alpha" min="0" max="100" step="1" value="50"></label>
 
