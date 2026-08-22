@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import logging
 import select
 import socket
@@ -351,6 +353,177 @@ async def probe_dahua(ip: str, username: str, password: str) -> DiscoveredCamera
     except Exception as e:
         logger.debug(f"Error probing Dahua at {ip}: {e}")
         return None
+
+
+#: Ports worth knocking on. 80 is the management UI on both vendors.
+_PROBE_PORT = 80
+
+#: How many hosts to sweep at once, and how long to wait for a TCP handshake.
+#: A camera on the same switch answers in single-digit milliseconds; anything
+#: that has not answered in half a second is not on this segment. 256 at a
+#: time keeps a multi-homed box (this one has five sweepable networks, so
+#: ~1270 addresses) inside the ONVIF probe's own 3s, since the two run
+#: concurrently and the scan costs whichever is slower.
+_SWEEP_CONCURRENCY = 256
+_CONNECT_TIMEOUT = 0.5
+
+#: Refuse to sweep anything larger than a /22. A /16 is 65k hosts, which is
+#: not a scan, it is an outage.
+_MIN_PREFIX = 22
+
+
+def local_ipv4_networks() -> list[ipaddress.IPv4Network]:
+    """Return the IPv4 networks this machine is directly attached to.
+
+    Link-local (169.254/16) and loopback are dropped -- nothing is reachable
+    there. Virtual adapters (WSL, Hyper-V, Docker) are left in on purpose: a
+    camera on a bridged network would otherwise be invisible, and sweeping an
+    empty subnet costs a few hundred milliseconds.
+    """
+    networks: list[ipaddress.IPv4Network] = []
+    for _family, _type, _proto, _canon, sockaddr in socket.getaddrinfo(
+        socket.gethostname(), None, socket.AF_INET
+    ):
+        addr = ipaddress.IPv4Address(sockaddr[0])
+        if addr.is_loopback or addr.is_link_local:
+            continue
+        # getaddrinfo does not give a netmask; assume the common /24, which is
+        # what home and small-office networks use.
+        net = ipaddress.IPv4Network(f"{addr}/24", strict=False)
+        if net.prefixlen >= _MIN_PREFIX and net not in networks:
+            networks.append(net)
+    return networks
+
+
+async def _fingerprint(ip: str, client: httpx.AsyncClient) -> DiscoveredDevice | None:
+    """Ask an address what it is, without credentials.
+
+    Both vendors identify themselves in their rejection of an unauthenticated
+    request, which is enough to label the device in the picker before anyone
+    types a password:
+
+      Reolink  POST /cgi-bin/api.cgi -> JSON body carrying rspCode -6
+               ("please login first")
+      Dahua    GET  /cgi-bin/magicBox.cgi -> 401 with a Digest challenge
+    """
+    try:
+        resp = await client.post(
+            f"http://{ip}/cgi-bin/api.cgi?cmd=GetDevInfo&token=null",
+            json=[{"cmd": "GetDevInfo", "action": 0, "param": {}}],
+        )
+        if resp.status_code == 200 and "rspCode" in resp.text:
+            return DiscoveredDevice(ip=ip, vendor="Reolink")
+    except Exception:
+        pass
+
+    try:
+        resp = await client.get(
+            f"http://{ip}/cgi-bin/magicBox.cgi?action=getSystemInfo"
+        )
+        if (
+            resp.status_code == 401
+            and "digest" in resp.headers.get("www-authenticate", "").lower()
+        ):
+            return DiscoveredDevice(ip=ip, vendor="Dahua")
+    except Exception:
+        pass
+
+    return None
+
+
+async def _reachable(ip: str, sem: asyncio.Semaphore) -> str | None:
+    """Return ``ip`` if something accepts a connection on the probe port."""
+    async with sem:
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, _PROBE_PORT), timeout=_CONNECT_TIMEOUT
+            )
+        except (TimeoutError, OSError):
+            return None
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return ip
+
+
+async def discover_on_lan(
+    networks: list[ipaddress.IPv4Network] | None = None,
+) -> list[DiscoveredDevice]:
+    """Find cameras by sweeping the local network and fingerprinting hosts.
+
+    This exists because WS-Discovery is not enough on its own: Reolink ships
+    with ONVIF **off** (``GetNetPort`` reports ``onvifEnable: 0`` out of the
+    box), so an ONVIF-only scan finds nothing for most Reolink owners. A
+    Reolink Duo 3 PoE on the test bench is invisible to a probe and obvious to
+    a fingerprint.
+
+    Two passes so it stays quick: a wide TCP knock to find what is even there,
+    then an HTTP fingerprint of only the hosts that answered.
+    """
+    nets = local_ipv4_networks() if networks is None else networks
+    hosts = [str(h) for net in nets for h in net.hosts()]
+    if not hosts:
+        return []
+
+    sem = asyncio.Semaphore(_SWEEP_CONCURRENCY)
+    reachable = [
+        ip
+        for ip in await asyncio.gather(*(_reachable(h, sem) for h in hosts))
+        if ip is not None
+    ]
+    logger.info(
+        "LAN sweep: %d host(s) answered on port %d across %d network(s)",
+        len(reachable),
+        _PROBE_PORT,
+        len(nets),
+    )
+    if not reachable:
+        return []
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(4.0, connect=2.0), verify=False
+    ) as client:
+        results = await asyncio.gather(
+            *(_fingerprint(ip, client) for ip in reachable), return_exceptions=True
+        )
+
+    devices = [r for r in results if isinstance(r, DiscoveredDevice)]
+    logger.info("LAN sweep identified %d camera(s)", len(devices))
+    return devices
+
+
+async def discover_cameras(timeout: float = 3.0) -> list[DiscoveredDevice]:
+    """Find cameras by every means available, and merge the answers.
+
+    ONVIF gives a model name without credentials but only when the owner has
+    turned it on; the LAN sweep works regardless but knows only the vendor.
+    Running both and merging means a camera shows up either way, with whatever
+    detail could be had.
+    """
+    onvif, swept = await asyncio.gather(
+        asyncio.to_thread(discover_onvif_details, timeout),
+        discover_on_lan(),
+        return_exceptions=True,
+    )
+    if isinstance(onvif, BaseException):
+        logger.warning("ONVIF discovery failed: %s", onvif)
+        onvif = []
+    if isinstance(swept, BaseException):
+        logger.warning("LAN sweep failed: %s", swept)
+        swept = []
+
+    merged: dict[str, DiscoveredDevice] = {d.ip: d for d in onvif}
+    for device in swept:
+        existing = merged.get(device.ip)
+        if existing is None:
+            merged[device.ip] = device
+        else:
+            # The sweep's vendor is evidence from the device's own API, so it
+            # outranks a vendor guessed from an advertised ONVIF scope.
+            existing.vendor = device.vendor or existing.vendor
+    return sorted(merged.values(), key=lambda d: _sort_key(d.ip))
 
 
 async def identify_camera(

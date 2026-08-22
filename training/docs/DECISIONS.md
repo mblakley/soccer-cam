@@ -2078,3 +2078,42 @@ at all. Its condensed look rides the token fallback chain — do not trim those 
 
 **Exempt from tokens:** canvas stroke colours and categorical label swatches in the annotation
 tools. Those are data-encoding and must stay mutually distinguishable.
+
+
+---
+
+## Decision: camera discovery cannot rely on ONVIF alone (2026-08-22)
+
+**Finding:** Reolink ships with ONVIF **disabled**. Verified on the bench unit, a Reolink Duo 3
+PoE at `192.168.86.24` — `GetNetPort` reports `"onvifEnable": 0`, and `GET /onvif/device_service`
+returns 502. A WS-Discovery probe therefore finds nothing, on any interface. Confirmed it was not
+an interface-selection problem by re-probing with `IP_MULTICAST_IF` bound to each of this machine's
+five sweepable networks in turn: zero replies from all of them.
+
+This matters because the setup wizard's "Scan for cameras" would have found nothing for most
+Reolink owners while appearing to work.
+
+**Decision:** discover by two methods at once and merge (`discovery.discover_cameras`):
+
+1. **ONVIF WS-Discovery** — the only method that yields a model name without credentials, but only
+   when the owner has turned ONVIF on. Kept for that reason.
+2. **LAN sweep + unauthenticated fingerprint** — TCP-knock every host on the attached /24s, then
+   ask whoever answers on port 80 what it is. Both vendors identify themselves in how they *reject*
+   an unauthenticated request:
+   - Reolink: `POST /cgi-bin/api.cgi?cmd=GetDevInfo&token=null` → 200 with `rspCode: -6`
+     ("please login first")
+   - Dahua: `GET /cgi-bin/magicBox.cgi?action=getSystemInfo` → 401 with a Digest challenge
+
+   No credentials, no port-scanning of anything but port 80, and it works with ONVIF off.
+
+**Sizing:** 256 concurrent connects at a 0.5s timeout. This machine has five sweepable networks
+(~1270 addresses) because of WSL, Hyper-V and Tailscale adapters; the sweep completes in ~3.2s,
+inside the ONVIF probe's own 3s, and the two run concurrently. Networks wider than /22 are refused
+outright — a /16 is 65k hosts, which is not a scan.
+
+**Also found:** the camera had moved from the `192.168.86.200` recorded in `config.ini` to
+`192.168.86.24` via DHCP. A stale address in config is precisely what discovery is for; this is an
+argument for offering a re-scan from Settings later, not only during onboarding.
+
+**Not done:** no attempt at Reolink's or Dahua's proprietary UDP discovery broadcasts. The HTTP
+fingerprint is vendor-documented behaviour and needed no reverse engineering.

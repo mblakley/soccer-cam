@@ -166,3 +166,68 @@ class TestIdentifyCamera:
             ),
         ):
             assert await identify_camera("192.168.1.99", "admin", "wrong") is None
+
+
+class TestLanFingerprint:
+    """The sweep exists because ONVIF is off by default on Reolink."""
+
+    @pytest.mark.asyncio
+    async def test_reolink_is_recognised_from_its_rejection(self):
+        """An unauthenticated Reolink returns JSON carrying rspCode -6."""
+        from video_grouper.cameras.discovery import _fingerprint
+
+        client = AsyncMock()
+        client.post.return_value = type(
+            "R", (), {"status_code": 200, "text": '[{"error":{"rspCode":-6}}]'}
+        )()
+        device = await _fingerprint("192.168.86.24", client)
+        assert device is not None and device.vendor == "Reolink"
+
+    @pytest.mark.asyncio
+    async def test_dahua_is_recognised_from_its_digest_challenge(self):
+        from video_grouper.cameras.discovery import _fingerprint
+
+        client = AsyncMock()
+        client.post.side_effect = OSError("not reolink")
+        client.get.return_value = type(
+            "R",
+            (),
+            {
+                "status_code": 401,
+                "headers": {"www-authenticate": 'Digest realm="Login to DVR"'},
+                "text": "",
+            },
+        )()
+        device = await _fingerprint("192.168.86.60", client)
+        assert device is not None and device.vendor == "Dahua"
+
+    @pytest.mark.asyncio
+    async def test_a_web_server_that_is_not_a_camera_is_ignored(self):
+        """Plenty of things answer on port 80; only cameras should be listed."""
+        from video_grouper.cameras.discovery import _fingerprint
+
+        client = AsyncMock()
+        client.post.return_value = type(
+            "R", (), {"status_code": 200, "text": "<html>a printer</html>"}
+        )()
+        client.get.return_value = type(
+            "R", (), {"status_code": 200, "headers": {}, "text": "<html>"}
+        )()
+        assert await _fingerprint("192.168.86.99", client) is None
+
+
+class TestLocalNetworks:
+    def test_link_local_and_loopback_are_skipped(self):
+        """169.254/16 is unreachable, and sweeping it wastes the whole budget."""
+        from video_grouper.cameras.discovery import local_ipv4_networks
+
+        with patch(
+            "video_grouper.cameras.discovery.socket.getaddrinfo",
+            return_value=[
+                (2, 1, 6, "", ("127.0.0.1", 0)),
+                (2, 1, 6, "", ("169.254.43.45", 0)),
+                (2, 1, 6, "", ("192.168.86.50", 0)),
+            ],
+        ):
+            nets = [str(n) for n in local_ipv4_networks()]
+        assert nets == ["192.168.86.0/24"]

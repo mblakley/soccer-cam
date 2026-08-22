@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import html
 import json
 import logging
@@ -856,21 +855,23 @@ def build_router(config_path: Path) -> APIRouter:
     async def camera_scan() -> dict:
         """Ask the local network which cameras are on it.
 
-        ONVIF WS-Discovery is a link-local multicast, so this finds devices on
-        the same segment as this machine -- which is where a camera plugged in
-        beside the recorder lives. Both Dahua and Reolink answer it.
+        Two methods at once, because neither is sufficient alone:
 
-        No credentials are involved: everything returned comes out of the
-        device's own ProbeMatch. ``vendor`` is therefore a hint from the
-        advertised scopes, not a verified fact -- ``/camera/identify`` is what
-        confirms it.
+        * ONVIF WS-Discovery -- gives a model name without credentials, but
+          only when the owner has enabled ONVIF. Reolink ships with it **off**
+          (``GetNetPort`` reports ``onvifEnable: 0``), so on its own this finds
+          nothing for most Reolink owners.
+        * A sweep of the attached networks, fingerprinting whatever answers on
+          port 80. Both vendors identify themselves in how they reject an
+          unauthenticated request, so this works with ONVIF off.
+
+        No credentials are involved either way. ``/camera/identify`` is what
+        confirms the make once the user supplies them.
         """
-        from video_grouper.cameras.discovery import discover_onvif_details
+        from video_grouper.cameras.discovery import discover_cameras
 
         try:
-            # Off the event loop: the probe sits in select() for its whole
-            # timeout, and doing that inline stalls every other request.
-            devices = await asyncio.to_thread(discover_onvif_details, 3.0)
+            devices = await discover_cameras(3.0)
         except Exception as exc:
             logger.warning("Camera scan failed: %s", exc)
             return {"ok": False, "devices": [], "message": f"Scan failed: {exc}"}
