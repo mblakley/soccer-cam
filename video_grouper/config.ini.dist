@@ -210,3 +210,37 @@ auth_server_port = 8765
 # supabase_internal_url = http://supabase_kong_<project>:8000
 # Leave blank in production; one URL serves both legs.
 # supabase_internal_url =
+
+[AUTOCAM]
+# Installation-level AutoCam settings: where the vendor's app lives and the
+# licence key it runs under. Per-render options belong to the pipeline step,
+# not here.
+enabled = true
+# Leave blank to auto-detect the usual install location.
+executable =
+# Your AutoCam licence key.
+license_key =
+
+[CLOUD_SYNC]
+# Mirror finished games to a cloud provider. Off by default.
+enabled = false
+provider =
+
+[MOMENT_TAGGING]
+# Pull moment tags from a Team Tech Tools instance so clips can be cut from
+# them. Off by default; needs a reachable TTT API.
+enabled = false
+api_base_url = http://localhost:8000
+service_role_key =
+
+[NODE]
+# Multi-machine rendering. `standalone` (default) does everything locally.
+# `master` hands work out; `worker` polls a master for it — a worker must be
+# started with `python -m video_grouper.worker`, not the normal entry point.
+role = standalone
+# Workers only: where to poll.
+master_url =
+# Master only: comma-separated tokens workers authenticate with.
+worker_tokens =
+# Workers only: comma-separated capabilities this node advertises.
+capabilities =

@@ -65,6 +65,67 @@ class TestCreateDefaultConfig:
 # ---------------------------------------------------------------------------
 
 
+class TestEverySectionIsCovered:
+    """Adding a Config section must not silently skip the places that emit it.
+
+    Three generators used to hand-enumerate sections and all three drifted:
+    create_default_config omitted ARCHIVE/AUTOCAM/PIPELINE/NODE/MOMENT_TAGGING,
+    the wizard omitted a different set, and config.ini.dist a third. The two
+    code generators now build from the model, so only the hand-written
+    documentation can still fall behind — which is what this guards.
+    """
+
+    # Written by the app, never hand-edited, so deliberately undocumented.
+    MACHINE_OWNED = {"SETUP"}
+
+    def test_default_config_carries_every_section(self, tmp_path):
+        config = create_default_config(tmp_path / "config.ini", str(tmp_path))
+        missing = [
+            name for name in Config.model_fields if getattr(config, name, None) is None
+        ]
+        assert not missing, f"default config is missing sections: {missing}"
+
+    def test_wizard_and_default_config_agree(self, tmp_path):
+        """The wizard's config and the default one must cover the same sections."""
+        import types
+
+        from video_grouper.web.setup.router import _build_config
+
+        default = create_default_config(tmp_path / "config.ini", str(tmp_path))
+        wizard = _build_config(
+            types.SimpleNamespace(
+                storage_path=str(tmp_path),
+                camera_name="cam",
+                camera_type="reolink",
+                camera_ip="1.1.1.1",
+                camera_username="u",
+                camera_password="p",
+            )
+        )
+        covered = lambda c: {  # noqa: E731
+            n for n in Config.model_fields if getattr(c, n, None) is not None
+        }
+        assert covered(default) == covered(wizard)
+
+    def test_config_ini_dist_documents_every_section(self):
+        """config.ini.dist is user documentation; keep it from falling behind."""
+        import re
+        from pathlib import Path
+
+        dist = Path("video_grouper/config.ini.dist").read_text(encoding="utf-8")
+        documented = {
+            m.group(1) for m in re.finditer(r"^\[([A-Z_]+)(?:\.[^\]]+)?\]", dist, re.M)
+        }
+        expected = {
+            (f.alias or n).upper()
+            for n, f in Config.model_fields.items()
+            if n != "cameras"
+        } - self.MACHINE_OWNED
+        assert not (expected - documented), (
+            f"config.ini.dist is missing sections: {sorted(expected - documented)}"
+        )
+
+
 class TestConfigNeedsOnboarding:
     def test_returns_true_when_no_file(self, tmp_path):
         assert config_needs_onboarding(tmp_path / "missing.ini") is True

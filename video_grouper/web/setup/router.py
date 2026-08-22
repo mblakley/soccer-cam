@@ -15,21 +15,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from video_grouper.pipeline.presets import apply_preset
 from video_grouper.utils.config import (
-    AppConfig,
-    AutocamConfig,
     CameraConfig,
-    CloudSyncConfig,
     Config,
-    LoggingConfig,
-    NtfyConfig,
-    PlayMetricsConfig,
-    ProcessingConfig,
-    RecordingConfig,
-    SetupConfig,
     StorageConfig,
-    TeamSnapConfig,
-    TTTConfig,
-    YouTubeConfig,
     load_config,
     save_config,
 )
@@ -1383,23 +1371,14 @@ def _build_config(state, existing: Config | None = None) -> Config:
     if existing is not None:
         data = existing.model_dump(by_alias=True)
     else:
-        data = {
-            "cameras": [],
-            "STORAGE": StorageConfig(path=state.storage_path).model_dump(),
-            "RECORDING": RecordingConfig().model_dump(),
-            "PROCESSING": ProcessingConfig().model_dump(),
-            "LOGGING": LoggingConfig().model_dump(),
-            "APP": AppConfig().model_dump(),
-            "TEAMSNAP": TeamSnapConfig().model_dump(),
-            "PLAYMETRICS": PlayMetricsConfig().model_dump(),
-            "NTFY": NtfyConfig().model_dump(),
-            "YOUTUBE": YouTubeConfig().model_dump(),
-            "AUTOCAM": AutocamConfig().model_dump(),
-            "CLOUD_SYNC": CloudSyncConfig().model_dump(),
-            "TTT": TTTConfig().model_dump(),
-            "SETUP": SetupConfig().model_dump(),
-            "PIPELINE": {},
-        }
+        # Every section defaults on the model, so only the storage path needs
+        # naming. This used to restate a dozen sections as `{}` because they
+        # were declared required — and drifted from create_default_config's
+        # copy of the same list, each omitting a different set. A section added
+        # to Config now appears here with no edit.
+        data = Config(storage=StorageConfig(path=state.storage_path)).model_dump(
+            by_alias=True
+        )
 
     # Seed a starting [PIPELINE] from the homegrown preset so a fresh install
     # has a real, hand-editable scaffold (stitch -> detect -> track -> render)
