@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -108,6 +109,26 @@ __CHROME_HEAD__
 }
 .summary code { color: var(--color-accent); }
 
+/* Each field in this wizard is a bare <label> wrapping its input. Labels are
+   inline by default, so a trailing hint and the next label share a line --
+   which is how "Make" ended up printed after the config.ini note. */
+form label {
+  display: block;
+  margin-bottom: 16px;
+  font-size: 14px;
+  font-weight: 500;
+}
+form label .hint,
+form label .muted {
+  display: block;
+  margin-top: 4px;
+  font-weight: 400;
+}
+form label input,
+form label select {
+  margin-top: 6px;
+}
+
 .path-list { max-height: 280px; overflow-y: auto; }
 .path-chip {
   display: block;
@@ -131,6 +152,35 @@ __CHROME_HEAD__
   border-color: var(--color-accent);
   color: var(--color-accent);
 }
+/* A picked camera, not merely hovered. */
+.path-chip.active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-light);
+  color: var(--color-text-primary);
+}
+.path-chip strong { font-weight: 600; }
+.path-chip .faint { margin-left: 8px; }
+
+/* Advanced entry, folded away. */
+details.panel > summary {
+  cursor: pointer;
+  font-family: var(--font-headline);
+  font-weight: 700;
+  font-size: 18px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::before {
+  content: "+";
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 16px;
+}
+details.panel[open] > summary::before { content: "−"; }
+details.panel[open] > summary { margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -197,31 +247,113 @@ _STORAGE_PICKER_JS = """
 </script>
 """
 
+_CAMERA_SCAN_JS = """
+<script>
+(function () {
+  const btn = document.getElementById("scan-btn");
+  const out = document.getElementById("scan-result");
+  const list = document.getElementById("scan-list");
+  if (!btn || !out || !list) return;
+
+  const ipField = document.getElementById("camera-ip");
+  const nameField = document.getElementById("camera-name");
+  const typeField = document.getElementById("camera-type");
+
+  // Default the config section name from the model, so most people never
+  // have to invent one. Sanitised to what an INI section key allows.
+  function suggestName(device) {
+    const raw = device.name || device.hardware || ("cam-" + device.ip.split(".").pop());
+    return raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  function select(device, card) {
+    list.querySelectorAll(".path-chip").forEach((c) => c.classList.remove("active"));
+    card.classList.add("active");
+    ipField.value = device.ip;
+    if (device.vendor === "Reolink") typeField.value = "reolink";
+    else if (device.vendor === "Dahua") typeField.value = "dahua";
+    if (!nameField.value) nameField.value = suggestName(device);
+    out.textContent = "Selected " + device.ip + ". Enter the username and password, then Test connection.";
+  }
+
+  function render(devices) {
+    list.innerHTML = "";
+    devices.forEach((d) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "path-chip";
+      const detail = d.label || "Unrecognised device";
+      card.innerHTML =
+        '<strong>' + d.ip + '</strong> <span class="faint">' + detail + '</span>';
+      card.addEventListener("click", () => select(d, card));
+      list.appendChild(card);
+    });
+  }
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    out.textContent = "Looking for cameras on this network…";
+    list.innerHTML = "";
+    try {
+      const r = await fetch("/setup/camera/scan", { method: "POST" });
+      const data = await r.json();
+      const devices = data.devices || [];
+      if (!data.ok) {
+        out.textContent = data.message || "Scan failed.";
+      } else if (devices.length === 0) {
+        // Say what to do about it, not just that it failed.
+        out.textContent =
+          "No cameras answered. They may be on another network, have ONVIF " +
+          "turned off, or be blocked by this machine's firewall. Enter the " +
+          "camera manually below.";
+        const manual = document.querySelector("details.panel");
+        if (manual) manual.open = true;
+      } else {
+        out.textContent =
+          devices.length === 1 ? "Found 1 camera." : "Found " + devices.length + " cameras.";
+        render(devices);
+      }
+    } catch (e) {
+      out.textContent = "Scan failed: " + e;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+"""
+
 _CAMERA_TEST_JS = """
 <script>
 (function () {
   const btn = document.getElementById("test-btn");
   const out = document.getElementById("test-result");
   if (!btn || !out) return;
+  const typeField = document.getElementById("camera-type");
+
   btn.addEventListener("click", async () => {
     const form = new FormData();
-    form.set("camera_type", document.getElementById("camera-type").value);
     form.set("camera_ip", document.getElementById("camera-ip").value);
     form.set("camera_username", document.getElementById("camera-username").value);
     form.set("camera_password", document.getElementById("camera-password").value);
+    btn.disabled = true;
     out.textContent = "Testing…";
-    out.className = "muted";
+    out.style.color = "";
     try {
-      const r = await fetch("/setup/camera/test", { method: "POST", body: form });
+      // Identify rather than test against a chosen make: the camera can say
+      // what it is, which keeps the make dropdown out of the common path.
+      const r = await fetch("/setup/camera/identify", { method: "POST", body: form });
       const data = await r.json();
-      out.textContent = (data.ok ? "✓ " : "✗ ") + (data.message || "");
-      out.className = data.ok ? "muted" : "err";
+      if (data.ok && data.camera_type) typeField.value = data.camera_type;
+      out.textContent = (data.ok ? "\\u2713 " : "\\u2717 ") + (data.message || "");
       out.style.color = data.ok
         ? "var(--color-success)"
         : "var(--color-danger)";
     } catch (e) {
-      out.textContent = "✗ " + e;
+      out.textContent = "\\u2717 " + e;
       out.style.color = "var(--color-danger)";
+    } finally {
+      btn.disabled = false;
     }
   });
 })();
@@ -429,6 +561,63 @@ def _redirect_with_cookie(target: str, token: str) -> RedirectResponse:
 # ---------------------------------------------------------------------------
 
 
+def _camera_body(state) -> str:
+    """Return the camera step's form markup for a wizard state.
+
+    Split out from the route so it can be rendered without a request --
+    the preview harness and tests both build this page directly.
+    """
+    # Scanning is the primary path: most people do not know their camera's
+    # address, and the camera can simply be asked. Typing a name and address
+    # is still here, folded away, for a camera on another subnet or with
+    # ONVIF discovery turned off.
+    manual_open = " open" if state.camera_ip else ""
+    return (
+        '<form method="post" action="/setup/camera" id="camera-form">'
+        '<section class="panel">'
+        '<div class="btn-row">'
+        '<button type="button" class="btn" id="scan-btn">'
+        "Scan for cameras</button>"
+        '<span id="scan-result" class="hint"></span>'
+        "</div>"
+        '<div id="scan-list" class="path-list" style="margin-top:12px"></div>'
+        "</section>"
+        "<label>Username"
+        f'<input name="camera_username" id="camera-username" type="text" value="{html.escape(state.camera_username)}" required></label>'
+        "<label>Password"
+        '<input name="camera_password" id="camera-password" type="password" value="" placeholder="(set on save)" required>'
+        "</label>"
+        f'<details class="panel"{manual_open}>'
+        "<summary>Enter the camera manually</summary>"
+        '<p class="hint">For a camera on a different network, or one with '
+        "ONVIF discovery switched off.</p>"
+        "<label>IP address"
+        f'<input name="camera_ip" id="camera-ip" type="text" value="{html.escape(state.camera_ip)}" placeholder="192.168.1.100" required>'
+        "</label>"
+        "<label>Name"
+        f'<input name="camera_name" id="camera-name" type="text" value="{html.escape(state.camera_name)}" required>'
+        '<span class="hint">Names the [CAMERA.&lt;name&gt;] section in '
+        "config.ini. Anything you like, e.g. <code>field</code>.</span></label>"
+        "<label>Make"
+        '<select name="camera_type" id="camera-type" required>'
+        f'<option value="dahua" {"selected" if state.camera_type == "dahua" else ""}>Dahua</option>'
+        f'<option value="reolink" {"selected" if state.camera_type == "reolink" else ""}>Reolink</option>'
+        "</select>"
+        '<span class="hint">Set for you when you pick a scanned camera.</span>'
+        "</label>"
+        "</details>"
+        '<div class="row">'
+        '<button type="button" class="btn btn-secondary" id="test-btn">'
+        "Test connection</button>"
+        '<span id="test-result" class="hint"></span>'
+        "</div>"
+        '<div class="row">'
+        '<a class="btn-ghost btn" href="/setup/storage">Back</a>'
+        '<button class="btn" type="submit">Next</button>'
+        "</div></form>" + _CAMERA_SCAN_JS + _CAMERA_TEST_JS
+    )
+
+
 def build_router(config_path: Path) -> APIRouter:
     """Build the wizard router. Persists to ``config_path`` on submit."""
     router = APIRouter(prefix="/setup")
@@ -445,7 +634,7 @@ def build_router(config_path: Path) -> APIRouter:
             "Soccer-Cam recording: where to store videos and one camera "
             "to poll. After you finish, integrations (YouTube, NTFY, "
             "PlayMetrics, TeamSnap) and any advanced settings live on "
-            'the <a href="/config">configuration page</a>.</p>'
+            '<a href="/config">Settings</a>.</p>'
             '<p><a class="btn" href="/setup/storage">Get started</a></p>'
         )
         resp = HTMLResponse(
@@ -645,40 +834,12 @@ def build_router(config_path: Path) -> APIRouter:
     def camera_get(request: Request) -> HTMLResponse:
         token, state = get_or_create(request.cookies.get(cookie_name()))
         # No password echo on render (sensitive)
-        body = (
-            '<form method="post" action="/setup/camera" id="camera-form">'
-            "<label>Camera type"
-            '<select name="camera_type" id="camera-type" required>'
-            f'<option value="dahua" {"selected" if state.camera_type == "dahua" else ""}>Dahua</option>'
-            f'<option value="reolink" {"selected" if state.camera_type == "reolink" else ""}>Reolink</option>'
-            "</select></label>"
-            "<label>Camera name"
-            f'<input name="camera_name" id="camera-name" type="text" value="{html.escape(state.camera_name)}" required>'
-            '<span class="muted">Used as the [CAMERA.&lt;name&gt;] section in '
-            "config.ini. Pick anything (e.g. <code>field</code>).</span></label>"
-            "<label>IP address"
-            f'<input name="camera_ip" id="camera-ip" type="text" value="{html.escape(state.camera_ip)}" placeholder="192.168.1.100" required>'
-            "</label>"
-            "<label>Username"
-            f'<input name="camera_username" id="camera-username" type="text" value="{html.escape(state.camera_username)}" required></label>'
-            "<label>Password"
-            '<input name="camera_password" id="camera-password" type="password" value="" placeholder="(set on save)" required>'
-            "</label>"
-            '<div class="row">'
-            '<button type="button" class="btn btn-ghost" id="test-btn">'
-            "Test connection</button>"
-            '<span id="test-result" class="muted"></span>'
-            "</div>"
-            '<div class="row">'
-            '<a class="btn-ghost btn" href="/setup/storage">Back</a>'
-            '<button class="btn" type="submit">Next</button>'
-            "</div></form>" + _CAMERA_TEST_JS
-        )
+        body = _camera_body(state)
         resp = HTMLResponse(
             _page(
                 "camera",
                 "Camera",
-                "How do we reach your camera?",
+                "Find the camera on your network, or enter it yourself.",
                 body,
             )
         )
@@ -690,6 +851,88 @@ def build_router(config_path: Path) -> APIRouter:
             samesite="lax",
         )
         return resp
+
+    @router.post("/camera/scan")
+    async def camera_scan() -> dict:
+        """Ask the local network which cameras are on it.
+
+        ONVIF WS-Discovery is a link-local multicast, so this finds devices on
+        the same segment as this machine -- which is where a camera plugged in
+        beside the recorder lives. Both Dahua and Reolink answer it.
+
+        No credentials are involved: everything returned comes out of the
+        device's own ProbeMatch. ``vendor`` is therefore a hint from the
+        advertised scopes, not a verified fact -- ``/camera/identify`` is what
+        confirms it.
+        """
+        from video_grouper.cameras.discovery import discover_onvif_details
+
+        try:
+            # Off the event loop: the probe sits in select() for its whole
+            # timeout, and doing that inline stalls every other request.
+            devices = await asyncio.to_thread(discover_onvif_details, 3.0)
+        except Exception as exc:
+            logger.warning("Camera scan failed: %s", exc)
+            return {"ok": False, "devices": [], "message": f"Scan failed: {exc}"}
+
+        return {
+            "ok": True,
+            "devices": [
+                {
+                    "ip": d.ip,
+                    "name": d.name,
+                    "hardware": d.hardware,
+                    "vendor": d.vendor,
+                    "label": d.label,
+                }
+                for d in devices
+            ],
+        }
+
+    @router.post("/camera/identify")
+    async def camera_identify(
+        camera_ip: str = Form(...),
+        camera_username: str = Form(...),
+        camera_password: str = Form(...),
+    ) -> dict:
+        """Confirm what the device at this address is, using credentials.
+
+        Removes the type dropdown from the common path: the camera tells us
+        whether it is Reolink or Dahua, and a successful authenticated probe
+        is proof where an ONVIF scope was only a hint.
+        """
+        from video_grouper.cameras.discovery import identify_camera
+
+        ip = camera_ip.strip()
+        if not ip:
+            return {"ok": False, "message": "Enter an address first."}
+
+        try:
+            result = await identify_camera(ip, camera_username, camera_password)
+        except Exception as exc:
+            logger.warning("Identify failed for %s: %s", ip, exc)
+            return {"ok": False, "message": f"Could not reach {ip}: {exc}"}
+
+        if result is None:
+            return {
+                "ok": False,
+                "message": (
+                    f"Reached {ip}, but neither a Reolink nor a Dahua answered. "
+                    "Check the username and password."
+                ),
+            }
+
+        camera_type, info = result
+        return {
+            "ok": True,
+            "camera_type": camera_type,
+            "name": info.name,
+            "model": info.model,
+            "message": " ".join(
+                p for p in (info.manufacturer, info.model, info.name) if p
+            )
+            or f"{camera_type} at {ip}",
+        }
 
     @router.post("/camera/test")
     async def camera_test(

@@ -39,6 +39,15 @@ _STATUS = {
 }
 
 
+class _CameraState:
+    """The few fields the camera step reads off the wizard's session state."""
+
+    camera_type = "reolink"
+    camera_name = ""
+    camera_ip = ""
+    camera_username = "admin"
+
+
 def _sample_config() -> Config:
     """A Config with every section at its defaults."""
     sections: dict[str, Any] = {}
@@ -96,13 +105,8 @@ def render_all() -> dict[str, str]:
         "setup.html": setup_router._page(
             "camera",
             "Camera",
-            "Point Soccer-Cam at the recorder on your field.",
-            '<label class="field-label" for="addr">Camera address</label>'
-            '<input id="addr" type="text" value="192.168.1.50" class="mono">'
-            '<p class="hint">The IP or hostname of the Dahua or Reolink unit.</p>'
-            '<div class="btn-row" style="margin-top:24px">'
-            '<a class="btn" href="#">Continue</a>'
-            '<a class="btn btn-ghost" href="#">Back</a></div>',
+            "Find the camera on your network, or enter it yourself.",
+            setup_router._camera_body(_CameraState()),
         ),
         "signed-in.html": auth_server._SUCCESS_PAGE,
         "sign-in-failed.html": auth_server._error_page(
@@ -115,6 +119,30 @@ def render_all() -> dict[str, str]:
         # layout is real.
         "stitch.html": stitch_calibration._render_page({"errors": []}),
     }
+
+    # The camera step with cameras found. Only reachable for real when ONVIF
+    # devices are on the same segment, so the found-state is stubbed here --
+    # the stub replaces the network call, not the rendering, so the list, the
+    # selection behaviour and the name suggestion are the real code paths.
+    found = setup_router._page(
+        "camera",
+        "Camera",
+        "Find the camera on your network, or enter it yourself.",
+        setup_router._camera_body(_CameraState()),
+    ).replace(
+        "</body>",
+        "<script>"
+        "window.fetch = async (url) => ({ json: async () => ({ ok: true, devices: ["
+        '{ip:"192.168.1.50",name:"RLC-810A",hardware:"RLC-810A",'
+        'vendor:"Reolink",label:"Reolink RLC-810A"},'
+        '{ip:"192.168.1.60",name:"IPC-HDW2431T",hardware:"",'
+        'vendor:"Dahua",label:"Dahua IPC-HDW2431T"},'
+        '{ip:"192.168.1.77",name:"",hardware:"",vendor:"",label:""}'
+        "] }) });"
+        'document.getElementById("scan-btn").click();'
+        "</script></body>",
+    )
+    pages["setup-camera-found.html"] = found
 
     # Tally states, so all four are reviewable side by side.
     for state in ("idle", "armed", "recording", "error"):
@@ -139,7 +167,7 @@ _GROUPS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
         [
             ("dashboard.html", "Status", "/"),
             ("config.html", "Settings", "/config"),
-            ("setup.html", "Setup wizard", "/setup/camera"),
+            ("setup.html", "Setup wizard — camera step", "/setup/camera"),
             ("stitch.html", "Seam calibration", "/stitch"),
             ("signed-in.html", "Signed in", "after OAuth"),
         ],
@@ -150,6 +178,7 @@ _GROUPS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
         [
             ("config-error.html", "Settings — validation failed", ""),
             ("sign-in-failed.html", "Sign-in failed", ""),
+            ("setup-camera-found.html", "Camera step — cameras found", ""),
         ],
     ),
     (

@@ -10,7 +10,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 
@@ -55,31 +55,124 @@ class DiscoveredCamera:
     manufacturer: str
 
 
-def _extract_ips_from_probe_match(xml_data: bytes) -> list[str]:
-    """Parse WS-Discovery ProbeMatch XML to extract IP addresses from XAddrs."""
-    ips = set()
+@dataclass
+class DiscoveredDevice:
+    """A device that answered WS-Discovery, before we have credentials.
+
+    Everything here comes out of the ProbeMatch itself, so it is available
+    without logging in. ``vendor`` is a *guess* from the advertised scopes and
+    may be ``""`` -- only :func:`identify_camera` can confirm it, because only
+    a successful authenticated probe proves what the device actually is.
+    """
+
+    ip: str
+    name: str = ""
+    hardware: str = ""
+    vendor: str = ""
+
+    @property
+    def label(self) -> str:
+        """A human-readable one-liner, falling back to the address."""
+        return " ".join(p for p in (self.vendor, self.name or self.hardware) if p)
+
+
+#: Scope paths ONVIF devices use to advertise themselves, e.g.
+#: ``onvif://www.onvif.org/name/RLC-810A``.
+_SCOPE_NAME = "/name/"
+_SCOPE_HARDWARE = "/hardware/"
+
+#: Substrings that identify a vendor in an advertised scope. Only used for a
+#: pre-credential hint in the UI -- never to decide how to talk to a device.
+_VENDOR_HINTS = (("reolink", "Reolink"), ("dahua", "Dahua"), ("amcrest", "Dahua"))
+
+
+def _sort_key(ip: str) -> tuple:
+    """Sort addresses numerically, so .9 comes before .10 in the picker."""
+    try:
+        return (0, tuple(int(p) for p in ip.split(".")))
+    except ValueError:
+        return (1, ip)
+
+
+def _parse_scopes(text: str) -> tuple[str, str, str]:
+    """Return ``(name, hardware, vendor)`` from a Scopes element's text."""
+    name = hardware = vendor = ""
+    for scope in text.split():
+        lowered = scope.lower()
+        if _SCOPE_NAME in lowered and not name:
+            name = unquote(scope.rsplit("/", 1)[-1])
+        elif _SCOPE_HARDWARE in lowered and not hardware:
+            hardware = unquote(scope.rsplit("/", 1)[-1])
+        for needle, label in _VENDOR_HINTS:
+            if needle in lowered:
+                vendor = label
+    return name, hardware, vendor
+
+
+def _extract_devices_from_probe_match(xml_data: bytes) -> list[DiscoveredDevice]:
+    """Parse a ProbeMatch into devices, keeping the advertised scopes.
+
+    Each ``ProbeMatch`` carries its own XAddrs and Scopes, so they are read per
+    match -- reading them document-wide would attach one device's model to
+    another's address when several answer in one datagram.
+    """
+    devices: dict[str, DiscoveredDevice] = {}
     try:
         root = ET.fromstring(xml_data)
-        # Search for XAddrs elements in any namespace
-        for elem in root.iter():
+    except ET.ParseError:
+        logger.debug("Failed to parse WS-Discovery response XML")
+        return []
+
+    matches = [e for e in root.iter() if e.tag.endswith("ProbeMatch")]
+    # Some devices reply with a bare envelope; fall back to the whole document
+    # so a non-conforming camera is still found.
+    for match in matches or [root]:
+        ips: list[str] = []
+        name = hardware = vendor = ""
+        for elem in match.iter():
             if elem.tag.endswith("XAddrs") and elem.text:
                 for addr in elem.text.strip().split():
                     try:
-                        parsed = urlparse(addr)
-                        if parsed.hostname:
-                            ips.add(parsed.hostname)
+                        host = urlparse(addr).hostname
                     except Exception:
                         continue
-    except ET.ParseError:
-        logger.debug("Failed to parse WS-Discovery response XML")
-    return list(ips)
+                    if host:
+                        ips.append(host)
+            elif elem.tag.endswith("Scopes") and elem.text:
+                name, hardware, vendor = _parse_scopes(elem.text)
+        for ip in ips:
+            # First answer for an address wins; later ones only fill blanks.
+            existing = devices.get(ip)
+            if existing is None:
+                devices[ip] = DiscoveredDevice(ip, name, hardware, vendor)
+            else:
+                existing.name = existing.name or name
+                existing.hardware = existing.hardware or hardware
+                existing.vendor = existing.vendor or vendor
+    return list(devices.values())
+
+
+def _extract_ips_from_probe_match(xml_data: bytes) -> list[str]:
+    """Parse WS-Discovery ProbeMatch XML to extract IP addresses from XAddrs."""
+    return [d.ip for d in _extract_devices_from_probe_match(xml_data)]
 
 
 def discover_onvif_devices(timeout: float = 3.0) -> list[str]:
-    """Send WS-Discovery Probe and return list of discovered device IPs.
+    """Send WS-Discovery Probe and return list of discovered device IPs."""
+    return [d.ip for d in discover_onvif_details(timeout)]
+
+
+def discover_onvif_details(timeout: float = 3.0) -> list[DiscoveredDevice]:
+    """Send WS-Discovery Probe and return what each device advertised.
 
     Sends a SOAP Probe for NetworkVideoTransmitter devices via UDP multicast
-    to 239.255.255.250:3702 and listens for responses.
+    to 239.255.255.250:3702 and listens for responses. Link-local by design:
+    it finds cameras on the same network segment as this machine, which is
+    where a camera plugged in next to the recorder will be.
+
+    Blocking. Call it off the event loop (``asyncio.to_thread``) -- it sits in
+    ``select`` for the whole timeout, and a web request that does that inline
+    stalls every other request for the duration.
     """
     msg_id = str(uuid.uuid4())
     probe = _PROBE_TEMPLATE.format(msg_id=msg_id).encode("utf-8")
@@ -104,7 +197,7 @@ def discover_onvif_devices(timeout: float = 3.0) -> list[str]:
         sock.sendto(probe, (WS_DISCOVERY_MULTICAST, WS_DISCOVERY_PORT))
         logger.debug("Sent WS-Discovery probe")
 
-        all_ips: set[str] = set()
+        found: dict[str, DiscoveredDevice] = {}
         deadline = time.monotonic() + timeout
 
         while True:
@@ -118,16 +211,23 @@ def discover_onvif_devices(timeout: float = 3.0) -> list[str]:
 
             try:
                 data, addr = sock.recvfrom(65535)
-                ips = _extract_ips_from_probe_match(data)
-                all_ips.update(ips)
+                for device in _extract_devices_from_probe_match(data):
+                    existing = found.get(device.ip)
+                    if existing is None:
+                        found[device.ip] = device
+                    else:
+                        # A camera answers more than once; keep the richest.
+                        existing.name = existing.name or device.name
+                        existing.hardware = existing.hardware or device.hardware
+                        existing.vendor = existing.vendor or device.vendor
             except BlockingIOError:
                 continue
             except Exception as e:
                 logger.debug(f"Error receiving WS-Discovery response: {e}")
                 continue
 
-        logger.info(f"WS-Discovery found {len(all_ips)} device(s)")
-        return list(all_ips)
+        logger.info("WS-Discovery found %d device(s)", len(found))
+        return sorted(found.values(), key=lambda d: _sort_key(d.ip))
 
     except Exception as e:
         logger.error(f"WS-Discovery failed: {e}")
@@ -251,6 +351,31 @@ async def probe_dahua(ip: str, username: str, password: str) -> DiscoveredCamera
     except Exception as e:
         logger.debug(f"Error probing Dahua at {ip}: {e}")
         return None
+
+
+async def identify_camera(
+    ip: str, username: str, password: str
+) -> tuple[str, DiscoveredCamera] | None:
+    """Work out what kind of camera is at ``ip`` by talking to it.
+
+    Returns ``(camera_type, info)`` where ``camera_type`` is ``"reolink"`` or
+    ``"dahua"``, or ``None`` if neither answered. This is what makes the type
+    dropdown unnecessary: the device tells us what it is, and a successful
+    authenticated probe is proof, where an advertised ONVIF scope is only a
+    hint.
+
+    Reolink is tried first because its probe is a single JSON POST that fails
+    fast on a Dahua, whereas the Dahua probe negotiates Digest auth.
+    """
+    reolink = await probe_reolink(ip, username, password)
+    if reolink is not None:
+        return "reolink", reolink
+
+    dahua = await probe_dahua(ip, username, password)
+    if dahua is not None:
+        return "dahua", dahua
+
+    return None
 
 
 async def configure_always_record(
