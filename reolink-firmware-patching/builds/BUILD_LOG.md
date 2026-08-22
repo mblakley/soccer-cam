@@ -52,13 +52,52 @@ computed — and `verify/check_recording_default.sh` must pass.
 
 | File | Notes |
 |---|---|
-| **`IPC_…4920…_stitchcal.pak`** | **CURRENT.** 4919 + **idempotent hook.** Re-running S98 within one boot composed the correction onto its *own output* and silently doubled the shear (3 px → 6 px) while the log read healthy. The hook now records a signature of what it wrote and, on recognising it, composes from the saved baseline instead. Verified on camera: three consecutive runs all produce mesh crc `0bf0934f`. |
+| **`IPC_…4921…_stitchcal.pak`** (`7514d015…`, CRC `0x317cfb07`) | **CURRENT.** 4920 + **`S99_NetState` v3: periodic segment rollover.** The camera finalises an MP4 only when recording *stops* — it pre-allocates the `moov` at the front of the file and fills it on close — so an abrupt power cut loses the **entire session**, not a truncated tail. Observed 2026-08-22: a ~435 MB main stream was **absent from the card**, `df` confirming the space was never consumed; only the sub-stream survived. v3 therefore toggles recording off→`sync`→on every `ROLLOVER_SECS` **while away**, bounding the loss to one interval. Default **60 s**, retunable with a file drop at `/mnt/sda/netstate/rollover_secs` (0 disables, 15 s floor). Also **releases API sessions** (`Logout`) — see below. Builder gates the three invariants (logout present, `do_rollover` away-guarded, `sync` inside it). |
+| `IPC_…4920…_stitchcal.pak` | superseded — 4919 + **idempotent hook.** Re-running S98 within one boot composed the correction onto its *own output* and silently doubled the shear (3 px → 6 px) while the log read healthy. The hook now records a signature of what it wrote and, on recognising it, composes from the saved baseline instead. Verified on camera: three consecutive runs all produce mesh crc `0bf0934f`. |
 | `IPC_…4919…_stitchcal.pak` | superseded — first build whose hook actually ran. 4918 + **wait for `/mnt/sda` before reading config** + `S36_RootShell` restored. **On-camera validated:** S98 applied a ±3 px calibration 38 s into boot, read-back ok, and the correction was visible in a snapshot. |
 | `IPC_…4918…_stitchcal.pak` | superseded, and instructive. Gates passed, flashed clean — and the hook **did nothing, silently**. `rcS` does `mount -a` then runs `S*`, but `/mnt/sda` is `/dev/hd/sda1`, mounted later by the app; S98 checked for `anchors.txt` first, found none, and could not even log it because `/` is read-only squashfs. It also dropped `S36_RootShell` (the comprehensive builder never installed one), taking tcp/2323 with it. |
 
 Known gap: `commit=` in the manifest reads `unknown` unless `SOCCERCAM_COMMIT` is
 set, because `git rev-parse` refuses a `/mnt/c` worktree from WSL (dubious
 ownership). Pass it explicitly.
+
+### Segment rollover (v3) — measured, not assumed
+
+Measured on the camera at build 4920 before the v3 build, driving `SetRecV20`
+over HTTP with the exact call shape the daemon uses (login → set → logout):
+
+| What | Measured |
+|---|---|
+| Natural rollover without intervention | **none** — one file grew for 3+ min hands-off |
+| Toggle cost, off→`sync`→on, no settle delay | **0.62 s** end to end |
+| Frames lost per rollover | **zero** |
+| Content *duplicated* per rollover | **≈0.50 s (~10 frames @ 20 fps)** |
+
+Over 10 consecutive rollovers, segment **start** times (independent camera-clock
+stamps) advanced 208 s while 212.98 s of content was written — a 4.98 s surplus,
+i.e. the camera's pre-record buffer **backfills** the toggle rather than dropping
+frames. All 11 segments probed clean: 7680×2160 HEVC, real `moov`, playable.
+
+Two consequences drove the design:
+
+- **60 s is cheap.** A rollover costs duplicated frames, not lost ones, so a
+  tight loss bound is nearly free (~0.8 % duplicated content at 60 s). For match
+  footage the cost is ~90 half-second hitches over 90 minutes; raise
+  `rollover_secs` to 300 if that reads badly, or teach the downstream concat to
+  trim the overlap (the duplicate frames are present, so it is recoverable).
+- **Sessions must be released.** The camera caps concurrent API sessions at
+  **5** (`"max session"`, rspCode −5) with a 3600 s lease. v2 logged in per call
+  and never logged out — harmless at one call per home/away transition, fatal at
+  one rollover a minute: the pool empties within minutes, `SetRecV20` starts
+  failing `"please login first"`, and **recording stops silently**. Verified: 5
+  leaked logins exhaust the pool; with `Logout`, 12/12 succeed. This was found by
+  measurement, not review, and it would have made the whole feature a no-op.
+
+Caveat not closed at home: the overlap was measured on a static indoor scene
+(~1.2 Mbps actual, against the 20480 kbps cap). If the pre-record buffer is
+size-bounded it may cover less at true field bitrate, in which case the rollover
+degrades from ~0.5 s of overlap toward a gap of at most the 0.62 s toggle time.
+Bounded and sub-second either way, but it is inference, not measurement.
 
 ## "Comprehensive" firmware — ready to flash
 | File | sha256 | Notes |
