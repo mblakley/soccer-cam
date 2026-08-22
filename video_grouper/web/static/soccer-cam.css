@@ -276,6 +276,15 @@ h3 {
   text-decoration: none;
 }
 
+/* Right-hand group: nav and crumb sit on one line, so the nav holds the same
+   position whether or not the page has a crumb. */
+.topbar-end {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
 /* Top-level nav links in the topbar */
 .topnav {
   display: flex;
@@ -881,17 +890,75 @@ pre code {
   .shell,
   .shell--rail {
     grid-template-columns: 1fr;
-    gap: 24px;
-    padding: 24px 16px 64px;
+    gap: 16px;
+    padding: 20px 16px 64px;
   }
 
+  /* The rail becomes a horizontal strip that scrolls under the topbar.
+     Stacked vertically it was a wall of links you had to scroll past before
+     reaching any content -- 16 of them on Settings. As a strip it stays
+     useful for jumping to a section without costing a screen of height. */
   .rail {
-    position: static;
+    position: sticky;
+    top: 54px;
+    z-index: var(--z-base);
+    margin: 0 -16px;
+    padding: 8px 16px;
+    background: var(--color-bg-primary);
+    border-bottom: 1px solid var(--color-border);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* The heading is a desktop affordance; the strip is self-evident. */
+  .rail > h2 {
+    display: none;
+  }
+
+  .rail ol,
+  .rail ul {
+    display: flex;
+    gap: 8px;
+    width: max-content;
+  }
+
+  .rail a {
+    padding: 6px 12px;
+    border-left: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .rail a.active,
+  .rail a[aria-current='true'] {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
   }
 
   .topbar-inner {
-    padding: 12px 16px;
-    flex-wrap: wrap;
+    padding: 10px 16px;
+    gap: 8px;
+  }
+
+  .topbar-end {
+    gap: 8px;
+    min-width: 0;
+  }
+
+  /* Truncate rather than wrap: a crumb dropping to its own row reads as a
+     layout accident, and the page heading already says where you are. */
+  .crumb {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 30vw;
   }
 
   .page-header {

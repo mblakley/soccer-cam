@@ -130,6 +130,35 @@ Nothing else in the product animates on a loop.
 
 ---
 
+## Responsive
+
+Dark, dense and desktop-first, but every page has to work on a phone — the
+camera manager is a parent on a sideline, not someone at a desk.
+
+Two breakpoints, both in the shared sheet:
+
+**≤900px — layout**
+- The rail stops being a sidebar and becomes a **horizontal scroll strip**
+  under the topbar. It does *not* stack vertically: Settings has 16 sections,
+  and stacked that was a screen of links before the first field.
+- `.shell--rail` collapses to one column; padding drops to 16px.
+- Nav and crumb stay on one line; the crumb truncates rather than wrapping,
+  because a crumb on its own row reads as a layout accident.
+- The settings save bar stacks, button full width.
+
+**≤767px — touch**
+- Buttons and inputs get `min-height: 44px`.
+- Inputs go to `font-size: 16px`, which is what stops iOS zooming on focus.
+
+The seam-calibration tool is the exception in both directions: it is
+**mobile-first**, with its desktop layout behind `@media (min-width: 980px)`,
+and its touch targets are sized per-control with the reasons in comments
+(44px for the ones pressed mid-task one-handed, 38px for secondary modes).
+Leave those alone.
+
+Check with `python -m video_grouper.web.preview` and a narrow window —
+`tests/web/test_design_system.py` guards the rules but cannot see a layout.
+
 ## Rules
 
 1. **One stylesheet.** `video_grouper/web/static/soccer-cam.css`, served at

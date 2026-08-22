@@ -240,3 +240,47 @@ def test_topbar_nav_position_does_not_move_between_pages():
     for bar in (chrome.topbar("/"), chrome.topbar(crumb="Setup")):
         assert '<div class="topbar-end">' in bar
         assert bar.index("topbar-end") < bar.index("topnav")
+
+
+def test_every_class_chrome_emits_is_styled():
+    """Markup must not reference a class the stylesheet never defines.
+
+    `.topbar-end` was added to the topbar with no base rule, so nav and crumb
+    stacked vertically at every width until a phone screenshot showed it.
+    """
+    markup = "".join(
+        [
+            chrome.page("T", "<main></main>", crumb="C"),
+            chrome.topbar("/config", crumb="Setup"),
+            chrome.notice_page("T", "H", "<p>b</p>", tone="ok"),
+            chrome.notice_page("T", "H", "<p>b</p>", tone="bad"),
+        ]
+    )
+    used = set(re.findall(r'class="([^"]+)"', markup))
+    classes = {c for group in used for c in group.split()}
+
+    css = _text(SHEET)
+    styled = set(re.findall(r"\.([a-z][a-z0-9-]*)", css))
+    unstyled = sorted(c for c in classes if c not in styled)
+    assert not unstyled, f"chrome emits unstyled classes: {unstyled}"
+
+
+def test_mobile_collapses_the_rail_instead_of_stacking_it():
+    """On a phone the rail is a horizontal strip, not a wall of links.
+
+    Stacked vertically it put 16 section links above the first field on
+    Settings -- a screen of scrolling before any content.
+    """
+    css = _text(SHEET)
+    mobile = css[css.index("@media (max-width: 900px)") :]
+    rail = mobile[mobile.index(".rail {") : mobile.index(".topbar-inner")]
+    assert "overflow-x: auto" in rail
+    assert "display: flex" in mobile, "rail items must lay out in a row"
+
+
+def test_touch_targets_are_at_least_44px():
+    """Buttons and inputs must be thumb-sized, and 16px so iOS does not zoom."""
+    css = _text(SHEET)
+    phone = css[css.index("@media (max-width: 767px)") :]
+    assert phone.count("min-height: 44px") >= 2
+    assert phone.count("font-size: 16px") >= 2

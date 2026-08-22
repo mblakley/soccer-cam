@@ -203,7 +203,16 @@ section.cfg {
 @media (max-width: 900px) {
   .cfg-field { grid-template-columns: 1fr; gap: 6px; }
   .cfg-field-label { padding-top: 0; }
-  .savebar { margin: 32px -16px 0; padding: 16px; }
+  /* Stack the bar: side by side, the hint squeezed "Save changes" onto two
+     lines and shrank the tap target. */
+  .savebar {
+    margin: 32px -16px 0;
+    padding: 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .savebar .btn { width: 100%; }
 }
 </style>
 </head>
