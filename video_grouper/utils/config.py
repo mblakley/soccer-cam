@@ -143,14 +143,38 @@ class ArchiveConfig(BaseModel):
     def root_for_team(self, team_name: str) -> str:
         """Archive root for *team_name*, or "" when it has nowhere to go.
 
-        Matched case-insensitively and ignoring surrounding whitespace:
-        configparser lowercases option keys, and match_info is hand-edited.
+        *team_name* is a game's ``my_team_name`` from match_info.ini, and that
+        is the full registered name — on the live install, ``BU14 - Guzzetta``,
+        not ``Guzzetta``. An exact match therefore misses: an operator writes
+        the short handle they think of the team by, and archiving would refuse
+        every game with "no archive root for team".
+
+        So match exactly first, then by substring, which is the same rule
+        ``[YOUTUBE.PLAYLIST_MAP]`` has always used and the only reason a key
+        like ``guzzetta`` resolves ``BU14 - Guzzetta`` there. Longest key wins
+        among substring matches, so with two teams sharing a word ("Flash" and
+        "WNY Flash Rochester") the more specific root is chosen rather than
+        whichever happens to be first — filing a game under another team's
+        archive and then deleting the original is not recoverable.
+
+        Case-insensitive and whitespace-tolerant throughout: configparser
+        lowercases option keys, and match_info is hand-edited.
         """
         wanted = (team_name or "").strip().casefold()
+        if not wanted:
+            return self.path.strip()
+
         for name, root in self.per_team.items():
             if name.strip().casefold() == wanted:
                 return root.strip()
-        return self.path.strip()
+
+        best_root = ""
+        best_len = 0
+        for name, root in self.per_team.items():
+            folded = name.strip().casefold()
+            if folded and folded in wanted and len(folded) > best_len:
+                best_root, best_len = root.strip(), len(folded)
+        return best_root or self.path.strip()
 
     @property
     def makes_second_copy(self) -> bool:

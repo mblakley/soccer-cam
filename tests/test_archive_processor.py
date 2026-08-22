@@ -478,3 +478,78 @@ class TestPerTeamArchiveRoots:
             await processor.process_item(ArchiveTask(group_dir=group_dir))
 
         assert os.path.exists(os.path.join(group_dir, "game.mp4"))
+
+
+class TestRootLookupMatchesRealTeamNames:
+    """The archive root is chosen from a game's my_team_name.
+
+    That value is the full registered name — on the live install
+    "BU14 - Guzzetta", not "Guzzetta" — while an operator writes the short
+    handle they think of the team by. An exact match misses, and archiving
+    refuses every game with "no archive root for team". Substring matching is
+    the same rule [YOUTUBE.PLAYLIST_MAP] has always used.
+    """
+
+    def test_the_real_my_team_name_resolves_from_a_short_key(self):
+        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"guzzetta": HEAT_2012})
+
+        assert cfg.root_for_team("BU14 - Guzzetta") == HEAT_2012
+
+    def test_both_live_teams_resolve(self):
+        cfg = ArchiveConfig(
+            after_upload="move",
+            PER_TEAM={"guzzetta": HEAT_2012, "flash": FLASH_2013},
+        )
+
+        assert cfg.root_for_team("BU14 - Guzzetta") == HEAT_2012
+        assert (
+            cfg.root_for_team("Western New York Flash - 13B ECNL-RL Rochester")
+            == FLASH_2013
+        )
+
+    def test_longest_key_wins_so_age_groups_are_not_mixed(self):
+        """Filing a game under another team's root then deleting the original
+        is not something a later pass can undo."""
+        cfg = ArchiveConfig(
+            after_upload="move",
+            PER_TEAM={"flash": FLASH_2013, "wny flash rochester": HEAT_2013},
+        )
+
+        assert cfg.root_for_team("WNY Flash Rochester ECNL") == HEAT_2013
+
+    def test_an_unmapped_team_still_has_nowhere_to_go(self):
+        """The refusal must survive: a near-miss must not fall back silently."""
+        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"guzzetta": HEAT_2012})
+
+        assert cfg.root_for_team("Some Other Club") == ""
+
+    def test_path_is_still_the_fallback_when_configured(self):
+        cfg = ArchiveConfig(
+            after_upload="move", path=FALLBACK, PER_TEAM={"guzzetta": HEAT_2012}
+        )
+
+        assert cfg.root_for_team("Some Other Club") == FALLBACK
+
+    @pytest.mark.asyncio
+    async def test_a_real_game_archives_instead_of_being_refused(
+        self, temp_storage, archive_root, archive_config
+    ):
+        """End to end: the group's match_info says "Heat", the operator
+        configured "heat", and the archive must actually run."""
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+        archive_config.archive.after_upload = "move"
+        archive_config.archive.path = ""
+        archive_config.archive.per_team = {"heat": archive_root}
+
+        processor = ArchiveProcessor(temp_storage, archive_config)
+        Path(get_camera_state_path(temp_storage)).write_text(
+            json.dumps({"cam": {"latest_video_time": "2026-07-12 10:35:15"}}),
+            encoding="utf-8",
+        )
+
+        await processor.process_item(ArchiveTask(group_dir=group_dir))
+
+        assert not os.path.exists(group_dir)
+        assert os.path.exists(
+            os.path.join(archive_root, "2026.07.12 - vs Kenmore (away)", "game.mp4")
+        )

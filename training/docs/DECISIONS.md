@@ -1920,6 +1920,12 @@ working drive. `discard` answers the single-drive case (YouTube is the archive) 
 the group carries a recorded YouTube video id, since those files are then the only copy. `copy`/`move`
 with nowhere to put games is a config-load hard failure rather than a silent no-op.
 
+Archive roots are matched against a game's `my_team_name` **by substring, not exactly** — the
+same rule `[YOUTUBE.PLAYLIST_MAP]` has always used. The live value is the full registered name
+(`BU14 - Guzzetta`), while an operator writes the short handle (`guzzetta`); an exact match misses
+and archiving refuses every game. Longest configured key wins, so two teams sharing a word do not
+get filed into each other's archive — which, followed by deleting the original, is unrecoverable.
+
 Archive roots are **per-team** and configured, never derived: `[ARCHIVE.PER_TEAM]` maps
 `my_team_name` to a root. Verified against the live layout 2026-08-07 — `F:\Heat_2012s`,
 `F:\Heat_2013s`, `F:\Flash_2013s`, holding `2026.07.12 - vs Niagara Falls Soccer Club (away)`.
