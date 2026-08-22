@@ -5,9 +5,10 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, RootModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from video_grouper.pipeline.config import PipelineConfig
+from video_grouper.utils.config_migrations import current_schema_version
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,136 @@ class CameraConfig(BaseModel):
     # GOP boundary (observed 2026-05-30 Fairport), so locking to a
     # single protocol per game is the safer default for tournament use.
     download_protocol: Literal["auto", "http", "baichuan"] = "auto"
+
+
+class SchemaConfig(BaseModel):
+    """Which config schema this file is written in. Machine-owned.
+
+    Must be a real field on ``Config``: ``save_config`` rebuilds the file from
+    ``Config.model_fields`` onto an empty parser, so a section the model does
+    not know about is erased on the user's next ``/config`` save. A version
+    that vanished would make an already-migrated file look unversioned and get
+    migrated a second time.
+
+    Defaults to the current version, so anything soccer-cam writes itself — a
+    fresh install, the wizard — is stamped current and never migrated. Only a
+    file predating versioning reads as 0.
+
+    Because of that default, this field does NOT tell you what version a file
+    on disk is at: an unmigrated file has no ``[SCHEMA]`` section and still
+    reports current here. Version detection reads the raw parsed sections
+    instead — see :func:`config_migrations.read_version`. Nothing outside the
+    migration framework should need to ask.
+    """
+
+    version: int = Field(default_factory=current_schema_version)
+
+
+class TeamConfig(BaseModel):
+    """Everything about one team, in one place.
+
+    Per-team settings used to be spread across ``[TEAMSNAP.*]``,
+    ``[PLAYMETRICS.TEAM.*]``, ``[YOUTUBE.PLAYLIST_MAP]``,
+    ``[PIPELINE.PER_TEAM]`` and ``[BALL_TRACKING.PER_TEAM]``, and the same team
+    was spelled differently in each — on one real install, ``BU14 - Guzzetta``
+    in TeamSnap and ``guzzetta`` in the playlist map. There was no canonical
+    team identity anywhere, and each subsystem invented its own matching rule.
+
+    Spelled ``[TEAM.<key>]``, where ``<key>`` is a short handle you choose. The
+    key is never matched against anything; ``name`` and ``aliases`` are.
+    """
+
+    # As it appears in a game's match_info.ini [MATCH] my_team_name. That is
+    # what every lookup is given at runtime, so it is what we match on.
+    name: str = ""
+    # Extra spellings that also identify this team. A short alias works
+    # because matching falls back to substring — which is the only reason the
+    # existing playlist map resolves "guzzetta" against "BU14 - Guzzetta".
+    aliases: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+    teamsnap_team_id: str = ""
+    playmetrics_team_id: str = ""
+    youtube_playlist: str = ""
+    # Pipeline preset or step-list override for this team's games.
+    pipeline: str = ""
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _split_aliases(cls, value: object) -> object:
+        """Accept a comma-separated string — an INI cannot hold a list."""
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    def identifiers(self) -> list[str]:
+        """Every string that identifies this team, longest first.
+
+        Longest first so a specific alias wins over a shorter one that is also
+        a substring of the same team name.
+        """
+        names = [self.name, *self.aliases]
+        return sorted(
+            (n.strip() for n in names if n and n.strip()), key=len, reverse=True
+        )
+
+    def matches(self, my_team_name: str) -> bool:
+        """Whether *my_team_name* (from match_info.ini) is this team.
+
+        Exact match first, then substring, mirroring the behaviour the
+        playlist map already relied on. Case-insensitive throughout: section
+        names preserve case but option keys do not, and match_info is
+        hand-edited.
+        """
+        wanted = (my_team_name or "").strip().casefold()
+        if not wanted:
+            return False
+        candidates = [n.casefold() for n in self.identifiers()]
+        return any(c == wanted for c in candidates) or any(
+            c in wanted for c in candidates
+        )
+
+
+def resolve_team(
+    teams: dict[str, TeamConfig], my_team_name: str | None
+) -> TeamConfig | None:
+    """The configured team a game belongs to, or None.
+
+    The single place team identity is resolved. It replaces five different
+    matching rules — TeamSnap matched on a section name, PlayMetrics on an
+    option value, and the YouTube playlist map on a lowercased substring —
+    which is how the same team came to be spelled differently in every section.
+
+    Exact matches win over substring matches across ALL teams, so a team whose
+    name matches exactly always beats another team that merely contains the
+    string. Within substring matching, longer identifiers are tried first.
+
+    A free function rather than only a ``Config`` method because callers deep
+    in the pipeline (the upload task) are handed one section, not the whole
+    config.
+    """
+    if not my_team_name:
+        return None
+    candidates = [t for t in teams.values() if t.enabled]
+    wanted = my_team_name.strip().casefold()
+
+    for team in candidates:
+        if any(n.casefold() == wanted for n in team.identifiers()):
+            return team
+
+    # Substring fallback: pick the team with the LONGEST matching identifier,
+    # not merely the first one configured. With two teams whose names share a
+    # word ("Flash" and "WNY Flash Rochester"), first-match would hand the game
+    # to whichever happened to be listed first — a silent misfile that sends
+    # the video to the wrong playlist.
+    best: TeamConfig | None = None
+    best_len = 0
+    for team in candidates:
+        for identifier in team.identifiers():
+            folded = identifier.casefold()
+            if folded in wanted and len(folded) > best_len:
+                best, best_len = team, len(folded)
+    return best
 
 
 class StorageConfig(BaseModel):
@@ -352,21 +483,6 @@ class YouTubePlaylistConfig(BaseModel):
     privacy_status: str
 
 
-class YouTubePlaylistMapConfig(RootModel[dict[str, str]]):
-    def get(self, team_name: str) -> str | None:
-        # First try exact match
-        if team_name in self.root:
-            return self.root[team_name]
-
-        # Then try case-insensitive match
-        team_name_lower = team_name.lower()
-        for key, value in self.root.items():
-            if key.lower() == team_name_lower:
-                return value
-
-        return None
-
-
 class YouTubeConfig(BaseModel):
     enabled: bool = False
     privacy_status: str = "private"
@@ -382,13 +498,8 @@ class YouTubeConfig(BaseModel):
     quota_retry_minutes: int = 30
     processed_playlist: YouTubePlaylistConfig | None = None
     raw_playlist: YouTubePlaylistConfig | None = None
-    playlist_map: YouTubePlaylistMapConfig | None = None
 
     model_config = {"validate_by_name": True}
-
-    @property
-    def playlist_map_dict(self) -> dict[str, str]:
-        return self.playlist_map.root if self.playlist_map else {}
 
 
 class SetupConfig(BaseModel):
@@ -409,6 +520,10 @@ class Config(BaseModel):
     # omitting a different set (ARCHIVE, AUTOCAM, PIPELINE, NODE,
     # MOMENT_TAGGING), and every entry they did list was literally `{}`.
     # With defaults here, a new section needs no generator edit at all.
+    schema_meta: SchemaConfig = Field(alias="SCHEMA", default_factory=SchemaConfig)
+    # Keyed by the [TEAM.<key>] handle. Insertion-ordered, so a config's own
+    # ordering decides ties between two teams that both match.
+    teams: dict[str, TeamConfig] = Field(default_factory=dict)
     cameras: list[CameraConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(alias="STORAGE")
     recording: RecordingConfig = Field(
@@ -449,6 +564,14 @@ class Config(BaseModel):
         """Convenience accessor for the first camera config."""
         return self.cameras[0]
 
+    def team_for(self, my_team_name: str | None) -> TeamConfig | None:
+        """The configured team a game belongs to, or None.
+
+        See :func:`resolve_team` — this is the same lookup, for callers that
+        hold the whole ``Config``.
+        """
+        return resolve_team(self.teams, my_team_name)
+
     def post_trim_processing_active(self) -> bool:
         """True when a post-trim processing stage owns ``trimmed`` groups.
 
@@ -477,11 +600,12 @@ def load_config(config_path: Path) -> Config:
             "YOUTUBE.PLAYLIST.RAW"
         )
 
-    # Add support for YOUTUBE.PLAYLIST_MAP
-    if "YOUTUBE.PLAYLIST_MAP" in config_dict:
-        config_dict.setdefault("YOUTUBE", {})["playlist_map"] = (
-            YouTubePlaylistMapConfig(config_dict.pop("YOUTUBE.PLAYLIST_MAP"))
-        )
+    # [YOUTUBE.PLAYLIST_MAP] was team -> playlist with its own substring
+    # matching rule. Schema migration v2 folds it into [TEAM.<key>]
+    # youtube_playlist, resolved by resolve_team like every other per-team
+    # setting. Drop the section if an unmigrated file still carries it, so it
+    # cannot look like it is still being honoured.
+    config_dict.pop("YOUTUBE.PLAYLIST_MAP", None)
 
     # Handle BALL_TRACKING sub-sections (provider configs + per-team overrides).
     # `[BALL_TRACKING.AUTOCAM_GUI]` -> nested under BALL_TRACKING.AUTOCAM_GUI
@@ -531,6 +655,17 @@ def load_config(config_path: Path) -> Config:
     if "PLAYMETRICS" in config_dict:
         config_dict["PLAYMETRICS"]["teams"] = playmetrics_teams
 
+    # Handle team sections: [TEAM.<key>] -> teams dict, keyed by the handle.
+    # Unlike [CAMERA.<name>] the section suffix is NOT the identity — `name`
+    # inside the section is what gets matched against match_info. The handle is
+    # just a stable label for the operator.
+    teams: dict[str, dict] = {}
+    for section in list(config_dict.keys()):
+        if section.startswith("TEAM."):
+            teams[section.split(".", 1)[1]] = config_dict.pop(section)
+    if teams:
+        config_dict["teams"] = teams
+
     # Handle camera sections: [CAMERA.name] -> cameras list
     cameras = []
     for section in list(config_dict.keys()):
@@ -555,26 +690,52 @@ def load_config(config_path: Path) -> Config:
     if "TEAMSNAP" in config_dict:
         config_dict["TEAMSNAP"]["teams"] = teamsnap_teams
 
-    # Legacy migration: a pre-pipeline install has a [BALL_TRACKING] section but
-    # NO [PIPELINE] section at all — auto-adopt the config-driven pipeline so it
-    # lights up the new path without hand-editing the INI. We key on the
-    # *absence of any [PIPELINE] section* (not merely absence of steps) so an
-    # explicit `[PIPELINE]\nenabled = false` — which save_config always emits —
-    # is respected as a deliberate "pipeline off" choice rather than silently
-    # re-migrated on every round-trip. The migrated dict is injected as
-    # config_dict["PIPELINE"] so model_validate builds it.
-    from video_grouper.pipeline.config import migrate_ball_tracking_to_pipeline
+    # Project [TEAM.*] into the integrations' own team lists.
+    #
+    # [TEAM.<key>] is the single operator-facing place a team is configured,
+    # but TeamSnapService/PlayMetricsService/TeamInfoTask each iterate their
+    # section's `teams` list. Migration v2 DELETES the [TEAMSNAP.*] and
+    # [PLAYMETRICS.TEAM.*] sections those lists were built from, so without
+    # this projection an upgraded install would silently find no teams at all
+    # and both integrations would quietly stop fetching schedules.
+    #
+    # Derived, not duplicated: entries appear here only because a [TEAM.*]
+    # section names them, and a legacy entry of the same name wins so an
+    # unmigrated file behaves exactly as before.
+    for team_key, team_body in (config_dict.get("teams") or {}).items():
+        team_name = (team_body.get("name") or team_key).strip()
+        if not team_name or str(team_body.get("enabled", "true")).lower() in (
+            "false",
+            "0",
+            "no",
+        ):
+            continue
+        for section, id_field, bucket in (
+            ("TEAMSNAP", "teamsnap_team_id", teamsnap_teams),
+            ("PLAYMETRICS", "playmetrics_team_id", playmetrics_teams),
+        ):
+            team_id = (team_body.get(id_field) or "").strip()
+            if not team_id or section not in config_dict:
+                continue
+            if any(
+                (t.get("team_name") or "").strip().casefold() == team_name.casefold()
+                for t in bucket
+            ):
+                continue
+            bucket.append({"team_name": team_name, "team_id": team_id, "enabled": True})
+    if "TEAMSNAP" in config_dict:
+        config_dict["TEAMSNAP"]["teams"] = teamsnap_teams
+    if "PLAYMETRICS" in config_dict:
+        config_dict["PLAYMETRICS"]["teams"] = playmetrics_teams
 
-    if "PIPELINE" not in config_dict and config_dict.get("BALL_TRACKING"):
-        migrated = migrate_ball_tracking_to_pipeline(config_dict["BALL_TRACKING"])
-        if migrated:
-            config_dict["PIPELINE"] = migrated
-
-    # The legacy [BALL_TRACKING] section (and its nested sub-sections) is no
-    # longer a Config field — drop it after migration so it isn't passed to
-    # model_validate. Migration above has already lifted anything worth keeping
-    # into [PIPELINE].
-    config_dict.pop("BALL_TRACKING", None)
+    # [BALL_TRACKING] -> [PIPELINE] used to be folded in right here, on every
+    # single load, forever. It is now schema migration v1
+    # (video_grouper/utils/config_migrations.py), applied once at startup and
+    # written back to disk. Drop the section if a caller loads a file that has
+    # not been migrated yet — it is not a Config field, so model_validate would
+    # ignore it anyway; being explicit keeps the intent readable.
+    for section in [s for s in config_dict if s.startswith("BALL_TRACKING")]:
+        config_dict.pop(section, None)
 
     # Installation-level AutoCam settings live in [AUTOCAM] so they're
     # editable from /config. Fold them into the AutoCam step spec, which is
@@ -625,6 +786,18 @@ def save_config(config: Config, config_path: Path):
 
         # cameras are handled above
         if field_name == "cameras":
+            continue
+
+        # teams -> one [TEAM.<key>] section each. `aliases` is a list, which an
+        # INI cannot hold, so join it back to the comma-separated form the
+        # field validator parses on the way in.
+        if field_name == "teams":
+            for key, team in value.items():
+                team_dict = team.model_dump()
+                team_dict["aliases"] = ", ".join(team_dict.get("aliases") or [])
+                parser[f"TEAM.{key}"] = {
+                    k: str(v) for k, v in team_dict.items() if v is not None
+                }
             continue
 
         if field_name == "playmetrics" and hasattr(value, "teams"):
@@ -679,10 +852,6 @@ def save_config(config: Config, config_path: Path):
                     if v is not None:
                         section_items[k] = str(v)
                 parser[f"PIPELINE.{step_id}"] = section_items
-            if value.per_team:
-                parser["PIPELINE.PER_TEAM"] = {
-                    k: str(v) for k, v in value.per_team.items()
-                }
             continue
 
         if isinstance(value, BaseModel):

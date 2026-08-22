@@ -76,7 +76,12 @@ class TestEverySectionIsCovered:
     """
 
     # Written by the app, never hand-edited, so deliberately undocumented.
-    MACHINE_OWNED = {"SETUP"}
+    # SCHEMA is the config's own version stamp, managed by config_migrations.
+    MACHINE_OWNED = {"SETUP", "SCHEMA"}
+
+    # Keyed collections spelled [CAMERA.<name>] / [TEAM.<key>] rather than one
+    # flat section, so their field name is not the section name.
+    COLLECTIONS = {"cameras", "teams"}
 
     def test_default_config_carries_every_section(self, tmp_path):
         config = create_default_config(tmp_path / "config.ini", str(tmp_path))
@@ -119,7 +124,7 @@ class TestEverySectionIsCovered:
         expected = {
             (f.alias or n).upper()
             for n, f in Config.model_fields.items()
-            if n != "cameras"
+            if n not in self.COLLECTIONS
         } - self.MACHINE_OWNED
         assert not (expected - documented), (
             f"config.ini.dist is missing sections: {sorted(expected - documented)}"

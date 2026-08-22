@@ -386,3 +386,99 @@ class TestSectionGating:
         if resp.status_code == 303:
             after = client.get("/config").text
             assert "https://example.invalid" in after
+
+
+_TEAM_INI = """\
+[STORAGE]
+path = /data
+
+[LOGGING]
+level = INFO
+
+[TEAMSNAP]
+enabled = true
+client_id = tg_abc
+
+[TEAM.heat2012]
+name = BU14 - Guzzetta
+aliases = Guzzetta, Hilton Heat
+teamsnap_team_id = 10198718
+youtube_playlist = Hilton Heat 2012s
+
+[TEAM.flash2013]
+name = Western New York Flash - 13B ECNL-RL Rochester
+playmetrics_team_id = 335774
+youtube_playlist = WNY Flash 2013s
+"""
+
+
+@pytest.fixture
+def team_config_path(tmp_path):
+    p = tmp_path / "config.ini"
+    p.write_text(_TEAM_INI, encoding="utf-8")
+    return p
+
+
+@pytest.fixture
+def team_client(tmp_path, team_config_path):
+    app = create_app(TTTConfig(), str(tmp_path), config_path=team_config_path)
+    with TestClient(app, base_url="http://localhost:8765", headers=_SAME_ORIGIN) as c:
+        yield c
+
+
+def test_post_config_preserves_team_sections(team_client, team_config_path):
+    """Editing an unrelated scalar must not drop [TEAM.*].
+
+    The editor renders scalar fields only, so teams are never in the form. It
+    rebuilds Config from the loaded model plus scalar overrides, which is the
+    only reason they survive — and save_config writes the file from
+    Config.model_fields onto an empty parser, so anything that fell out of the
+    model would be erased from the user's file permanently.
+    """
+    before = load_config(team_config_path)
+    assert set(before.teams) == {"heat2012", "flash2013"}
+
+    resp = team_client.post(
+        "/config",
+        data={"STORAGE.path": "/data/games", "LOGGING.level": "DEBUG"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    reloaded = load_config(team_config_path)
+    assert reloaded.storage.path == "/data/games"
+    assert reloaded.logging.level == "DEBUG"
+
+    assert set(reloaded.teams) == {"heat2012", "flash2013"}
+    heat = reloaded.teams["heat2012"]
+    assert heat.name == "BU14 - Guzzetta"
+    assert heat.teamsnap_team_id == "10198718"
+    assert heat.youtube_playlist == "Hilton Heat 2012s"
+    # The comma-separated alias list has to survive the INI round-trip too.
+    assert heat.aliases == ["Guzzetta", "Hilton Heat"]
+    # And the team still resolves after the save.
+    assert reloaded.team_for("BU14 - Guzzetta") is not None
+
+
+def test_schema_section_is_not_editable_but_survives(team_client, team_config_path):
+    """[SCHEMA] is machine-owned: never rendered, always preserved.
+
+    It records which config schema the file is written in. As a plain int it
+    would otherwise render as an editable number field — and setting it ahead
+    of what the build understands makes startup hard-fail by design, while
+    setting it back re-runs migrations. Neither belongs behind a text box.
+    """
+    page = team_client.get("/config").text
+    assert "SCHEMA.version" not in page
+    assert ">SCHEMA<" not in page
+
+    before = load_config(team_config_path).schema_meta.version
+
+    resp = team_client.post(
+        "/config",
+        data={"STORAGE.path": "/data/games"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    assert load_config(team_config_path).schema_meta.version == before
