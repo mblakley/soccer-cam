@@ -398,16 +398,33 @@ class SetupConfig(BaseModel):
 
 
 class Config(BaseModel):
+    # Every section defaults. Only `storage.path` is genuinely required — it
+    # needs a real directory and there is no sane default for it.
+    #
+    # These eight used to be declared required with no default_factory even
+    # though each constructs fine with no arguments. Nothing could build a
+    # Config without naming all of them, so every place that needed a default
+    # config hand-enumerated the sections: create_default_config, the setup
+    # wizard's _build_config, and config.ini.dist. All three drifted, each
+    # omitting a different set (ARCHIVE, AUTOCAM, PIPELINE, NODE,
+    # MOMENT_TAGGING), and every entry they did list was literally `{}`.
+    # With defaults here, a new section needs no generator edit at all.
     cameras: list[CameraConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(alias="STORAGE")
-    recording: RecordingConfig = Field(alias="RECORDING")
-    processing: ProcessingConfig = Field(alias="PROCESSING")
-    logging: LoggingConfig = Field(alias="LOGGING")
-    app: AppConfig = Field(alias="APP")
-    teamsnap: TeamSnapConfig = Field(alias="TEAMSNAP")
-    playmetrics: PlayMetricsConfig = Field(alias="PLAYMETRICS")
-    ntfy: NtfyConfig = Field(alias="NTFY")
-    youtube: YouTubeConfig = Field(alias="YOUTUBE")
+    recording: RecordingConfig = Field(
+        alias="RECORDING", default_factory=RecordingConfig
+    )
+    processing: ProcessingConfig = Field(
+        alias="PROCESSING", default_factory=ProcessingConfig
+    )
+    logging: LoggingConfig = Field(alias="LOGGING", default_factory=LoggingConfig)
+    app: AppConfig = Field(alias="APP", default_factory=AppConfig)
+    teamsnap: TeamSnapConfig = Field(alias="TEAMSNAP", default_factory=TeamSnapConfig)
+    playmetrics: PlayMetricsConfig = Field(
+        alias="PLAYMETRICS", default_factory=PlayMetricsConfig
+    )
+    ntfy: NtfyConfig = Field(alias="NTFY", default_factory=NtfyConfig)
+    youtube: YouTubeConfig = Field(alias="YOUTUBE", default_factory=YouTubeConfig)
     cloud_sync: CloudSyncConfig = Field(
         alias="CLOUD_SYNC", default_factory=CloudSyncConfig
     )
@@ -704,25 +721,15 @@ def save_config(config: Config, config_path: Path):
 def create_default_config(config_path: Path, storage_path: str) -> Config:
     """Create a minimal config with sensible defaults and save to disk.
 
-    Used by the onboarding wizard to bootstrap a new config.ini.
+    Used on first boot when no config exists, and by the onboarding wizard.
+
+    Every section defaults, so only the storage path is named here. This used
+    to enumerate twelve sections as ``{}`` because they were declared required
+    on the model; it drifted from the wizard's copy of the same list (each
+    omitted a different set). Adding a section to ``Config`` now needs no edit
+    here.
     """
-    config = Config.model_validate(
-        {
-            "cameras": [],
-            "STORAGE": {"path": storage_path},
-            "RECORDING": {},
-            "PROCESSING": {},
-            "LOGGING": {},
-            "APP": {},
-            "TEAMSNAP": {},
-            "PLAYMETRICS": {},
-            "NTFY": {},
-            "YOUTUBE": {},
-            "CLOUD_SYNC": {},
-            "TTT": {},
-            "SETUP": {"onboarding_completed": False},
-        }
-    )
+    config = Config(storage=StorageConfig(path=storage_path))
     config_path.parent.mkdir(parents=True, exist_ok=True)
     save_config(config, config_path)
     return config
