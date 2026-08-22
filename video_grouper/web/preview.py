@@ -55,8 +55,9 @@ def _sample_config() -> Config:
 
 
 def render_all() -> dict[str, str]:
-    """Return ``{filename: html}`` for every page the orchestrator serves."""
-    from video_grouper.web import auth_server, config_editor
+    """Return ``{filename: html}``: every served page, plus notable states
+    and the four tally swatches. See ``_GROUPS`` for which is which."""
+    from video_grouper.web import auth_server, config_editor, stitch_calibration
     from video_grouper.web.setup import router as setup_router
 
     dash = auth_server._DASHBOARD_BODY
@@ -108,6 +109,11 @@ def render_all() -> dict[str, str]:
             "The identity provider rejected the sign-in. Check that the "
             "provider is enabled for this deployment, then try again."
         ),
+        # The seam tool needs no camera to render. Go through its own
+        # renderer rather than the raw template, so no __BANNER__ placeholder
+        # leaks into the preview. Its JS finds no live feed here, but the
+        # layout is real.
+        "stitch.html": stitch_calibration._render_page({"errors": []}),
     }
 
     # Tally states, so all four are reviewable side by side.
@@ -123,18 +129,79 @@ def render_all() -> dict[str, str]:
     return pages
 
 
+#: How the index groups what it lists. Routes are real pages the orchestrator
+#: serves; states are those same pages in a condition that is awkward to
+#: reproduce on demand; swatches are not pages at all.
+_GROUPS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
+    (
+        "Routes",
+        "Pages the orchestrator serves, at the paths it serves them on.",
+        [
+            ("dashboard.html", "Status", "/"),
+            ("config.html", "Settings", "/config"),
+            ("setup.html", "Setup wizard", "/setup/camera"),
+            ("stitch.html", "Seam calibration", "/stitch"),
+            ("signed-in.html", "Signed in", "after OAuth"),
+        ],
+    ),
+    (
+        "States",
+        "The same pages in conditions that are awkward to reproduce for real.",
+        [
+            ("config-error.html", "Settings — validation failed", ""),
+            ("sign-in-failed.html", "Sign-in failed", ""),
+        ],
+    ),
+    (
+        "Tally swatches",
+        "Not pages. One per capture state, so the four can be compared.",
+        [
+            ("tally-idle.html", "idle — asserts nothing", ""),
+            ("tally-armed.html", "armed — cameras up, nothing in flight", ""),
+            ("tally-recording.html", "recording — live, pulsing", ""),
+            ("tally-error.html", "error — a camera is down", ""),
+        ],
+    ),
+]
+
+
 def _index(names: list[str]) -> str:
-    links = "".join(
-        f'<li><a href="{n}">{n.removesuffix(".html")}</a></li>' for n in sorted(names)
-    )
+    listed = {n for _, _, items in _GROUPS for n, _, _ in items}
+    sections = []
+    for title, blurb, items in _GROUPS:
+        rows = "".join(
+            f'<li><a href="{f}">{label}</a>'
+            + (f' <span class="faint mono">{path}</span>' if path else "")
+            + "</li>"
+            for f, label, path in items
+            if f in names
+        )
+        sections.append(
+            f'<section class="panel"><h2>{title}</h2>'
+            f'<p class="hint">{blurb}</p>'
+            f'<ul class="path-list">{rows}</ul></section>'
+        )
+
+    # Anything rendered but not grouped above still gets a home, so the index
+    # cannot quietly under-report what was generated.
+    rest = sorted(n for n in names if n not in listed and n != "index.html")
+    if rest:
+        rows = "".join(
+            f'<li><a href="{n}">{n.removesuffix(".html")}</a></li>' for n in rest
+        )
+        sections.append(
+            '<section class="panel"><h2>Ungrouped</h2>'
+            f'<ul class="path-list">{rows}</ul></section>'
+        )
+
     return chrome.page(
         "Preview",
         '<main class="shell shell--narrow">'
         '<div class="page-header"><div><h1>Page preview</h1>'
-        '<p class="lede">Every page the orchestrator serves, rendered with '
-        "sample data.</p></div></div>"
-        f'<section class="panel"><ul class="path-list">{links}</ul></section>'
-        "</main>",
+        '<p class="lede">Sample renders of the Soccer-Cam web UI, for design '
+        "review. Static HTML with stand-in data &mdash; nothing here is live, "
+        "and no camera, config or pipeline is involved. Not part of the "
+        "shipped app.</p></div></div>" + "".join(sections) + "</main>",
     )
 
 
@@ -149,6 +216,26 @@ def write_to(out: Path) -> Path:
         # drop auto-refresh so pages hold still while you look at them.
         html = html.replace("/static/soccer-cam.css", "soccer-cam.css")
         html = html.replace('<meta http-equiv="refresh" content="10">', "")
+        # Point the topbar at the rendered files so the preview is browsable
+        # -- otherwise every page's nav 404s on a static server, which is
+        # exactly where you notice it: on a phone.
+        html = html.replace(
+            '<a class="brand" href="/">', '<a class="brand" href="index.html">'
+        )
+        html = html.replace(
+            '<a href="/" aria-current="page">',
+            '<a href="dashboard.html" aria-current="page">',
+        )
+        html = html.replace(
+            '<a href="/">Status</a>', '<a href="dashboard.html">Status</a>'
+        )
+        html = html.replace(
+            '<a href="/config" aria-current="page">',
+            '<a href="config.html" aria-current="page">',
+        )
+        html = html.replace(
+            '<a href="/config">Settings</a>', '<a href="config.html">Settings</a>'
+        )
         (out / name).write_text(html, encoding="utf-8")
     return out
 

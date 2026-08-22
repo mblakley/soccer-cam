@@ -1588,7 +1588,7 @@ def _render_page(toolkit: dict) -> str:
     if toolkit["errors"]:
         items = "".join(f"<li>{e}</li>" for e in toolkit["errors"])
         banner = (
-            '<div class="flash flash-err"><strong>Calibration toolkit '
+            '<div class="banner banner--bad"><strong>Calibration toolkit '
             f"unavailable</strong><ul>{items}</ul></div>"
         )
     return _PAGE.replace("__BANNER__", banner)

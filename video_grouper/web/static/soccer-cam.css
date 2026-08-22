@@ -799,8 +799,7 @@ tbody tr:hover {
 
 /* --------------------------------------------------------------- banners -- */
 
-.banner,
-.flash {
+.banner {
   padding: 12px 16px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
@@ -809,20 +808,17 @@ tbody tr:hover {
   margin-bottom: 24px;
 }
 
-.banner--warn,
-.flash--warn {
+.banner--warn {
   border-left-color: var(--color-warning);
   background: var(--color-warning-bg);
 }
 
-.banner--bad,
-.flash-err {
+.banner--bad {
   border-left-color: var(--color-danger);
   background: var(--color-danger-bg);
 }
 
-.banner--ok,
-.flash--ok {
+.banner--ok {
   border-left-color: var(--color-success);
   background: var(--color-success-bg);
 }

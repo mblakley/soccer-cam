@@ -57,10 +57,28 @@ You do not need a camera, a config file, or a running pipeline:
 uv run python -m video_grouper.web.preview
 ```
 
-That renders every page — dashboard, settings, setup, sign-in outcomes, and all
-four tally states — with sample data, serves them on `127.0.0.1:8799`, and opens
-a browser. `--out DIR` writes the files instead of serving; `--port N` picks the
-port.
+That serves an index on `127.0.0.1:8799` grouping what it renders:
+
+- **Routes** — the pages the orchestrator actually serves, labelled with the
+  path each one lives at (`/`, `/config`, `/setup/camera`, `/stitch`)
+- **States** — those same pages in conditions that are awkward to reproduce on
+  demand, like a failed save or a rejected sign-in
+- **Tally swatches** — not pages; one per capture state so the four are
+  comparable side by side
+
+The topbar links are rewritten to the rendered files, so the preview is
+browsable rather than 404-ing on `/config`. `--out DIR` writes the files
+instead of serving; `--port N` picks the port.
+
+To look at it from a phone, put it on the tailnet:
+
+```bash
+tailscale serve --bg --http=8799 http://localhost:8799
+# -> http://<this-machine>.<tailnet>.ts.net:8799/
+tailscale serve --http=8799 off      # when done
+```
+
+`serve` is tailnet-only. Do not use `funnel`, which publishes to the internet.
 
 Use it whenever you change anything visual. It is much faster than starting the
 orchestrator, and it shows states (a failed save, a disconnected camera, a live
