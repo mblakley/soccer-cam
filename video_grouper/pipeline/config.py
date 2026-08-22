@@ -32,7 +32,8 @@ class PipelineConfig(BaseModel):
 
     ``steps`` is the ordered list of step ids; ``step_specs`` maps each id to its
     spec. ``enabled`` is the master switch. Resource-pool capacities tune the
-    scheduler. ``per_team`` allows per-team overrides (applied upstream).
+    scheduler. Per-team overrides live on [TEAM.<key>] pipeline, resolved by
+    the caller and passed to ordered_steps as ``override_steps``.
     """
 
     enabled: bool = False
@@ -41,7 +42,6 @@ class PipelineConfig(BaseModel):
     ram_heavy_concurrency: int = 1
     steps: list[str] = Field(default_factory=list)
     step_specs: dict[str, PipelineStepSpec] = Field(default_factory=dict)
-    per_team: dict[str, str] = Field(default_factory=dict, alias="PER_TEAM")
 
     model_config = {"populate_by_name": True}
 
@@ -64,14 +64,32 @@ class PipelineConfig(BaseModel):
         """
         return bool(self.enabled and self.ordered_steps(team_name))
 
-    def ordered_steps(self, team_name: str | None = None) -> list[StepSpec]:
+    def ordered_steps(
+        self, team_name: str | None = None, override_steps: str | None = None
+    ) -> list[StepSpec]:
         """Return the configured steps as runner-ready :class:`StepSpec`s, in order.
 
-        ``team_name`` is accepted for forward-compatibility with per-team
-        pipelines; today a single pipeline applies to all teams.
+        ``override_steps`` is a team's own comma-separated step list, from
+        ``[TEAM.<key>] pipeline``. It replaces ``[PIPELINE] steps`` for that
+        team's games and reuses the same ``[PIPELINE.<step_id>]`` specs, so a
+        team can run a subset or a different order without a second pipeline
+        definition. Empty or unset means the shared pipeline.
+
+        ``team_name`` is retained for logging and for callers that already pass
+        it; the override is resolved by the caller, which is the only place
+        that holds both the pipeline config and the team list.
         """
+        step_ids = self.steps
+        if override_steps and override_steps.strip():
+            step_ids = [s.strip() for s in override_steps.split(",") if s.strip()]
+            logger.info(
+                "pipeline: team %r overrides the step list with %s",
+                team_name,
+                step_ids,
+            )
+
         specs: list[StepSpec] = []
-        for step_id in self.steps:
+        for step_id in step_ids:
             spec = self.step_specs.get(step_id)
             if spec is None:
                 logger.warning(
@@ -131,9 +149,10 @@ def migrate_ball_tracking_to_pipeline(bt: dict | None) -> dict | None:
         "steps": [],
         "step_specs": {},
     }
-    # NOTE: legacy [BALL_TRACKING.PER_TEAM] mapped team -> provider name, which has
-    # no meaning under the pipeline's per-team model. Intentionally NOT carried
-    # over; per-team pipeline overrides get defined when that feature lands.
+    # NOTE: legacy [BALL_TRACKING.PER_TEAM] mapped team -> provider name, which
+    # has no meaning under the pipeline model. Still intentionally NOT carried
+    # over. Per-team pipeline selection now exists as [TEAM.<key>] pipeline (a
+    # step-list override), but a provider name does not translate into one.
 
     if provider == "autocam_gui":
         executable = (bt.get("AUTOCAM_GUI") or {}).get("executable")

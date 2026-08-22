@@ -73,17 +73,12 @@ async def test_youtube_upload_task_coordination_with_state_playlist(
         Config,
         NtfyConfig,
         YouTubeConfig,
-        YouTubePlaylistMapConfig,
     )
 
     mock_config = MagicMock(spec=Config)
     mock_config.youtube = MagicMock(spec=YouTubeConfig)
     mock_config.youtube.enabled = True
     mock_config.youtube.privacy_status = "private"
-    mock_config.youtube.playlist_mapping = {}
-    mock_config.youtube.playlist_map = MagicMock(spec=YouTubePlaylistMapConfig)
-    mock_config.youtube.playlist_map.get.return_value = None
-    mock_config.youtube.playlist_map.root = {}
     mock_config.ntfy = MagicMock(spec=NtfyConfig)
     mock_config.ntfy.enabled = True
 
@@ -150,7 +145,12 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     mock_ntfy_service,
     mock_dir_state,
 ):
-    """Test that the upload task properly uses config-based playlist mappings."""
+    """The team's configured playlist is used when state has none.
+
+    This used to read [YOUTUBE.PLAYLIST_MAP] with its own substring rule. That
+    map is now folded into [TEAM.<key>] by schema migration v2 and resolved by
+    the shared resolver, so the task is handed `teams` instead.
+    """
     group_dir = "/fake/group_dir"
 
     # Mock MatchInfo
@@ -164,22 +164,20 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     mock_dir_state_instance = mock_dir_state.return_value
     mock_dir_state_instance.get_youtube_playlist_name.return_value = None
 
-    # Create config with playlist mapping
+    # Configure the team whose playlist should be used.
     from video_grouper.utils.config import (
         Config,
         NtfyConfig,
+        TeamConfig,
         YouTubeConfig,
-        YouTubePlaylistMapConfig,
     )
+
+    teams = {"test": TeamConfig(name="Test Team", youtube_playlist="Config-Playlist")}
 
     mock_config = MagicMock(spec=Config)
     mock_config.youtube = MagicMock(spec=YouTubeConfig)
     mock_config.youtube.enabled = True
     mock_config.youtube.privacy_status = "private"
-    mock_config.youtube.playlist_mapping = {"Test Team": "Config-Playlist"}
-    mock_config.youtube.playlist_map = MagicMock(spec=YouTubePlaylistMapConfig)
-    mock_config.youtube.playlist_map.get.return_value = "Config-Playlist"
-    mock_config.youtube.playlist_map.root = {"Test Team": "Config-Playlist"}
     mock_config.ntfy = MagicMock(spec=NtfyConfig)
     mock_config.ntfy.enabled = True
 
@@ -205,7 +203,9 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     # Execute the task
     task = create_mock_youtube_upload_task(group_dir)
     result = await task.execute(
-        youtube_config=mock_config.youtube, ntfy_service=mock_ntfy_instance
+        youtube_config=mock_config.youtube,
+        ntfy_service=mock_ntfy_instance,
+        teams=teams,
     )
 
     # Verify success
@@ -216,7 +216,7 @@ async def test_youtube_upload_task_coordination_with_config_mapping(
     playlist_calls = mock_uploader_instance.get_or_create_playlist.call_args_list
     playlist_names = [call[0][0] for call in playlist_calls]
 
-    # Should use config mapping and create raw video playlist
+    # Should use the team's playlist and derive the raw one from it
     assert "Config-Playlist - Full Field" in playlist_names
 
 
@@ -257,17 +257,12 @@ async def test_youtube_upload_task_requests_playlist_when_not_found(
         Config,
         NtfyConfig,
         YouTubeConfig,
-        YouTubePlaylistMapConfig,
     )
 
     mock_config = MagicMock(spec=Config)
     mock_config.youtube = MagicMock(spec=YouTubeConfig)
     mock_config.youtube.enabled = True
     mock_config.youtube.privacy_status = "private"
-    mock_config.youtube.playlist_mapping = {}
-    mock_config.youtube.playlist_map = MagicMock(spec=YouTubePlaylistMapConfig)
-    mock_config.youtube.playlist_map.get.return_value = None
-    mock_config.youtube.playlist_map.root = {}
     mock_config.ntfy = MagicMock(spec=NtfyConfig)
     mock_config.ntfy.enabled = True
 
@@ -328,17 +323,12 @@ async def test_youtube_upload_task_skips_request_if_already_waiting(
         Config,
         NtfyConfig,
         YouTubeConfig,
-        YouTubePlaylistMapConfig,
     )
 
     mock_config = MagicMock(spec=Config)
     mock_config.youtube = MagicMock(spec=YouTubeConfig)
     mock_config.youtube.enabled = True
     mock_config.youtube.privacy_status = "private"
-    mock_config.youtube.playlist_mapping = {}
-    mock_config.youtube.playlist_map = MagicMock(spec=YouTubePlaylistMapConfig)
-    mock_config.youtube.playlist_map.get.return_value = None
-    mock_config.youtube.playlist_map.root = {}
     mock_config.ntfy = MagicMock(spec=NtfyConfig)
     mock_config.ntfy.enabled = True
 

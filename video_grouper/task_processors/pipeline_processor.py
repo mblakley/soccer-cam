@@ -151,7 +151,13 @@ class PipelineProcessor(QueueProcessor):
                 storage_path=Path(item.storage_path or self.storage_path),
                 ttt_config=ttt_dump,
             )
-            step_specs = self.config.pipeline.ordered_steps(team_name)
+            # A team may override which steps run on its games
+            # ([TEAM.<key>] pipeline). Resolved here because this is the only
+            # place holding both the pipeline config and the team list.
+            team = self.config.team_for(team_name)
+            step_specs = self.config.pipeline.ordered_steps(
+                team_name, override_steps=team.pipeline if team else None
+            )
 
             # Infer pipeline_preset from configured step types for TTT reporting.
             step_type_set = {s.type for s in step_specs}

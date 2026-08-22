@@ -9,6 +9,7 @@ from video_grouper.pipeline.config import (
     migrate_ball_tracking_to_pipeline,
 )
 from video_grouper.utils.config import load_config, save_config
+from video_grouper.utils.config_migrations import migrate_config_file
 
 _REQUIRED_SECTIONS = """\
 [STORAGE]
@@ -54,6 +55,18 @@ def _write(tmp_path, text, name="config.ini"):
     return p
 
 
+def _load_legacy(path):
+    """Load a pre-pipeline config the way the app now does.
+
+    [BALL_TRACKING] -> [PIPELINE] used to be folded in by load_config on every
+    single load. It is schema migration v1 now: applied once at startup and
+    written back to disk. These tests therefore migrate first, which also
+    proves the migration does exactly what the old shim did.
+    """
+    migrate_config_file(path)
+    return load_config(path)
+
+
 def test_load_pipeline_section(tmp_path):
     cfg = load_config(_write(tmp_path, _REQUIRED_SECTIONS + _PIPELINE_INI))
     pc = cfg.pipeline
@@ -97,13 +110,16 @@ def test_missing_pipeline_defaults_to_disabled(tmp_path):
     assert load_config(out_path).pipeline.enabled is False
 
 
-def test_per_team_round_trips(tmp_path):
+def test_per_team_section_no_longer_defines_anything(tmp_path):
     ini = _REQUIRED_SECTIONS + _PIPELINE_INI + "\n[PIPELINE.PER_TEAM]\nflash = stitch\n"
     cfg = load_config(_write(tmp_path, ini))
-    assert cfg.pipeline.per_team == {"flash": "stitch"}
+    # [PIPELINE.PER_TEAM] never worked: ordered_steps ignored its team
+    # argument and the team name was always None. Migration v2 moves it to
+    # [TEAM.<key>] pipeline, so the old section defines nothing.
+    assert not hasattr(cfg.pipeline, "per_team")
     out_path = tmp_path / "saved.ini"
     save_config(cfg, out_path)
-    assert load_config(out_path).pipeline.per_team == {"flash": "stitch"}
+    assert not hasattr(load_config(out_path).pipeline, "per_team")
 
 
 def test_migrate_autocam():
@@ -204,7 +220,7 @@ flash = autocam
 
 def test_per_team_is_reserved_not_a_step(tmp_path):
     cfg = load_config(_write(tmp_path, _REQUIRED_SECTIONS + _PER_TEAM_AS_STEP))
-    assert cfg.pipeline.per_team == {"flash": "autocam"}
+    assert not hasattr(cfg.pipeline, "per_team")
     assert cfg.pipeline.ordered_steps() == []  # PER_TEAM never becomes a step
 
 
@@ -256,7 +272,7 @@ def test_migrate_drops_legacy_per_team_and_carries_disabled():
     assert "PER_TEAM" not in out
     pc = PipelineConfig.model_validate(out)
     assert pc.enabled is False
-    assert pc.per_team == {}
+    assert not hasattr(pc, "per_team")
 
 
 _BALL_TRACKING_LEGACY = """\
@@ -307,7 +323,7 @@ render_output_width = 1920
 def test_load_migrates_ball_tracking_when_no_pipeline_section(tmp_path):
     # A pre-pipeline install (only [BALL_TRACKING], no [PIPELINE]) must
     # auto-adopt the config-driven pipeline at load time.
-    cfg = load_config(
+    cfg = _load_legacy(
         _write(tmp_path, _REQUIRED_SECTIONS + _BALL_TRACKING_HOMEGROWN_ONLY)
     )
     pc = cfg.pipeline
@@ -341,7 +357,7 @@ executable = C:/once/GUI.exe
 
 
 def test_load_migrates_autocam_gui_when_no_pipeline_section(tmp_path):
-    cfg = load_config(
+    cfg = _load_legacy(
         _write(tmp_path, _REQUIRED_SECTIONS + _BALL_TRACKING_AUTOCAM_ONLY)
     )
     assert cfg.pipeline.is_active() is True
@@ -385,7 +401,7 @@ def test_autocam_section_feeds_the_autocam_step(tmp_path):
     top-level sections — pipeline step specs are nested and never appear.
     The values have to reach the step that actually runs AutoCam.
     """
-    cfg = load_config(
+    cfg = _load_legacy(
         _write(
             tmp_path,
             _REQUIRED_SECTIONS + _AUTOCAM_SECTION + _BALL_TRACKING_AUTOCAM_ONLY,
@@ -420,7 +436,7 @@ def test_step_spec_value_wins_over_autocam_section(tmp_path):
 
 
 def test_no_autocam_section_changes_nothing(tmp_path):
-    cfg = load_config(
+    cfg = _load_legacy(
         _write(tmp_path, _REQUIRED_SECTIONS + _BALL_TRACKING_AUTOCAM_ONLY)
     )
     assert "license_key" not in cfg.pipeline.ordered_steps()[0].config

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from video_grouper.utils.config import create_default_config, load_config
+from video_grouper.utils.config_migrations import migrate_config_file
 from video_grouper.utils.locking import FileLock
 from video_grouper.utils.logger import get_logger, setup_logging
 from video_grouper.utils.paths import get_shared_data_path
@@ -56,6 +57,13 @@ def load_application_config(config_path: Path = None):
                 # then redirect the user to /setup/welcome.
                 logger.info("No config at %s; writing onboarding stub.", config_path)
                 return create_default_config(config_path, str(config_path.parent))
+            # Bring the file up to the current schema before reading it.
+            # Inside the lock, because it rewrites config.ini. Idempotent and a
+            # no-op once the file is current, so this costs one parse per boot.
+            # This is the only place migrations run: the NSIS installer never
+            # touches config.ini and is Windows-only anyway, while Docker,
+            # Linux and hand-copied configs all come through here.
+            migrate_config_file(config_path)
             return load_config(config_path)
     except TimeoutError:
         logger.error(f"Could not acquire lock to read config file at {config_path}.")

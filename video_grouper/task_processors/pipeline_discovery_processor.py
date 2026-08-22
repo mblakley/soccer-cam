@@ -115,18 +115,25 @@ class PipelineDiscoveryProcessor(PollingProcessor):
 
     @staticmethod
     def _read_team_name(group_dir: Path) -> str | None:
-        """Read team_name from match_info.ini if present, else None."""
+        """Read the team name from match_info.ini if present, else None.
+
+        The option is ``my_team_name``. This used to read ``team_name``, which
+        match_info never writes — see ``MatchInfo.update_team_info`` and
+        ``match_info.ini.dist`` — so it always returned None and every
+        PipelineTask carried ``team_name=None``. Per-team pipeline selection
+        could therefore never fire, whatever the config said.
+        """
         match_info_path = group_dir / "match_info.ini"
         if not match_info_path.exists():
             return None
         try:
             parser = configparser.ConfigParser()
             parser.read(match_info_path, encoding="utf-8")
-            if parser.has_option("MATCH", "team_name"):
-                return parser.get("MATCH", "team_name") or None
+            if parser.has_option("MATCH", "my_team_name"):
+                return parser.get("MATCH", "my_team_name") or None
         except Exception as e:
             logger.debug(
-                "PIPELINE_DISCOVERY: could not read team_name from %s: %s",
+                "PIPELINE_DISCOVERY: could not read my_team_name from %s: %s",
                 match_info_path,
                 e,
             )
