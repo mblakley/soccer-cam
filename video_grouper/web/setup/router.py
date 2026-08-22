@@ -31,6 +31,7 @@ from video_grouper.utils.config import (
     YouTubeConfig,
     save_config,
 )
+from video_grouper.web import chrome
 from video_grouper.web.setup.state import (
     cookie_name,
     discard,
@@ -45,112 +46,101 @@ _PAGE_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<title>Soccer-Cam setup &mdash; __TITLE__</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+__CHROME_HEAD__
 <style>
-:root {
-  --bg-base: #0a0b0f;
-  --bg-surface: #13141a;
-  --bg-elev: #181a22;
-  --bg-input: #0f1015;
-  --rule: #2a2c34;
-  --rule-strong: #3b3e48;
-  --text: #e6e7ec;
-  --text-mute: #94969f;
-  --text-faint: #5e616b;
-  --accent: #fb923c;
-  --accent-glow: rgba(251,146,60,0.16);
-  --signal-on: #22c55e;
-  --signal-bad: #f43f5e;
-  --display: 'Barlow Condensed', 'Bebas Neue', sans-serif;
-  --body: 'IBM Plex Sans', system-ui, sans-serif;
-  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+/* Page-specific: the step tracker, the settings summary and the storage
+   path picker. Everything else comes from static/soccer-cam.css. */
+
+.shell { max-width: 720px; }
+
+.steps {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
 }
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  font-family: var(--body);
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--text);
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(251,146,60,0.06), transparent 60%),
-    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(34,197,94,0.04), transparent 60%),
-    var(--bg-base);
-  background-attachment: fixed;
-  position: relative;
+.steps .step {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
 }
-body::before {
-  content: ""; position: fixed; inset: 0;
-  background-image: repeating-linear-gradient(
-    0deg, transparent 0, transparent 2px, rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 3px);
-  pointer-events: none; z-index: 1;
+.steps .step.now {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
 }
-.topbar { position: relative; z-index: 2; border-bottom: 1px solid var(--rule); background: rgba(10,11,15,0.72); backdrop-filter: blur(8px); }
-.topbar-inner { max-width: 720px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; }
-.brand { font-family: var(--display); font-weight: 700; letter-spacing: 0.18em; font-size: 18px; text-transform: uppercase; }
-.brand .dot { color: var(--accent); }
-.crumb { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-mute); }
-.shell {
-  position: relative; z-index: 2;
-  max-width: 720px; margin: 0 auto;
-  padding: 32px 28px 80px;
-  animation: page-in 320ms ease-out both;
+
+.headline {
+  font-family: var(--font-headline);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: clamp(32px, 5vw, 48px);
+  line-height: 0.95;
+  margin: 0 0 8px;
 }
-@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
-.steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint); }
-.steps .step { padding: 6px 10px; border: 1px solid var(--rule); }
-.steps .step.now { color: var(--accent); border-color: var(--accent); }
-.headline { font-family: var(--display); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: clamp(32px, 5vw, 48px); line-height: 0.95; margin: 0 0 8px; }
-.lede { color: var(--text-mute); max-width: 56ch; margin: 0 0 24px; }
-.lede code { font-family: var(--mono); font-size: 12px; background: var(--bg-elev); padding: 1px 6px; border: 1px solid var(--rule); }
-form { display: flex; flex-direction: column; gap: 18px; }
-label { display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-mute); }
-input[type="text"], input[type="password"], input[type="number"], select {
-  width: 100%; font: inherit; font-family: var(--mono); font-size: 13px;
-  color: var(--text); background: var(--bg-input);
-  border: 1px solid var(--rule); padding: 10px 12px; border-radius: 0;
-  outline: none; transition: border-color 120ms ease, box-shadow 120ms ease;
+.lede { max-width: 56ch; margin: 0 0 24px; }
+
+.summary {
+  padding: 18px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
 }
-input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, select:focus {
-  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow);
+.summary dt {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-top: 10px;
 }
-input::placeholder { color: var(--text-faint); font-style: italic; }
-.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.btn { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; padding: 11px 22px; background: var(--accent); color: #1a0e02 !important; border: 0; cursor: pointer; text-decoration: none; transition: filter 120ms ease, transform 120ms ease; }
-.btn:hover { filter: brightness(1.08); }
-.btn:active { transform: translateY(1px); }
-.btn-ghost { background: transparent; color: var(--text-mute) !important; border: 1px solid var(--rule); }
-.btn-ghost:hover { color: var(--text); border-color: var(--rule-strong); }
-.summary { padding: 18px 22px; border: 1px solid var(--rule); background: var(--bg-elev); }
-.summary dt { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint); margin-top: 10px; }
 .summary dt:first-child { margin-top: 0; }
-.summary dd { margin: 0 0 6px; font-family: var(--mono); font-size: 13px; }
-.summary code { color: var(--accent); }
-.muted { color: var(--text-mute); font-family: var(--mono); font-size: 12px; }
-.err { padding: 10px 14px; background: rgba(244,63,94,0.06); color: var(--signal-bad); border: 1px solid rgba(244,63,94,0.4); font-family: var(--mono); font-size: 12px; }
-.path-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
-.path-chip { text-align: left; padding: 8px 12px; background: var(--bg-input); border: 1px solid var(--rule); cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--text); }
-.path-chip:hover { background: var(--bg-elev); border-color: var(--accent); color: var(--accent); }
+.summary dd {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.summary code { color: var(--color-accent); }
+
+.path-list { max-height: 280px; overflow-y: auto; }
+.path-chip {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.path-chip:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
 </style>
 </head>
 <body>
-<header class="topbar">
-  <div class="topbar-inner">
-    <div class="brand">SOCCER<span class="dot">·</span>CAM</div>
-    <div class="crumb">Setup</div>
-  </div>
-</header>
-<div class="shell">
+__CHROME_TOPBAR__
+<main class="shell shell--narrow">
 <__STEPS__>
 <h1 class="headline">__TITLE__</h1>
 <p class="lede">__LEDE__</p>
 __BODY__
-</div>
+</main>
 </body>
 </html>
 """
@@ -200,7 +190,7 @@ _STORAGE_PICKER_JS = """
         }
       })
       .catch((err) => {
-        modal.innerHTML = '<div class="err">Browse failed: ' + err + "</div>";
+        modal.innerHTML = '<div class="banner banner--bad">Browse failed: ' + err + "</div>";
       });
   }
 })();
@@ -226,10 +216,12 @@ _CAMERA_TEST_JS = """
       const data = await r.json();
       out.textContent = (data.ok ? "✓ " : "✗ ") + (data.message || "");
       out.className = data.ok ? "muted" : "err";
-      out.style.color = data.ok ? "#15803d" : "#7f1d1d";
+      out.style.color = data.ok
+        ? "var(--color-success)"
+        : "var(--color-danger)";
     } catch (e) {
       out.textContent = "✗ " + e;
-      out.style.color = "#7f1d1d";
+      out.style.color = "var(--color-danger)";
     }
   });
 })();
@@ -411,7 +403,9 @@ def _render_steps(active: str) -> str:
 
 def _page(active: str, title: str, lede: str, body: str) -> str:
     return (
-        _PAGE_TEMPLATE.replace("<__STEPS__>", _render_steps(active))
+        _PAGE_TEMPLATE.replace("__CHROME_HEAD__", chrome.head(f"Setup · {title}"))
+        .replace("__CHROME_TOPBAR__", chrome.tally() + chrome.topbar(crumb="Setup"))
+        .replace("<__STEPS__>", _render_steps(active))
         .replace("__TITLE__", title)
         .replace("__LEDE__", lede)
         .replace("__BODY__", body)
@@ -505,8 +499,8 @@ def build_router(config_path: Path) -> APIRouter:
             "Browse…</button>"
             "</div>"
             '<div id="browse-modal" style="display:none; margin-top:0.75rem; '
-            "padding:0.75rem; border:1px solid #cbd5e1; border-radius:6px; "
-            'background:#f8fafc;"></div>'
+            "padding:12px; border:1px solid var(--color-border); "
+            'border-radius:4px; background:var(--color-bg-card);"></div>'
             '<div class="row">'
             '<a class="btn-ghost btn" href="/setup/welcome">Back</a>'
             '<button class="btn" type="submit">Next</button>'
@@ -583,13 +577,13 @@ def build_router(config_path: Path) -> APIRouter:
         except OSError as exc:
             return HTMLResponse(
                 header_html
-                + f'<div class="err">Cannot access: {html.escape(str(path_obj))} '
+                + f'<div class="banner banner--bad">Cannot access: {html.escape(str(path_obj))} '
                 + f"&mdash; {html.escape(str(exc))}</div>"
             )
         if not is_dir:
             return HTMLResponse(
                 header_html
-                + f'<div class="err">Not a directory: {html.escape(str(path_obj))}</div>'
+                + f'<div class="banner banner--bad">Not a directory: {html.escape(str(path_obj))}</div>'
             )
 
         # Parent navigation. Drive roots (C:\) and UNC share roots

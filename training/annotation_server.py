@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from training import field_edit_v2  # field-polygon editor mount
+from video_grouper.web import chrome as _web_chrome
 
 logger = logging.getLogger(__name__)
 
@@ -1974,6 +1975,15 @@ def _v4_store_by_game(game_id: str) -> Path | None:
             return d
     return None
 
+
+# The shared design system, served from its canonical home in video_grouper
+# so the annotation tools and the orchestrator's web UI cannot drift apart.
+# One file, two servers -- never a copy.
+app.mount(
+    "/shared",
+    StaticFiles(directory=str(_web_chrome.STATIC_DIR)),
+    name="shared",
+)
 
 # Static file mount must come AFTER all API routes (catch-all).
 app.mount(

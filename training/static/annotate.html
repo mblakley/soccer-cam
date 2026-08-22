@@ -6,25 +6,14 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Ball Annotation</title>
+<link rel="stylesheet" href="/shared/soccer-cam.css">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-:root {
-  --green: #22c55e;
-  --red: #ef4444;
-  --blue: #3b82f6;
-  --gray: #6b7280;
-  --bg: #111;
-  --surface: #1a1a1a;
-  --text: #f0f0f0;
-  --text-dim: #888;
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-}
-
 html, body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
   height: 100%;
   overflow: hidden;
   touch-action: manipulation;
@@ -38,16 +27,16 @@ html, body {
 /* Header bar */
 .header {
   display: flex; align-items: center; padding: 12px 16px;
-  background: var(--surface); border-bottom: 1px solid #333;
+  background: var(--color-bg-card); border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
 }
 .header h1 { font-size: 18px; font-weight: 600; flex: 1; }
 .header-btn {
-  background: none; border: none; color: var(--text); font-size: 16px;
+  background: none; border: none; color: var(--color-text-primary); font-size: 16px;
   padding: 8px 12px; cursor: pointer; border-radius: 8px;
 }
-.header-btn:active { background: #333; }
-.header-btn.active { background: var(--blue); color: #fff; }
+.header-btn:active { background: var(--color-border); }
+.header-btn.active { background: var(--color-accent); color: #fff; }
 
 /* Packet list */
 #packet-list-page .content,
@@ -55,41 +44,41 @@ html, body {
 #field-page .content { flex: 1; overflow-y: auto; padding: 12px; }
 
 .packet-card {
-  background: var(--surface); border-radius: 12px; padding: 16px;
-  margin-bottom: 10px; cursor: pointer; border: 1px solid #333;
+  background: var(--color-bg-card); border-radius: 12px; padding: 16px;
+  margin-bottom: 10px; cursor: pointer; border: 1px solid var(--color-border);
   transition: background 0.1s;
 }
-.packet-card:active { background: #252525; }
+.packet-card:active { background: var(--color-bg-card); }
 .packet-card .title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
-.packet-card .meta { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+.packet-card .meta { font-size: 13px; color: var(--color-text-secondary); margin-bottom: 8px; }
 .packet-card .progress-bar {
-  height: 6px; background: #333; border-radius: 3px; overflow: hidden;
+  height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden;
 }
 .packet-card .progress-fill {
   height: 100%; border-radius: 3px; transition: width 0.3s;
 }
-.packet-card .progress-fill.pending { background: var(--gray); width: 0; }
-.packet-card .progress-fill.partial { background: var(--blue); }
-.packet-card .progress-fill.complete { background: var(--green); }
+.packet-card .progress-fill.pending { background: var(--color-idle); width: 0; }
+.packet-card .progress-fill.partial { background: var(--color-accent); }
+.packet-card .progress-fill.complete { background: var(--color-success); }
 
 .status-badge {
   display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase;
   padding: 2px 8px; border-radius: 4px; margin-left: 8px;
 }
-.status-badge.pending { background: #333; color: var(--text-dim); }
-.status-badge.partial { background: #1e3a5f; color: var(--blue); }
-.status-badge.complete { background: #14532d; color: var(--green); }
+.status-badge.pending { background: var(--color-border); color: var(--color-text-secondary); }
+.status-badge.partial { background: var(--color-status-info-bg); color: var(--color-accent); }
+.status-badge.complete { background: var(--color-success-bg); color: var(--color-success); }
 
 /* Nav tabs */
 .nav-tabs {
-  display: flex; background: var(--surface); border-top: 1px solid #333;
+  display: flex; background: var(--color-bg-card); border-top: 1px solid var(--color-border);
   padding-bottom: var(--safe-bottom); flex-shrink: 0;
 }
 .nav-tab {
   flex: 1; padding: 12px 0; text-align: center; font-size: 13px;
-  color: var(--text-dim); background: none; border: none; cursor: pointer;
+  color: var(--color-text-secondary); background: none; border: none; cursor: pointer;
 }
-.nav-tab.active { color: var(--blue); }
+.nav-tab.active { color: var(--color-accent); }
 .nav-tab span { display: block; font-size: 20px; margin-bottom: 2px; }
 
 /* Annotate page */
@@ -97,20 +86,20 @@ html, body {
 
 .annotate-header {
   display: flex; align-items: center; padding: 8px 12px;
-  background: var(--surface); border-bottom: 1px solid #333;
+  background: var(--color-bg-card); border-bottom: 1px solid var(--color-border);
   flex-shrink: 0; gap: 10px;
 }
 .annotate-header .back-btn {
-  background: none; border: none; color: var(--text); font-size: 22px;
+  background: none; border: none; color: var(--color-text-primary); font-size: 22px;
   padding: 6px 10px; cursor: pointer; border-radius: 8px;
 }
-.annotate-header .back-btn:active { background: #333; }
+.annotate-header .back-btn:active { background: var(--color-border); }
 .annotate-header .progress-text { font-size: 14px; font-weight: 600; }
 .annotate-header .progress-track {
-  flex: 1; height: 4px; background: #333; border-radius: 2px; overflow: hidden;
+  flex: 1; height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden;
 }
 .annotate-header .progress-inner {
-  height: 100%; background: var(--blue); border-radius: 2px; transition: width 0.3s;
+  height: 100%; background: var(--color-accent); border-radius: 2px; transition: width 0.3s;
 }
 
 .annotate-body {
@@ -119,8 +108,8 @@ html, body {
 }
 
 .frame-reason {
-  text-align: center; padding: 6px 0; font-size: 12px; color: var(--text-dim);
-  flex-shrink: 0; background: var(--surface);
+  text-align: center; padding: 6px 0; font-size: 12px; color: var(--color-text-secondary);
+  flex-shrink: 0; background: var(--color-bg-card);
 }
 
 .canvas-container {
@@ -134,7 +123,7 @@ html, body {
 
 .action-bar {
   display: flex; gap: 8px; padding: 10px 12px;
-  background: var(--surface); border-top: 1px solid #333;
+  background: var(--color-bg-card); border-top: 1px solid var(--color-border);
   flex-shrink: 0; padding-bottom: max(10px, var(--safe-bottom));
 }
 .action-btn {
@@ -146,11 +135,11 @@ html, body {
 .action-btn:active { transform: scale(0.95); }
 .action-btn .icon { font-size: 20px; }
 
-.btn-confirm { background: #14532d; color: var(--green); border-color: var(--green); }
-.btn-reject { background: #450a0a; color: var(--red); border-color: var(--red); }
-.btn-not-visible { background: #1f2937; color: var(--gray); border-color: var(--gray); }
-.btn-not-game-ball { background: #422006; color: #f59e0b; border-color: #f59e0b; }
-.btn-skip { background: transparent; color: var(--text-dim); border-color: #444; }
+.btn-confirm { background: var(--color-success-bg); color: var(--color-success); border-color: var(--color-success); }
+.btn-reject { background: var(--color-danger-bg); color: var(--color-danger); border-color: var(--color-danger); }
+.btn-not-visible { background: var(--color-bg-hover); color: var(--color-idle); border-color: var(--color-idle); }
+.btn-not-game-ball { background: var(--color-warning-bg); color: #f59e0b; border-color: #f59e0b; }
+.btn-skip { background: transparent; color: var(--color-text-secondary); border-color: var(--color-border); }
 .btn-warmup { background: #431407; color: #fb923c; border-color: #fb923c; }
 .btn-gameover { background: #1e1b4b; color: #a78bfa; border-color: #a78bfa; }
 
@@ -163,7 +152,7 @@ html, body {
 }
 .toast.show { opacity: 1; }
 .btn-submit-tap {
-  background: #1e3a5f; color: var(--blue); border-color: var(--blue);
+  background: var(--color-status-info-bg); color: var(--color-accent); border-color: var(--color-accent);
 }
 
 /* Flash overlay */
@@ -183,12 +172,12 @@ html, body {
 #stats-page .content { flex: 1; overflow-y: auto; padding: 16px; }
 #exclusions-page .content { flex: 1; overflow-y: auto; padding: 12px; }
 .stat-card {
-  background: var(--surface); border-radius: 12px; padding: 16px;
-  margin-bottom: 10px; border: 1px solid #333;
+  background: var(--color-bg-card); border-radius: 12px; padding: 16px;
+  margin-bottom: 10px; border: 1px solid var(--color-border);
 }
-.stat-card .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-card .label { font-size: 12px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
 .stat-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
-.stat-card .sub { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+.stat-card .sub { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; }
 
 .stat-row { display: flex; gap: 10px; }
 .stat-row .stat-card { flex: 1; }
@@ -198,46 +187,46 @@ html, body {
 }
 .action-chip {
   padding: 4px 10px; border-radius: 6px; font-size: 13px;
-  background: #252525; color: var(--text-dim);
+  background: var(--color-bg-card); color: var(--color-text-secondary);
 }
 
 /* Exclusion cards */
 .excl-section { margin: 16px; }
-.excl-section h2 { font-size: 15px; color: var(--text-dim); margin-bottom: 8px; }
+.excl-section h2 { font-size: 15px; color: var(--color-text-secondary); margin-bottom: 8px; }
 .excl-card {
-  background: var(--surface); border-radius: 10px; padding: 12px;
-  margin-bottom: 12px; border: 1px solid #333;
+  background: var(--color-bg-card); border-radius: 10px; padding: 12px;
+  margin-bottom: 12px; border: 1px solid var(--color-border);
 }
 .excl-card .excl-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-.excl-card .excl-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.excl-card .excl-meta { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 8px; }
 .excl-thumbs {
   display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px;
 }
 .excl-thumbs img {
   width: 80px; height: 80px; object-fit: cover; border-radius: 6px;
-  border: 1px solid #444; flex-shrink: 0;
+  border: 1px solid var(--color-border); flex-shrink: 0;
 }
 .excl-summary {
-  background: var(--surface); border-radius: 10px; padding: 16px;
-  margin: 16px; border: 1px solid #333; text-align: center;
+  background: var(--color-bg-card); border-radius: 10px; padding: 16px;
+  margin: 16px; border: 1px solid var(--color-border); text-align: center;
 }
-.excl-summary .big-num { font-size: 32px; font-weight: 700; color: var(--blue); }
-.excl-summary .label { font-size: 13px; color: var(--text-dim); }
+.excl-summary .big-num { font-size: 32px; font-weight: 700; color: var(--color-accent); }
+.excl-summary .label { font-size: 13px; color: var(--color-text-secondary); }
 
 /* Loading */
-.loading { text-align: center; padding: 40px; color: var(--text-dim); }
+.loading { text-align: center; padding: 40px; color: var(--color-text-secondary); }
 
 /* Empty state */
-.empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+.empty-state { text-align: center; padding: 60px 20px; color: var(--color-text-secondary); }
 .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
 
 /* Tracking Lab */
 #tracking-lab-page .content { flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column; }
-.lab-header { padding: 10px 14px; background: var(--surface); border-bottom: 1px solid #333; }
+.lab-header { padding: 10px 14px; background: var(--color-bg-card); border-bottom: 1px solid var(--color-border); }
 .lab-header .lab-title { font-size: 14px; font-weight: 600; }
-.lab-header .lab-stats { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
-.lab-coverage-bar { height: 4px; background: #333; margin-top: 6px; border-radius: 2px; overflow: hidden; position: relative; }
-.lab-coverage-fill { height: 100%; background: var(--green); border-radius: 2px; }
+.lab-header .lab-stats { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; }
+.lab-coverage-bar { height: 4px; background: var(--color-border); margin-top: 6px; border-radius: 2px; overflow: hidden; position: relative; }
+.lab-coverage-fill { height: 100%; background: var(--color-success); border-radius: 2px; }
 
 .lab-timeline { height: 40px; margin: 0 14px; position: relative; cursor: pointer; touch-action: none; }
 .lab-timeline canvas { width: 100%; height: 100%; display: block; }
@@ -245,28 +234,28 @@ html, body {
 .lab-tile-view { display: flex; flex-direction: column; align-items: stretch; padding: 0; }
 .lab-tile-view canvas { width: 100%; height: auto; display: block; }
 
-.lab-info { padding: 8px 14px; font-size: 12px; color: var(--text-dim); }
-.lab-info .lab-time { font-size: 16px; color: var(--text); font-weight: 600; }
+.lab-info { padding: 8px 14px; font-size: 12px; color: var(--color-text-secondary); }
+.lab-info .lab-time { font-size: 16px; color: var(--color-text-primary); font-weight: 600; }
 .lab-info .lab-dets { margin-top: 2px; }
 
 .lab-alt-dets { display: flex; gap: 4px; padding: 4px 14px; overflow-x: auto; }
-.lab-alt-det { width: 60px; height: 60px; border-radius: 6px; border: 2px solid #333; cursor: pointer; flex-shrink: 0; }
-.lab-alt-det.active { border-color: var(--green); }
-.lab-alt-det.static { border-color: #555; opacity: 0.5; }
+.lab-alt-det { width: 60px; height: 60px; border-radius: 6px; border: 2px solid var(--color-border); cursor: pointer; flex-shrink: 0; }
+.lab-alt-det.active { border-color: var(--color-success); }
+.lab-alt-det.static { border-color: var(--color-border); opacity: 0.5; }
 
 .lab-actions { display: flex; gap: 8px; padding: 8px 14px; }
 .lab-actions button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .lab-btn-correct { background: #166534; color: #4ade80; }
 .lab-btn-wrong { background: #7f1d1d; color: #f87171; }
-.lab-btn-note { background: #1e3a5f; color: #60a5fa; }
+.lab-btn-note { background: var(--color-status-info-bg); color: #60a5fa; }
 
 .lab-notes { padding: 8px 14px; }
-.lab-notes textarea { width: 100%; background: var(--surface); border: 1px solid #333; color: var(--text); border-radius: 8px; padding: 8px; font-size: 13px; resize: none; height: 60px; }
-.lab-notes .saved { font-size: 11px; color: var(--green); margin-top: 2px; }
+.lab-notes textarea { width: 100%; background: var(--color-bg-card); border: 1px solid var(--color-border); color: var(--color-text-primary); border-radius: 8px; padding: 8px; font-size: 13px; resize: none; height: 60px; }
+.lab-notes .saved { font-size: 11px; color: var(--color-success); margin-top: 2px; }
 
 .lab-charts { padding: 14px; }
-.lab-chart-card { background: var(--surface); border-radius: 10px; padding: 12px; margin-bottom: 12px; border: 1px solid #333; }
-.lab-chart-card h3 { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+.lab-chart-card { background: var(--color-bg-card); border-radius: 10px; padding: 12px; margin-bottom: 12px; border: 1px solid var(--color-border); }
+.lab-chart-card h3 { font-size: 13px; color: var(--color-text-secondary); margin-bottom: 8px; }
 .lab-chart-card canvas { width: 100%; height: 120px; }
 </style>
 </head>
@@ -484,7 +473,7 @@ html, body {
     </div>
     <!-- Track confirmation buttons -->
     <div class="action-bar" id="gap-confirm-bar">
-      <button class="action-btn" onclick="gapAction('confirm')" style="background:var(--green);color:#000;flex:2;">
+      <button class="action-btn" onclick="gapAction('confirm')" style="background:var(--color-success);color:#000;flex:2;">
         <span class="icon">&#x2714;</span>Correct
       </button>
       <button class="action-btn" onclick="gapAction('not_visible')" style="background:#666;color:#fff;flex:1;">
@@ -493,7 +482,7 @@ html, body {
       <button class="action-btn" onclick="gapAction('out_of_play')" style="background:#e67e22;color:#fff;flex:1;">
         <span class="icon">&#x26BD;</span>Out of Play
       </button>
-      <button class="action-btn" onclick="gapAction('locate')" style="background:var(--blue);color:#fff;flex:1;" id="gap-locate-btn" disabled>
+      <button class="action-btn" onclick="gapAction('locate')" style="background:var(--color-accent);color:#fff;flex:1;" id="gap-locate-btn" disabled>
         <span class="icon">&#x1F3AF;</span>Ball Here
       </button>
     </div>
@@ -502,13 +491,13 @@ html, body {
       <div style="padding:4px 12px; overflow:hidden; display:flex; align-items:center; justify-content:center; max-height:40%;">
         <canvas id="gap-tile-canvas" style="max-width:100%; max-height:100%; border-radius:8px; touch-action:none;"></canvas>
       </div>
-      <button class="action-btn btn-confirm" onclick="gapAction('locate')" style="background:var(--green);color:#000;">
+      <button class="action-btn btn-confirm" onclick="gapAction('locate')" style="background:var(--color-success);color:#000;">
         <span class="icon">&#x1F3AF;</span>Ball Here
       </button>
-      <button class="action-btn btn-reject" onclick="gapAction('out_of_play')" style="background:var(--red);color:#fff;">
+      <button class="action-btn btn-reject" onclick="gapAction('out_of_play')" style="background:var(--color-danger);color:#fff;">
         <span class="icon">&#x2197;</span>Out
       </button>
-      <button class="action-btn btn-not-visible" onclick="gapAction('obscured')" style="background:var(--blue);color:#fff;">
+      <button class="action-btn btn-not-visible" onclick="gapAction('obscured')" style="background:var(--color-accent);color:#fff;">
         <span class="icon">&#x1F441;</span>Hidden
       </button>
       <button class="action-btn btn-skip" onclick="gapAction('cant_tell')">
@@ -653,17 +642,17 @@ async function pollGenProgress() {
       const pctVal = pg.pct != null ? Math.round(pg.pct * 100) : 0;
       banner.style.display = 'block';
       banner.innerHTML = `
-        <div style="padding:10px 14px;background:#1a2a1a;border-bottom:1px solid #333">
+        <div style="padding:10px 14px;background:#1a2a1a;border-bottom:1px solid var(--color-border)">
           <div style="font-size:13px;color:#7c7;margin-bottom:6px">Generating next packet...</div>
-          <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">${pg.detail || ''}</div>
-          <div style="height:6px;background:#333;border-radius:3px;overflow:hidden">
+          <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:6px">${pg.detail || ''}</div>
+          <div style="height:6px;background:var(--color-border);border-radius:3px;overflow:hidden">
             <div style="height:100%;background:#4a4;width:${pctVal}%;transition:width 0.3s;border-radius:3px"></div>
           </div>
         </div>`;
     } else if (pg.phase === 'done') {
       banner.style.display = 'block';
       banner.innerHTML = `
-        <div style="padding:10px 14px;background:#1a2a1a;border-bottom:1px solid #333">
+        <div style="padding:10px 14px;background:#1a2a1a;border-bottom:1px solid var(--color-border)">
           <div style="font-size:13px;color:#7c7">${pg.detail || 'Packet ready!'}</div>
         </div>`;
       // Refresh packet list and stop polling
@@ -787,9 +776,9 @@ function showFrame() {
     const canvas = document.getElementById('crop-canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = 400; canvas.height = 400;
-    ctx.fillStyle = '#333';
+    ctx.fillStyle = 'var(--color-border)';
     ctx.fillRect(0, 0, 400, 400);
-    ctx.fillStyle = '#888';
+    ctx.fillStyle = 'var(--color-text-secondary)';
     ctx.font = '16px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('Image failed to load', 200, 200);
@@ -1257,10 +1246,10 @@ async function onPacketComplete() {
 
   // Show generating state with progress bar
   const actionBar = document.getElementById('action-bar');
-  actionBar.innerHTML = `<div style="color:var(--text-dim);text-align:center;padding:16px;width:100%">
+  actionBar.innerHTML = `<div style="color:var(--color-text-secondary);text-align:center;padding:16px;width:100%">
     Packet complete! Generating next packet from your feedback...<br>
     <div id="gen-progress-detail" style="font-size:13px;margin:8px 0;opacity:0.8"></div>
-    <div style="height:6px;background:#333;border-radius:3px;overflow:hidden;margin:4px 24px">
+    <div style="height:6px;background:var(--color-border);border-radius:3px;overflow:hidden;margin:4px 24px">
       <div id="gen-progress-bar" style="height:100%;background:var(--accent);width:0%;transition:width 0.3s"></div>
     </div>
     <span style="font-size:12px;opacity:0.6">This takes a few minutes (scanning tiles on disk)</span>
@@ -1637,10 +1626,10 @@ function renderTrackingLab() {
     </div>
 
     <div style="display:flex;gap:6px;padding:4px 14px;justify-content:center">
-      <button onclick="labNavFrame(-1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:14px">&larr; Prev</button>
+      <button onclick="labNavFrame(-1)" style="flex:1;padding:8px;background:var(--color-border);color:var(--color-text-primary);border:none;border-radius:6px;font-size:14px">&larr; Prev</button>
       <button onclick="labNavDetection(-1)" style="flex:1;padding:8px;background:#1a3a1a;color:#4ade80;border:none;border-radius:6px;font-size:12px">&laquo; Prev Det</button>
       <button onclick="labNavDetection(1)" style="flex:1;padding:8px;background:#1a3a1a;color:#4ade80;border:none;border-radius:6px;font-size:12px">Next Det &raquo;</button>
-      <button onclick="labNavFrame(1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:14px">Next &rarr;</button>
+      <button onclick="labNavFrame(1)" style="flex:1;padding:8px;background:var(--color-border);color:var(--color-text-primary);border:none;border-radius:6px;font-size:14px">Next &rarr;</button>
     </div>
 
     <div class="lab-info" id="lab-info"></div>
@@ -1652,31 +1641,31 @@ function renderTrackingLab() {
     </div>
 
     <div style="display:flex;gap:6px;padding:4px 14px;justify-content:center">
-      <button onclick="labCycleTile(-1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:13px">&larr; Prev Tile</button>
-      <span id="lab-tile-pos" style="flex:1;text-align:center;padding:8px;color:var(--text-dim);font-size:13px">r1c0</span>
-      <button onclick="labCycleTile(1)" style="flex:1;padding:8px;background:#333;color:var(--text);border:none;border-radius:6px;font-size:13px">Next Tile &rarr;</button>
+      <button onclick="labCycleTile(-1)" style="flex:1;padding:8px;background:var(--color-border);color:var(--color-text-primary);border:none;border-radius:6px;font-size:13px">&larr; Prev Tile</button>
+      <span id="lab-tile-pos" style="flex:1;text-align:center;padding:8px;color:var(--color-text-secondary);font-size:13px">r1c0</span>
+      <button onclick="labCycleTile(1)" style="flex:1;padding:8px;background:var(--color-border);color:var(--color-text-primary);border:none;border-radius:6px;font-size:13px">Next Tile &rarr;</button>
     </div>
 
     <div class="lab-actions">
       <button class="lab-btn-correct" onclick="labFeedbackAction('correct')">Correct</button>
       <button class="lab-btn-wrong" id="lab-btn-nothere" onclick="labFeedbackAction('wrong')">Not Here</button>
-      <button style="background:#3b3b1d;color:#eab308;flex:1;padding:10px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="labFeedbackAction('occluded')">Can't Tell</button>
+      <button style="background:#3b3b1d;color:var(--color-warning);flex:1;padding:10px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer" onclick="labFeedbackAction('occluded')">Can't Tell</button>
       <button class="lab-btn-note" onclick="labFeedbackAction('note')">Note</button>
     </div>
     <div class="lab-notes" id="lab-notes-area" style="display:none">
       <textarea id="lab-note-input" placeholder="What do you see? What's wrong?"></textarea>
-      <button style="margin-top:4px;padding:6px 16px;background:var(--blue);color:white;border:none;border-radius:6px;font-size:13px" onclick="labSaveNote()">Save Note</button>
+      <button style="margin-top:4px;padding:6px 16px;background:var(--color-accent);color:white;border:none;border-radius:6px;font-size:13px" onclick="labSaveNote()">Save Note</button>
       <div class="saved" id="lab-note-saved"></div>
     </div>
 
-    <div style="padding:8px 14px;border-top:1px solid #333;margin-top:8px">
-      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">Messages to Claude (I'll read these!)</div>
-      <div id="lab-msg-log" style="max-height:120px;overflow-y:auto;font-size:12px;color:var(--text-dim);margin-bottom:6px"></div>
+    <div style="padding:8px 14px;border-top:1px solid var(--color-border);margin-top:8px">
+      <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:4px">Messages to Claude (I'll read these!)</div>
+      <div id="lab-msg-log" style="max-height:120px;overflow-y:auto;font-size:12px;color:var(--color-text-secondary);margin-bottom:6px"></div>
       <div style="display:flex;gap:6px">
         <input id="lab-msg-input" type="text" placeholder="Type a message or instruction..."
-          style="flex:1;background:var(--surface);border:1px solid #333;color:var(--text);border-radius:8px;padding:8px;font-size:13px"
+          style="flex:1;background:var(--color-bg-card);border:1px solid var(--color-border);color:var(--color-text-primary);border-radius:8px;padding:8px;font-size:13px"
           onkeydown="if(event.key==='Enter')labSendMessage()">
-        <button onclick="labSendMessage()" style="padding:8px 16px;background:var(--blue);color:white;border:none;border-radius:8px;font-size:13px;white-space:nowrap">Send</button>
+        <button onclick="labSendMessage()" style="padding:8px 16px;background:var(--color-accent);color:white;border:none;border-radius:8px;font-size:13px;white-space:nowrap">Send</button>
       </div>
     </div>
 
@@ -1700,7 +1689,7 @@ function drawLabTimeline() {
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
 
-  ctx.fillStyle = '#222';
+  ctx.fillStyle = 'var(--color-border-light)';
   ctx.fillRect(0, 0, w, h);
 
   const n = frames.length;
@@ -1721,20 +1710,20 @@ function drawLabTimeline() {
       ctx.fillStyle = '#a78bfa';
       ctx.fillRect(x, 0, pw, h * 0.5);
     } else if (f.has_ball) {
-      ctx.fillStyle = '#22c55e';
+      ctx.fillStyle = 'var(--color-success)';
       ctx.fillRect(x, 0, pw, h * 0.6);
     } else if (f.detection_count > 0) {
-      ctx.fillStyle = '#eab308';
+      ctx.fillStyle = 'var(--color-warning)';
       ctx.fillRect(x, 0, pw, h * 0.4);
     } else {
-      ctx.fillStyle = '#333';
+      ctx.fillStyle = 'var(--color-border)';
       ctx.fillRect(x, 0, pw, h * 0.2);
     }
 
     // Show feedback markers
     if (labFeedback[f.frame_idx]) {
       const fb = labFeedback[f.frame_idx];
-      ctx.fillStyle = fb.action === 'correct' ? '#4ade80' : fb.action === 'mark_ball' ? '#f59e0b' : fb.action === 'wrong' ? '#f87171' : fb.action === 'occluded' ? '#eab308' : '#60a5fa';
+      ctx.fillStyle = fb.action === 'correct' ? '#4ade80' : fb.action === 'mark_ball' ? '#f59e0b' : fb.action === 'wrong' ? '#f87171' : fb.action === 'occluded' ? 'var(--color-warning)' : '#60a5fa';
       ctx.fillRect(x, h * 0.7, pw, h * 0.3);
     }
   }
@@ -1815,10 +1804,10 @@ async function labShowFrame(idx) {
   const userMarkText = userMark ? ` | YOU: r${userMark.row}c${userMark.col}` : '';
   const isPredicted = frame.is_predicted;
   const status = userMark ? 'MANUAL DETECTION' : (best && isPredicted) ? 'PREDICTED' : best ? 'TRACKED' : (frame.detection_count > 0 ? 'UNTRACKED (has dets)' : 'NO DETECTIONS');
-  const statusColor = userMark ? '#f59e0b' : isPredicted ? '#a78bfa' : best ? '#4ade80' : (frame.detection_count > 0 ? '#eab308' : '#ef4444');
+  const statusColor = userMark ? '#f59e0b' : isPredicted ? '#a78bfa' : best ? '#4ade80' : (frame.detection_count > 0 ? 'var(--color-warning)' : 'var(--color-danger)');
 
   info.innerHTML = `
-    <div class="lab-time">${timeStr} <span style="font-size:12px;color:var(--text-dim)">(${idx+1}/${labManifest.frames.length})</span>
+    <div class="lab-time">${timeStr} <span style="font-size:12px;color:var(--color-text-secondary)">(${idx+1}/${labManifest.frames.length})</span>
       <span style="font-size:12px;color:${statusColor};margin-left:8px">${status}</span></div>
     <div class="lab-dets">${frame.detection_count} auto-dets | ${labAvailableTiles.length} tiles${trajInfo}${userMarkText}${fbMark}</div>
   `;
@@ -1855,9 +1844,9 @@ function labLoadCurrentTile() {
     const canvas = document.getElementById('lab-tile-canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = 640; canvas.height = 640;
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = 'var(--color-bg-card)';
     ctx.fillRect(0, 0, 640, 640);
-    ctx.fillStyle = '#555';
+    ctx.fillStyle = 'var(--color-border)';
     ctx.font = '20px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('No tiles for this frame', 320, 320);
@@ -1872,7 +1861,7 @@ function labLoadCurrentTile() {
   const posEl = document.getElementById('lab-tile-pos');
   const excKey = `${frame.frame_idx}:${tile.row}:${tile.col}`;
   const isExcluded = labExcluded[excKey];
-  if (posEl) posEl.innerHTML = `r${tile.row}c${tile.col} (${labTileIdx+1}/${labAvailableTiles.length})${isExcluded ? ' <span style="color:#ef4444">EXCLUDED</span>' : ''}`;
+  if (posEl) posEl.innerHTML = `r${tile.row}c${tile.col} (${labTileIdx+1}/${labAvailableTiles.length})${isExcluded ? ' <span style="color:var(--color-danger)">EXCLUDED</span>' : ''}`;
 
   const img = new Image();
   img.onload = () => {
@@ -1900,7 +1889,7 @@ function drawLabTileInteractive() {
   for (const d of (frame.detections || [])) {
     if (d.row !== tile.row || d.col !== tile.col) continue;
     const isBest = frame.best_candidate && d.row === frame.best_candidate.row && d.col === frame.best_candidate.col && d.tile_x === frame.best_candidate.tile_x;
-    ctx.strokeStyle = isBest ? '#22c55e' : '#3b82f6';
+    ctx.strokeStyle = isBest ? 'var(--color-success)' : 'var(--color-accent)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(d.tile_x, d.tile_y, 15, 0, Math.PI * 2);
@@ -1942,7 +1931,7 @@ function drawLabTileInteractive() {
       const px = prev.x != null ? prev.x : prev.tile_x;
       const py = prev.y != null ? prev.y : prev.tile_y;
       ctx.globalAlpha = 0.35;
-      ctx.strokeStyle = '#888';
+      ctx.strokeStyle = 'var(--color-text-secondary)';
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -1954,7 +1943,7 @@ function drawLabTileInteractive() {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1.0;
-      ctx.fillStyle = '#888';
+      ctx.fillStyle = 'var(--color-text-secondary)';
       ctx.font = '11px sans-serif';
       ctx.fillText('prev', px + 22, py - 22);
     }
@@ -2265,7 +2254,7 @@ function drawLabCharts() {
     detCanvas.style.height = '120px';
 
     const cw = detCanvas.width, ch = detCanvas.height;
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = 'var(--color-bg-card)';
     ctx.fillRect(0, 0, cw, ch);
 
     // Bin frames into ~100 buckets
@@ -2295,7 +2284,7 @@ function drawLabCharts() {
     }
 
     // Legend
-    ctx.fillStyle = '#888';
+    ctx.fillStyle = 'var(--color-text-secondary)';
     ctx.font = '18px sans-serif';
     ctx.fillText('gray=all dets  green=tracked', 10, 24);
   }
@@ -2311,7 +2300,7 @@ function drawLabCharts() {
     covCanvas.style.height = '120px';
 
     const cw = covCanvas.width, ch = covCanvas.height;
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = 'var(--color-bg-card)';
     ctx.fillRect(0, 0, cw, ch);
 
     // Rolling coverage (30-frame window)
@@ -2325,7 +2314,7 @@ function drawLabCharts() {
       points.push(cov);
     }
 
-    ctx.strokeStyle = '#22c55e';
+    ctx.strokeStyle = 'var(--color-success)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     for (let i = 0; i < points.length; i++) {
@@ -2346,7 +2335,7 @@ function drawLabCharts() {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.fillStyle = '#eab308';
+    ctx.fillStyle = 'var(--color-warning)';
     ctx.font = '18px sans-serif';
     ctx.fillText('90% target', 10, targetY - 5);
   }
@@ -2362,7 +2351,7 @@ function drawLabCharts() {
     trajCanvas.style.height = '120px';
 
     const cw = trajCanvas.width, ch = trajCanvas.height;
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = 'var(--color-bg-card)';
     ctx.fillRect(0, 0, cw, ch);
 
     // Bucket trajectories by length
@@ -2392,22 +2381,22 @@ function drawLabCharts() {
 
       // Static bar
       const sh = (b.static / maxCount) * ch * 0.75;
-      ctx.fillStyle = '#555';
+      ctx.fillStyle = 'var(--color-border)';
       ctx.fillRect(x, ch - sh - ch * 0.12, bw, sh);
 
       // Moving bar on top
       const mh = (b.moving / maxCount) * ch * 0.75;
-      ctx.fillStyle = '#22c55e';
+      ctx.fillStyle = 'var(--color-success)';
       ctx.fillRect(x, ch - sh - mh - ch * 0.12, bw, mh);
 
       // Label
-      ctx.fillStyle = '#888';
+      ctx.fillStyle = 'var(--color-text-secondary)';
       ctx.font = '16px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(b.label, x + bw / 2, ch - 4);
     }
 
-    ctx.fillStyle = '#888';
+    ctx.fillStyle = 'var(--color-text-secondary)';
     ctx.font = '18px sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText('green=moving  gray=static', 10, 24);
@@ -2429,7 +2418,7 @@ async function labLoadMessages() {
       const time = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
       const frameRef = m.frame_idx != null ? ` <span style="opacity:0.5">[frame ${m.frame_idx}]</span>` : '';
       const tileRef = m.tile ? ` <span style="opacity:0.5">[r${m.tile.row}c${m.tile.col}]</span>` : '';
-      return `<div style="margin-bottom:4px"><span style="color:var(--blue)">${time}</span>${frameRef}${tileRef} ${m.text}</div>`;
+      return `<div style="margin-bottom:4px"><span style="color:var(--color-accent)">${time}</span>${frameRef}${tileRef} ${m.text}</div>`;
     }).join('');
     log.scrollTop = log.scrollHeight;
   } catch {}
@@ -2477,11 +2466,11 @@ async function loadGapReviews() {
       const label = isConfirm ? 'Confirm game ball track' : `${p.remaining} gaps remaining`;
       const icon = isConfirm ? '&#x26BD;' : '&#x1F50D;';
       return `
-      <div class="packet-card" onclick="navigateTo('gap-annotate', '${p.packet_id}')" style="padding:16px;margin:8px;background:var(--surface);border-radius:12px;cursor:pointer;border:1px solid #333;">
+      <div class="packet-card" onclick="navigateTo('gap-annotate', '${p.packet_id}')" style="padding:16px;margin:8px;background:var(--color-bg-card);border-radius:12px;cursor:pointer;border:1px solid var(--color-border);">
         <div style="font-weight:600;margin-bottom:4px;">${icon} ${p.game_id}</div>
-        <div style="font-size:13px;color:#888;">${label}</div>
-        <div style="margin-top:8px;height:4px;background:#333;border-radius:2px;overflow:hidden;">
-          <div style="height:100%;background:var(--green);width:${Math.round(p.reviewed/Math.max(p.total_gaps,1)*100)}%;border-radius:2px;"></div>
+        <div style="font-size:13px;color:var(--color-text-secondary);">${label}</div>
+        <div style="margin-top:8px;height:4px;background:var(--color-border);border-radius:2px;overflow:hidden;">
+          <div style="height:100%;background:var(--color-success);width:${Math.round(p.reviewed/Math.max(p.total_gaps,1)*100)}%;border-radius:2px;"></div>
         </div>
       </div>
     `;}).join('');
@@ -2526,7 +2515,7 @@ function updateGapDisplay() {
     const coverage = ti.segment_frames ? Math.round(ti.track_frames / ti.segment_frames * 100) : '?';
     document.getElementById('gap-info').innerHTML =
       `<div>Frame <b>${gapCurrentIndex + 1}</b> of ${gapItems.length} — Is the <b>game ball</b> circled in red?</div>` +
-      `<div style="font-size:12px;color:#888;margin-top:4px;">${gapManifest.game_id} · ${ti.track_frames || '?'} track frames · ${coverage}% coverage</div>` +
+      `<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px;">${gapManifest.game_id} · ${ti.track_frames || '?'} track frames · ${coverage}% coverage</div>` +
       `<div style="font-size:12px;color:#aaa;margin-top:2px;">Click on any frame to mark the ball position, then press "Ball Here"</div>`;
 
     // Show the full filmstrip
@@ -2690,7 +2679,7 @@ async function gapAction(action) {
     });
     const result = await resp.json();
 
-    const colors = { confirm: 'var(--green)', not_visible: '#666', out_of_play: '#e67e22', locate: 'var(--blue)' };
+    const colors = { confirm: 'var(--color-success)', not_visible: '#666', out_of_play: '#e67e22', locate: 'var(--color-accent)' };
     const labels = { confirm: 'Confirmed!', not_visible: 'Not visible', out_of_play: 'Out of play', locate: 'Ball marked!' };
     showToast(labels[action] || action, colors[action]);
 
@@ -2735,11 +2724,11 @@ function leaveGapReview() {
 // ========== Game Phases ==========
 
 const PHASE_COLORS = {
-  pre_game: '#6b7280',
-  first_half: '#22c55e',
+  pre_game: 'var(--color-idle)',
+  first_half: 'var(--color-success)',
   halftime: '#f59e0b',
-  second_half: '#3b82f6',
-  post_game: '#6b7280',
+  second_half: 'var(--color-accent)',
+  post_game: 'var(--color-idle)',
 };
 
 const PHASE_LABELS = {
@@ -2767,14 +2756,14 @@ async function loadGamePhases() {
     const withPhases = games.filter(g => g.has_phases);
     const without = games.filter(g => !g.has_phases);
 
-    html += `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${withPhases.length} games with phases, ${without.length} pending</div>`;
+    html += `<div style="padding:12px 16px;color:var(--color-text-secondary);font-size:13px">${withPhases.length} games with phases, ${without.length} pending</div>`;
 
     for (const game of withPhases) {
       html += renderGamePhaseCard(game);
     }
 
     if (without.length > 0) {
-      html += '<div style="padding:12px 16px;margin-top:16px"><h3 style="color:var(--text-dim);font-size:14px">Pending Phase Detection</h3></div>';
+      html += '<div style="padding:12px 16px;margin-top:16px"><h3 style="color:var(--color-text-secondary);font-size:14px">Pending Phase Detection</h3></div>';
       for (const game of without) {
         html += `<div class="packet-card" style="opacity:0.5;cursor:pointer" onclick="viewPhaseEditor('${game.game_id}')"><div class="title">${game.game_id}</div><div class="meta">${game.segments.length} segments</div></div>`;
       }
@@ -2813,7 +2802,7 @@ function renderGamePhaseCard(game) {
     const startOff = (segOffsets[p.segment_start] || 0) + p.frame_start;
     const endOff = (segOffsets[p.segment_end] || 0) + p.frame_end;
     const width = Math.max(((endOff - startOff) / totalFrames) * 100, 2);
-    const color = PHASE_COLORS[p.phase] || '#444';
+    const color = PHASE_COLORS[p.phase] || 'var(--color-border)';
     const label = PHASE_LABELS[p.phase] || p.phase;
     timelineHtml += `<div style="width:${width}%;background:${color};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.5);overflow:hidden;white-space:nowrap" title="${label}">${width > 8 ? label : ''}</div>`;
   }
@@ -2822,7 +2811,7 @@ function renderGamePhaseCard(game) {
   // Phase details
   let detailHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">';
   for (const p of phases) {
-    const color = PHASE_COLORS[p.phase] || '#444';
+    const color = PHASE_COLORS[p.phase] || 'var(--color-border)';
     const label = PHASE_LABELS[p.phase] || p.phase;
     detailHtml += `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:${color}33;color:${color};font-weight:600">${label}</span>`;
   }
@@ -2841,10 +2830,10 @@ function renderGamePhaseCard(game) {
 let phaseEditorState = null;
 
 const BOUNDARY_TYPES = [
-  { key: 'game_start', label: 'Game Start', color: '#22c55e' },
+  { key: 'game_start', label: 'Game Start', color: 'var(--color-success)' },
   { key: 'halftime_start', label: 'Halftime', color: '#f59e0b' },
-  { key: 'second_half_start', label: '2nd Half', color: '#3b82f6' },
-  { key: 'game_end', label: 'Game End', color: '#6b7280' },
+  { key: 'second_half_start', label: '2nd Half', color: 'var(--color-accent)' },
+  { key: 'game_end', label: 'Game End', color: 'var(--color-idle)' },
 ];
 
 async function viewPhaseEditor(gameId) {
@@ -2876,13 +2865,13 @@ async function viewPhaseEditor(gameId) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <button class="header-btn" onclick="loadGamePhases()">&larr;</button>
         <span style="font-size:14px;font-weight:600;flex:1">${gameId}</span>
-        <span id="phase-info" style="font-size:12px;color:var(--text-dim)">${samples.length} samples</span>
+        <span id="phase-info" style="font-size:12px;color:var(--color-text-secondary)">${samples.length} samples</span>
       </div>
       <div style="position:relative;background:#000;border-radius:6px;overflow:hidden">
         <img id="phase-frame" style="display:block;width:100%;border-radius:6px" />
       </div>
-      <div id="phase-color-bar" style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0 4px 0;background:#222"></div>
-      <input type="range" id="phase-slider" min="0" max="${samples.length - 1}" value="0" style="width:100%;margin:4px 0;accent-color:var(--blue)">
+      <div id="phase-color-bar" style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0 4px 0;background:var(--color-border-light)"></div>
+      <input type="range" id="phase-slider" min="0" max="${samples.length - 1}" value="0" style="width:100%;margin:4px 0;accent-color:var(--color-accent)">
       <div style="display:flex;align-items:center;gap:8px;margin:4px 0">
         <button class="header-btn" onclick="phaseStep(-1)">&larr;</button>
         <span id="phase-time" style="font-size:13px;font-weight:600;flex:1;text-align:center">00:00:00</span>
@@ -2890,9 +2879,9 @@ async function viewPhaseEditor(gameId) {
       </div>
       <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap">
         ${boundaryBtns}
-        <button class="header-btn" onclick="phaseSave('${gameId}')" style="background:var(--green);color:#000;font-weight:600;margin-left:auto">Save</button>
+        <button class="header-btn" onclick="phaseSave('${gameId}')" style="background:var(--color-success);color:#000;font-weight:600;margin-left:auto">Save</button>
       </div>
-      <div id="phase-boundary-info" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div>
+      <div id="phase-boundary-info" style="font-size:11px;color:var(--color-text-secondary);margin-top:4px"></div>
     </div>`;
 
     container.innerHTML = html;
@@ -3152,7 +3141,7 @@ async function phaseSave(gameId) {
     if (result.accepted) {
       const info = document.getElementById('phase-info');
       info.textContent = `Saved! (${phases.length} phases, human)`;
-      info.style.color = 'var(--green)';
+      info.style.color = 'var(--color-success)';
     }
   } catch (err) {
     alert('Save failed: ' + err.message);
@@ -3183,7 +3172,7 @@ async function loadFieldBoundaries() {
     const needsReview = games.filter(g => g.needs_human_review && g.has_polygon);
     const noPoly = games.filter(g => !g.has_polygon);
 
-    let html = `<div style="padding:12px 16px;color:var(--text-dim);font-size:13px">${withPoly.length} done, ${noPoly.length} need polygon, ${notReady.length} not tiled yet</div>`;
+    let html = `<div style="padding:12px 16px;color:var(--color-text-secondary);font-size:13px">${withPoly.length} done, ${noPoly.length} need polygon, ${notReady.length} not tiled yet</div>`;
 
     // Games needing review first
     if (needsReview.length > 0) {
@@ -3196,7 +3185,7 @@ async function loadFieldBoundaries() {
     // No polygon yet (but have tiles)
     const noPolyReady = noPoly.filter(g => !g.has_polygon);
     if (noPolyReady.length > 0) {
-      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--red);font-size:14px">Needs Polygon</h3></div>';
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--color-danger);font-size:14px">Needs Polygon</h3></div>';
       for (const g of noPolyReady) {
         html += renderFieldCard(g);
       }
@@ -3205,7 +3194,7 @@ async function loadFieldBoundaries() {
     // Games with good polygons
     const good = games.filter(g => g.has_polygon && !g.needs_human_review);
     if (good.length > 0) {
-      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--green);font-size:14px">Done</h3></div>';
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--color-success);font-size:14px">Done</h3></div>';
       for (const g of good) {
         html += renderFieldCard(g);
       }
@@ -3213,7 +3202,7 @@ async function loadFieldBoundaries() {
 
     // Not tiled yet
     if (notReady.length > 0) {
-      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--gray);font-size:14px">Not Tiled Yet</h3></div>';
+      html += '<div style="padding:8px 16px;margin-top:8px"><h3 style="color:var(--color-idle);font-size:14px">Not Tiled Yet</h3></div>';
       for (const id of notReady) {
         html += `<div class="packet-card" style="opacity:0.4">
           <div class="title">&#x23F3; ${id}</div>
@@ -3229,9 +3218,9 @@ async function loadFieldBoundaries() {
 }
 
 function renderFieldCard(game) {
-  const sourceColors = { onnx: '#22c55e', sonnet: '#3b82f6', human: '#a855f7', none: '#ef4444' };
+  const sourceColors = { onnx: 'var(--color-success)', sonnet: 'var(--color-accent)', human: '#a855f7', none: 'var(--color-danger)' };
   const source = game.source || 'none';
-  const color = sourceColors[source] || '#6b7280';
+  const color = sourceColors[source] || 'var(--color-idle)';
   const conf = game.confidence ? `${(game.confidence * 100).toFixed(0)}%` : '-';
   const status = game.has_polygon ? 'Has polygon' : 'No polygon';
 
@@ -3266,19 +3255,19 @@ async function viewFieldBoundary(gameId) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <button class="header-btn" onclick="loadFieldBoundaries()">&larr;</button>
         <span style="font-size:14px;font-weight:600;flex:1">${gameId}</span>
-        <span id="field-point-info" style="font-size:12px;color:var(--text-dim)">${source} (${nPoints}pts)</span>
+        <span id="field-point-info" style="font-size:12px;color:var(--color-text-secondary)">${source} (${nPoints}pts)</span>
       </div>
       <div style="position:relative">
-        <canvas id="field-canvas" style="display:block;border-radius:6px;border:1px solid #333;width:100%;touch-action:none"></canvas>
+        <canvas id="field-canvas" style="display:block;border-radius:6px;border:1px solid var(--color-border);width:100%;touch-action:none"></canvas>
       </div>
       <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-        <button class="header-btn" onclick="fieldFlipImage('${gameId}')" id="field-flip-btn" style="background:#333">Flip</button>
-        <button class="header-btn" onclick="fieldAddPoint()" id="field-add-btn" style="background:#333">+ Add</button>
-        <button class="header-btn" onclick="fieldDeletePoint()" id="field-del-btn" style="background:#333">- Del</button>
+        <button class="header-btn" onclick="fieldFlipImage('${gameId}')" id="field-flip-btn" style="background:var(--color-border)">Flip</button>
+        <button class="header-btn" onclick="fieldAddPoint()" id="field-add-btn" style="background:var(--color-border)">+ Add</button>
+        <button class="header-btn" onclick="fieldDeletePoint()" id="field-del-btn" style="background:var(--color-border)">- Del</button>
         <button class="header-btn" onclick="fieldResetPoints()">Reset</button>
-        <button class="header-btn" onclick="fieldSave('${gameId}')" style="background:var(--green);color:#000;font-weight:600;margin-left:auto">Save</button>
+        <button class="header-btn" onclick="fieldSave('${gameId}')" style="background:var(--color-success);color:#000;font-weight:600;margin-left:auto">Save</button>
       </div>
-      <div style="font-size:11px;color:var(--text-dim);margin-top:6px">
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px">
         Drag points to adjust. Near sideline (bottom, green) left-to-right, then far sideline (top, blue) right-to-left.
       </div>
     </div>`;
@@ -3364,7 +3353,7 @@ function fieldDrawPoint(ctx, p, idx, selected) {
 
   ctx.beginPath();
   ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
-  ctx.fillStyle = selected ? '#ff0' : (isNear ? '#22c55e' : '#3b82f6');
+  ctx.fillStyle = selected ? '#ff0' : (isNear ? 'var(--color-success)' : 'var(--color-accent)');
   ctx.fill();
   ctx.strokeStyle = '#000';
   ctx.lineWidth = 2;
@@ -3521,7 +3510,7 @@ async function fieldSave(gameId) {
     const result = await resp.json();
     if (result.accepted) {
       document.getElementById('field-point-info').textContent = `Saved! (${polygon.length} pts, human)`;
-      document.getElementById('field-point-info').style.color = 'var(--green)';
+      document.getElementById('field-point-info').style.color = 'var(--color-success)';
     }
   } catch (err) {
     alert('Save failed: ' + err.message);

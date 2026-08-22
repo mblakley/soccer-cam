@@ -78,7 +78,7 @@ def client(tmp_path, config_path):
 
 def test_get_config_renders_form_with_existing_values(client):
     body = client.get("/config").text
-    assert "<title>Soccer-Cam · Configuration</title>" in body
+    assert "<title>Soccer-Cam · Settings</title>" in body
     # Several known fields should appear with their current values.
     assert 'name="STORAGE.path"' in body
     assert 'value="/shared_data"' in body
@@ -179,10 +179,11 @@ def test_post_config_invalid_returns_422(client, config_path):
     )
     # Either Python coercion or Pydantic validation rejects it.
     assert resp.status_code in (422, 500)
-    # Validation flash must include both classes — `flash` provides the
-    # padding/border/font, `flash-err` provides the red signal color.
+    # The validation banner must carry both classes — `banner` provides the
+    # padding/border/type, `banner--bad` the danger signal. Both come from the
+    # shared stylesheet; the page must not restyle them locally.
     if resp.status_code == 422:
-        assert 'class="flash flash-err"' in resp.text
+        assert 'class="banner banner--bad"' in resp.text
 
 
 def test_get_config_rail_nav_anchors_match_sections(client):

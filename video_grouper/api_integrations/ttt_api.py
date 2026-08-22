@@ -6,12 +6,15 @@ then calls TTT API endpoints to discover team assignments and manage clip reques
 """
 
 import base64
+import functools
 import json
 import logging
+import ssl
 import time
 from pathlib import Path
 from typing import Any
 
+import certifi
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,20 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
     return json.loads(payload_bytes)
 
 
+@functools.lru_cache(maxsize=1)
+def _shared_ssl_context() -> ssl.SSLContext:
+    """Build the default TLS context once and share it across clients.
+
+    ``httpx.Client()`` otherwise calls ``ssl.create_default_context()`` per
+    instance, and loading the CA bundle costs ~2s on Windows. That was 72% of
+    the time to build the web app -- paid on every process start, and on every
+    one of the ~166 web tests that constructs an app.
+
+    The context is read-only after construction, so sharing it is safe.
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 class TTTApiClient:
     """Client for the Team Tech Tools API.
 
@@ -74,7 +91,7 @@ class TTTApiClient:
         self._refresh_token_value: str | None = None
         self._expires_at: float | None = None
 
-        self._http = httpx.Client(timeout=30.0)
+        self._http = httpx.Client(timeout=30.0, verify=_shared_ssl_context())
 
         self._load_tokens()
 

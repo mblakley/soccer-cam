@@ -9,6 +9,10 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.25.0",
+    # Imported directly by api_integrations/ttt_api.py for the shared TLS
+    # context. Always present as an httpx dependency, but declared here so
+    # the import does not rest on a transitive.
+    "certifi>=2024.2.2",
     "aiofiles>=23.2.1",
     "pytz>=2024.1",
     "pywinauto>=0.6.8",
@@ -376,10 +380,16 @@ torch = { index = "pytorch-cu126" }
 torchvision = { index = "pytorch-cu126" }
 
 [dependency-groups]
+# Installed by a bare `uv sync`. Everything needed to lint, format and run the
+# test suite lives here, so a fresh clone can verify itself with no extra
+# flags. Previously `ruff` sat only in the `dev` *extra*, so `uv sync` gave you
+# a working pytest and a missing linter.
 dev = [
     "aiohttp>=3.13.3",
     "mypy>=2.1.0",
     "psycopg2-binary>=2.9.12",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.0.0",
+    "ruff>=0.5.5",
+    "pre-commit>=3.7.1",
 ]

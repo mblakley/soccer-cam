@@ -1,0 +1,939 @@
+/* ===========================================================================
+   Soccer-Cam web UI — shared stylesheet
+   ---------------------------------------------------------------------------
+   One sheet for every page the orchestrator serves: dashboard, auth, config
+   editor, setup wizard, seam calibration.
+
+   Design system is shared verbatim with Team Tech Tools. Colour, type, radius,
+   spacing and motion tokens hold the same values as TTT's
+   frontend/shared/styles/theme.css (dark theme). The two products differ in
+   register, not palette:
+
+     TTT        workspace  — light + dark, prose and tables, roomy
+     Soccer-Cam console    — dark only, mono-forward, status dense
+
+   Colour carries three separate jobs. Keep them separate:
+
+     --color-accent   blue    interactive: links, tabs, focus
+     --color-record   red     capture in progress; the ONLY pulsing element
+     --color-danger   red     failure; static, always with a tinted bg + icon
+     --color-warning  amber   warning, and nothing else
+
+   Record and danger share a hue on purpose (tally red is the broadcast
+   convention) and are told apart by motion and form, never by hue alone.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------- tokens -- */
+
+:root {
+  /* Soccer-Cam is an appliance console: dark only, no light mode. This tells
+     the browser to theme scrollbars, form controls and date pickers to match. */
+  color-scheme: dark;
+
+  /* Surfaces — TTT dark theme */
+  --color-bg-primary: #0f0f12;
+  --color-bg-secondary: #15151a;
+  --color-bg-tertiary: #0a0a0e;
+  --color-bg-card: #1a1a20;
+  --color-bg-input: #1a1a20;
+  --color-bg-hover: #22222a;
+
+  /* Text */
+  --color-text-primary: #f0f0f2;
+  --color-text-secondary: rgba(240, 240, 242, 0.65);
+  --color-text-muted: rgba(240, 240, 242, 0.38);
+  --color-text-inverse: #0f0f12;
+
+  /* Rules */
+  --color-border: #2a2a32;
+  --color-border-light: #22222a;
+
+  /* Accent — interactive only */
+  --color-accent: #5b8def;
+  --color-accent-hover: #7ba5f3;
+  --color-accent-light: rgba(91, 141, 239, 0.15);
+  --color-accent-glow: rgba(91, 141, 239, 0.25);
+
+  /* Capture — the tally. Nothing else in the UI uses this colour. */
+  --color-record: #ff3b30;
+  --color-record-bg: rgba(255, 59, 48, 0.12);
+  --color-record-glow: rgba(255, 59, 48, 0.3);
+
+  /* Status */
+  --color-success: #4ade80;
+  --color-success-bg: rgba(74, 222, 128, 0.1);
+  --color-warning: #f59e0b;
+  --color-warning-bg: rgba(245, 158, 11, 0.15);
+  --color-danger: #ef4444;
+  --color-danger-bg: rgba(239, 68, 68, 0.1);
+  --color-idle: #6b7280;
+
+  /* Type — display face shared with TTT.
+     The fallbacks carry real weight: the seam-calibration tool is used on a
+     phone at a pitch and deliberately skips the webfont request, so the
+     condensed look has to survive on system faces alone. */
+  --font-headline: 'Barlow Condensed', 'Bahnschrift', 'DIN Alternate',
+    'Roboto Condensed', 'Arial Narrow', sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono',
+    'Segoe UI Mono', monospace;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 12px;
+
+  /* Shadow */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.7);
+
+  /* Motion */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.2s ease;
+
+  /* Z-index — matches TTT's documented scale */
+  --z-base: 1;
+  --z-dropdown: 100;
+  --z-overlay: 500;
+  --z-modal: 1000;
+  --z-toast: 5000;
+}
+
+/* ------------------------------------------------------------------ base -- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* Room for the fixed tally strip. */
+  padding-top: 3px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-headline);
+  font-weight: 700;
+  line-height: 1.05;
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+}
+h2 {
+  font-size: 20px;
+}
+h3 {
+  font-size: 18px;
+}
+
+/* ------------------------------------------------------- tally (signature) --
+   A 2px strip pinned to the top edge of every page, driven by real capture
+   state. Idle it is just the page's top hairline; recording it is a live tally
+   light. This is the one element allowed to animate.
+
+     <div class="tally" data-state="idle|armed|recording|error"></div>
+   ---------------------------------------------------------------------------- */
+
+.tally {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  /* Above the sticky topbar. A capture indicator that a header can cover is
+     not an indicator -- at equal z-index the later-painted topbar hid it. */
+  z-index: var(--z-toast);
+  background: var(--color-border);
+  transition: background-color var(--transition-normal);
+}
+
+.tally[data-state='armed'] {
+  background: rgba(255, 59, 48, 0.35);
+}
+
+.tally[data-state='recording'] {
+  background: var(--color-record);
+  box-shadow: 0 0 12px var(--color-record-glow);
+  animation: tally-live 2s ease-in-out infinite;
+}
+
+.tally[data-state='error'] {
+  background: var(--color-danger);
+}
+
+@keyframes tally-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ---------------------------------------------------------------- topbar -- */
+
+.topbar {
+  position: sticky;
+  /* Clears the tally strip so the two never overlap. */
+  top: 3px;
+  z-index: var(--z-dropdown);
+  border-bottom: 1px solid var(--color-border);
+  background: rgba(15, 15, 18, 0.85);
+  backdrop-filter: blur(8px);
+}
+
+@supports not (backdrop-filter: blur(8px)) {
+  .topbar {
+    background: var(--color-bg-primary);
+  }
+}
+
+.topbar-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  font-family: var(--font-headline);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  font-size: 18px;
+  text-transform: uppercase;
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.brand:hover {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.brand .dot {
+  color: var(--color-accent);
+}
+
+.crumb {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.crumb a {
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid transparent;
+}
+
+.crumb a:hover {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-accent);
+  text-decoration: none;
+}
+
+/* Top-level nav links in the topbar */
+.topnav {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.topnav a {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.topnav a:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.topnav a[aria-current='page'] {
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+/* ---------------------------------------------------------------- layout -- */
+
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 32px 28px 80px;
+}
+
+.shell--rail {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 48px;
+}
+
+.shell--narrow {
+  max-width: 900px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.lede {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+/* Left rail nav */
+.rail {
+  position: sticky;
+  top: 88px;
+  align-self: start;
+}
+
+.rail h2 {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: 0 0 14px;
+}
+
+.rail ol,
+.rail ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.rail a {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid transparent;
+  font-family: var(--font-headline);
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.rail a:hover {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.rail a.active,
+.rail a[aria-current='true'] {
+  color: var(--color-text-primary);
+  border-left-color: var(--color-accent);
+}
+
+.rail .num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+/* ----------------------------------------------------------- panels/cards -- */
+
+.panel,
+.sec {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.panel > h2,
+.sec > h2 {
+  font-family: var(--font-headline);
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 16px;
+}
+
+.panel--record {
+  border-left: 3px solid var(--color-record);
+}
+
+.panel--accent {
+  border-left: 3px solid var(--color-accent);
+}
+
+.panel--ok {
+  border-left: 3px solid var(--color-success);
+}
+
+.panel--warn {
+  border-left: 3px solid var(--color-warning);
+}
+
+.panel--bad {
+  border-left: 3px solid var(--color-danger);
+}
+
+/* Section eyebrow — the small tracked label above a group */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: 0 0 12px;
+}
+
+/* --------------------------------------------------------------- helpers -- */
+
+.muted {
+  color: var(--color-text-secondary);
+}
+
+.faint {
+  color: var(--color-text-muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.accent {
+  color: var(--color-accent);
+}
+
+.headline {
+  font-family: var(--font-headline);
+  font-weight: 700;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.row--between {
+  justify-content: space-between;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ok {
+  color: var(--color-success);
+}
+.warn {
+  color: var(--color-warning);
+}
+.err,
+.bad {
+  color: var(--color-danger);
+}
+.off {
+  color: var(--color-idle);
+}
+
+/* --------------------------------------------------------------- buttons -- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 20px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background-color var(--transition-normal),
+    border-color var(--transition-normal),
+    color var(--transition-normal),
+    box-shadow var(--transition-normal),
+    transform var(--transition-normal);
+}
+
+.btn:hover {
+  background: var(--color-accent-hover);
+  color: var(--color-text-inverse);
+  text-decoration: none;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  background: transparent;
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.btn-secondary:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-secondary);
+  padding: 8px 12px;
+}
+
+.btn-ghost:hover {
+  background: transparent;
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: var(--color-text-primary);
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+  color: var(--color-text-primary);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.btn-lg {
+  padding: 14px 32px;
+  font-size: 16px;
+}
+
+.btn-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ----------------------------------------------------------------- forms -- */
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field-label,
+.lbl,
+label.form-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  margin-bottom: 6px;
+}
+
+input[type='text'],
+input[type='password'],
+input[type='number'],
+input[type='email'],
+input[type='url'],
+input[type='search'],
+select,
+textarea,
+.field-control {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+input[type='text']:focus,
+input[type='password']:focus,
+input[type='number']:focus,
+input[type='email']:focus,
+input[type='url']:focus,
+input[type='search']:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-light);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--color-accent);
+  width: 16px;
+  height: 16px;
+}
+
+/* Paths and identifiers read as data, not prose */
+input.mono,
+.field-control.mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  margin: 0 0 24px;
+}
+
+legend {
+  font-family: var(--font-headline);
+  font-size: 18px;
+  font-weight: 700;
+  padding: 0 8px;
+}
+
+/* ---------------------------------------------------------------- tables -- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th {
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+  border-bottom: 2px solid var(--color-border);
+}
+
+td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border-light);
+  vertical-align: top;
+}
+
+tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* -------------------------------------------------------- status + badges -- */
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-idle);
+  flex-shrink: 0;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.status-dot.on {
+  background: var(--color-success);
+}
+.status-dot.off {
+  background: var(--color-idle);
+}
+.status-dot.warn {
+  background: var(--color-warning);
+}
+.status-dot.bad,
+.status-dot.err {
+  background: var(--color-danger);
+}
+
+/* Recording is the only pulsing state in the product. */
+.status-dot.recording {
+  background: var(--color-record);
+  animation: tally-live 1.5s ease-in-out infinite;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+}
+
+.badge--on {
+  color: var(--color-success);
+  background: var(--color-success-bg);
+}
+.badge--warn {
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+.badge--bad {
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+.badge--recording {
+  color: var(--color-record);
+  background: var(--color-record-bg);
+}
+
+/* Categorical label */
+.tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 2px;
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+/* --------------------------------------------------------------- banners -- */
+
+.banner,
+.flash {
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-bg-secondary);
+  margin-bottom: 24px;
+}
+
+.banner--warn,
+.flash--warn {
+  border-left-color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.banner--bad,
+.flash-err {
+  border-left-color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+.banner--ok,
+.flash--ok {
+  border-left-color: var(--color-success);
+  background: var(--color-success-bg);
+}
+
+/* ------------------------------------------------------------ code, data -- */
+
+code,
+kbd,
+.path-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text-primary);
+}
+
+pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  overflow-x: auto;
+}
+
+pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.path-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Key/value pairs — the dominant shape on status pages */
+.kv {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 8px 16px;
+  font-size: 14px;
+}
+
+.kv .k {
+  color: var(--color-text-secondary);
+}
+
+.kv .v {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------ responsive -- */
+
+@media (max-width: 900px) {
+  .shell,
+  .shell--rail {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    padding: 24px 16px 64px;
+  }
+
+  .rail {
+    position: static;
+  }
+
+  .topbar-inner {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+
+  .page-header {
+    flex-direction: column;
+  }
+
+  h1 {
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 767px) {
+  .btn {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  input[type='text'],
+  input[type='password'],
+  input[type='number'],
+  input[type='email'],
+  input[type='url'],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+
+/* --------------------------------------------------------- reduced motion -- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  /* Keep the tally legible without motion. */
+  .tally[data-state='recording'] {
+    opacity: 1;
+  }
+}

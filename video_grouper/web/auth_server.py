@@ -38,6 +38,7 @@ from urllib.parse import urlencode
 
 from fastapi import Body, FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from video_grouper.api_integrations.ttt_api import (
     TTTApiClient,
@@ -45,6 +46,7 @@ from video_grouper.api_integrations.ttt_api import (
     _decode_jwt_payload,
 )
 from video_grouper.utils.config import TTTConfig
+from video_grouper.web import chrome as _chrome
 from video_grouper.web.auth_status import clear_auth_needed, list_auth_needed
 
 logger = logging.getLogger(__name__)
@@ -89,108 +91,95 @@ _GAME_DIR_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}$")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 
-_DASHBOARD_PAGE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="refresh" content="10">
-<title>Soccer-Cam</title>
-<style>
-body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2em auto; padding: 0 1em; color: #222; }
-h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
-section { margin: 1.25rem 0; padding: 1rem 1.25rem; border: 1px solid #e5e7eb; border-radius: 6px; background: #fff; }
-section h2 { font-size: 1rem; margin: 0 0 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; }
-.muted { color: #6b7280; font-size: 0.85rem; }
-.ok { color: #15803d; }
-.warn { color: #b45309; }
-.err { color: #b91c1c; }
-.btn { display: inline-block; padding: 0.45rem 0.9rem; text-decoration: none; background: #2563eb; color: white !important; border-radius: 4px; font-weight: 600; border: 0; cursor: pointer; font-size: 0.9rem; }
-.btn:hover { background: #1d4ed8; }
-.btn-ghost { background: transparent; color: #2563eb !important; border: 1px solid #2563eb; }
-.btn-ghost:hover { background: #eff6ff; }
-table { border-collapse: collapse; width: 100%; }
-td, th { padding: 0.4rem 0.6rem; border-bottom: 1px solid #f1f5f9; text-align: left; font-size: 0.9rem; vertical-align: top; }
-th { color: #475569; font-weight: 600; }
-code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
-form.inline { display: inline; margin-left: 0.5rem; }
-.status-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
-.status-dot.on { background: #15803d; }
-.status-dot.off { background: #94a3b8; }
-.status-dot.bad { background: #b91c1c; }
-.auth-details { margin-top: 0.5rem; border-top: 1px solid #f1f5f9; padding-top: 0.5rem; }
-.auth-details summary { cursor: pointer; color: #475569; font-size: 0.9rem; padding: 0.25rem 0; }
-.auth-form { display: flex; flex-direction: column; gap: 0.5rem; max-width: 320px; padding-top: 0.5rem; }
-.auth-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: #475569; }
-.auth-form input { padding: 0.45rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9rem; }
-.auth-form input:focus { outline: 2px solid #2563eb; outline-offset: -1px; border-color: #2563eb; }
-.auth-form button { align-self: flex-start; }
-.banner { padding: 0.85rem 1.1rem; border-radius: 6px; background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; margin: 1rem 0; }
-.banner strong { color: #78350f; }
-.banner code { background: #fde68a; }
-</style>
-</head>
-<body>
-<h1>Soccer-Cam</h1>
-<p class="muted">Auto-refreshes every 10s.</p>
+_DASHBOARD_BODY = """\
+<main class="shell shell--rail">
 
-<nav style="margin: 0 0 1rem;">
-<a class="btn btn-ghost" href="/config">Configure</a>
-<a class="btn btn-ghost" href="/setup">Setup wizard</a>
-<a class="btn btn-ghost" href="/stitch">Seam calibration</a>
-</nav>
+<aside class="rail">
+  <h2>On this page</h2>
+  <ul>
+    <li><a href="#auth">Authentication</a></li>
+    <li><a href="#youtube">YouTube</a></li>
+    <li><a href="#tray">Tray</a></li>
+    <li><a href="#pipeline">Pipeline</a></li>
+    <li><a href="#cameras">Cameras</a></li>
+    <li><a href="#games">Games</a></li>
+  </ul>
+</aside>
+
+<div>
+<div class="page-header">
+  <div>
+    <h1>Status</h1>
+    <p class="lede">What the capture appliance is doing right now. Refreshes every 10s.</p>
+  </div>
+</div>
 
 __AUTH_FLAGS_BANNER__
 
-<section>
+<section class="panel" id="auth">
 <h2>Authentication</h2>
 __AUTH_BLOCK__
 </section>
 
-<section id="youtube">
+<section class="panel" id="youtube">
 <h2>YouTube</h2>
 __YOUTUBE_BLOCK__
 </section>
 
-<section id="tray">
-<h2>Tray (autocam_gui)</h2>
+<section class="panel" id="tray">
+<h2>Tray</h2>
 __TRAY_BLOCK__
 </section>
 
-<section>
+<section class="panel" id="pipeline">
 <h2>Pipeline</h2>
 __QUEUES_BLOCK__
 </section>
 
-<section>
+<section class="panel" id="cameras">
 <h2>Cameras</h2>
 __CAMERAS_BLOCK__
 </section>
 
-<section>
+<section class="panel" id="games">
 <h2>Games</h2>
 __GAMES_BLOCK__
 </section>
-</body>
-</html>
+
+</div>
+</main>
 """
 
 
-_CALLBACK_PAGE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Completing sign-in...</title>
-<style>
-body { font-family: system-ui, sans-serif; max-width: 380px; margin: 4em auto; padding: 0 1em; color: #222; }
-</style>
-</head>
-<body>
-<h2>Completing sign-in&hellip;</h2>
-<p id="status">Processing authentication response&hellip;</p>
-<script>
-(function() {
+def _capture_state(status: dict | None) -> str:
+    """Derive the tally state from live pipeline status.
+
+    The tally claims the appliance is capturing, so it is derived from work
+    actually in flight -- never from "a camera exists". Unknown status means
+    ``idle``: a strip that cannot see the pipeline must not imply recording.
+    """
+    if not status:
+        return "idle"
+
+    cameras = status.get("cameras") or []
+    if any(c.get("connected") is False for c in cameras):
+        return "error"
+
+    queue_sizes = status.get("queue_sizes") or {}
+    in_flight = sum(
+        count
+        for name, count in queue_sizes.items()
+        if isinstance(count, int) and "download" in str(name).lower()
+    )
+    if in_flight > 0:
+        return "recording"
+
+    if any(c.get("connected") is True for c in cameras):
+        return "armed"
+    return "idle"
+
+
+_CALLBACK_JS = """(function() {
     var hash = window.location.hash.substring(1);
     if (!hash) {
         document.getElementById('status').textContent =
@@ -215,8 +204,7 @@ body { font-family: system-ui, sans-serif; max-width: 380px; margin: 4em auto; p
         return resp.text();
     }).then(function(text) {
         // Replace the page with the server-rendered success/error page so
-        // _SUCCESS_PAGE's <meta http-equiv="refresh"> can return the user
-        // to the dashboard.
+        // its own redirect can return the user to the status page.
         document.open();
         document.write(text);
         document.close();
@@ -225,71 +213,45 @@ body { font-family: system-ui, sans-serif; max-width: 380px; margin: 4em auto; p
             'Error contacting local server: ' + err;
     });
 })();
-</script>
-</body>
-</html>
 """
 
-
-_SUCCESS_PAGE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="refresh" content="2; url=/">
-<title>Signed in</title>
-<style>
-body { font-family: system-ui, sans-serif; max-width: 380px; margin: 4em auto; padding: 0 1em; color: #222; }
-.ok { color: #15803d; }
-</style>
-</head>
-<body>
-<h2 class="ok">Signed in to Team Tech Tools</h2>
-<p>Tokens saved to <code>shared_data/ttt/tokens.json</code>. Returning to dashboard&hellip;</p>
-<p><a href="/">Continue</a></p>
-</body>
-</html>
-"""
+_CALLBACK_PAGE = _chrome.notice_page(
+    "Signing in",
+    "Completing sign-in",
+    '<p class="muted" id="status">Talking to the identity provider&hellip;</p>',
+    extra_js=_CALLBACK_JS,
+)
 
 
-_MAGIC_LINK_SENT_PAGE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Magic link sent</title>
-<style>
-body { font-family: system-ui, sans-serif; max-width: 420px; margin: 4em auto; padding: 0 1em; color: #222; }
-.ok { color: #15803d; }
-</style>
-</head>
-<body>
-<h2 class="ok">Magic link sent</h2>
-<p>Check <code>__EMAIL__</code> for a sign-in link from Team Tech Tools. Clicking the link in the email will return you to this server's <code>/callback</code> and complete sign-in.</p>
-<p><a href="/">Back to dashboard</a></p>
-</body>
-</html>
-"""
+_SUCCESS_PAGE = _chrome.notice_page(
+    "Signed in",
+    "Signed in to Team Tech Tools",
+    '<p class="muted">Tokens saved to <code>shared_data/ttt/tokens.json</code>. '
+    "Returning to status&hellip;</p>"
+    '<p><a href="/">Continue now</a></p>',
+    tone="ok",
+    extra_js='setTimeout(function(){location.href="/";}, 2000);',
+)
 
 
-_ERROR_TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Sign-in failed</title>
-<style>
-body {{ font-family: system-ui, sans-serif; max-width: 380px; margin: 4em auto; padding: 0 1em; color: #222; }}
-.err {{ color: #b91c1c; }}
-</style>
-</head>
-<body>
-<h2 class="err">Sign-in failed</h2>
-<p>{message}</p>
-<p><a href="/">Back to dashboard</a></p>
-</body>
-</html>
-"""
+_MAGIC_LINK_SENT_PAGE = _chrome.notice_page(
+    "Magic link sent",
+    "Magic link sent",
+    '<p class="muted">Check <code>__EMAIL__</code> for a sign-in link from '
+    "Team Tech Tools. Opening it returns you here and finishes sign-in.</p>"
+    '<p><a href="/">Back to status</a></p>',
+    tone="ok",
+)
+
+
+def _error_page(message: str) -> str:
+    """Render a sign-in failure. ``message`` is escaped by the caller."""
+    return _chrome.notice_page(
+        "Sign-in failed",
+        "Sign-in failed",
+        f'<p class="muted">{message}</p><p><a href="/">Back to status</a></p>',
+        tone="bad",
+    )
 
 
 def _resolve_url(override: str, fallback: str) -> str:
@@ -614,7 +576,7 @@ def _render_tray_section(storage: Path) -> str:
     return (
         f'<p><span class="status-dot {dot}"></span>{age_label}</p>'
         f'<p class="muted">Log: <code>{html.escape(str(log_path))}</code></p>'
-        f'<pre style="background:#f3f4f6;padding:0.6rem;border-radius:4px;'
+        f'<pre style="background:var(--color-bg-tertiary);padding:12px;'
         f"overflow-x:auto;font-size:0.78rem;line-height:1.35;max-height:280px;"
         f'overflow-y:auto;">{body}</pre>'
     )
@@ -730,16 +692,20 @@ def _render_queues_section(status: dict | None) -> str:
 def _render_cameras_section(status: dict | None) -> str:
     cameras = (status or {}).get("cameras") or []
     if not cameras:
-        return '<p class="muted">No cameras configured.</p>'
+        # An empty screen is an invitation to act, not a dead end.
+        return (
+            '<p class="muted">No cameras configured yet.</p>'
+            '<p><a class="btn btn-sm" href="/setup/camera">Add a camera</a></p>'
+        )
     rows = []
     for c in cameras:
         connected = c.get("connected")
         if connected is True:
-            dot = '<span class="status-dot on"></span>connected'
+            dot = '<span class="status-dot on"></span>Connected'
         elif connected is False:
-            dot = '<span class="status-dot bad"></span>not connected'
+            dot = '<span class="status-dot bad"></span>Not connected'
         else:
-            dot = '<span class="status-dot off"></span>unknown'
+            dot = '<span class="status-dot off"></span>Unknown'
         rows.append(
             "<tr>"
             f"<td>{html.escape(str(c.get('name', '?')))}</td>"
@@ -747,10 +713,16 @@ def _render_cameras_section(status: dict | None) -> str:
             f"<td>{dot}</td>"
             "</tr>"
         )
+    # Seam calibration is a camera job, so it is launched from the cameras --
+    # not from a global menu where it would sit unused between remounts.
     return (
         "<table><tr><th>Name</th><th>IP</th><th>Status</th></tr>"
         + "".join(rows)
         + "</table>"
+        '<p class="btn-row" style="margin-top:16px">'
+        '<a class="btn btn-sm btn-secondary" href="/stitch">Calibrate seam</a>'
+        '<span class="hint">Realign the stitch after a knock or a remount.</span>'
+        "</p>"
     )
 
 
@@ -869,6 +841,14 @@ def create_app(
 
     app = FastAPI(title="Soccer-Cam Headless TTT Auth", version="0.3.0")
 
+    # The shared stylesheet every page links. One sheet, one place to change
+    # what Soccer-Cam looks like -- see video_grouper/web/chrome.py.
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(_chrome.STATIC_DIR)),
+        name="static",
+    )
+
     # Mount the schema-driven config editor at /config when we know the
     # path on disk (the orchestrator passes it in; tests can opt in).
     if config_path is not None:
@@ -981,7 +961,7 @@ def create_app(
             logger.warning("status_provider raised: %s", exc)
             status = None
         body = (
-            _DASHBOARD_PAGE.replace(
+            _DASHBOARD_BODY.replace(
                 "__AUTH_FLAGS_BANNER__", _render_auth_flags_banner(storage)
             )
             .replace("__AUTH_BLOCK__", _render_auth_section(token_file, providers))
@@ -991,7 +971,15 @@ def create_app(
             .replace("__CAMERAS_BLOCK__", _render_cameras_section(status))
             .replace("__GAMES_BLOCK__", _render_games_section(_scan_games(storage)))
         )
-        return HTMLResponse(body)
+        return HTMLResponse(
+            _chrome.page(
+                "Status",
+                body,
+                active="/",
+                capture_state=_capture_state(status),
+                refresh=10,
+            )
+        )
 
     def _redirect_uri(request: Request) -> str:
         proto = request.headers.get("x-forwarded-proto") or request.url.scheme
@@ -1022,7 +1010,7 @@ def create_app(
             client.login(email, password)
         except TTTApiError as exc:
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(message=html.escape(str(exc))),
+                _error_page(message=html.escape(str(exc))),
                 status_code=401,
             )
         logger.info("Password sign-in complete for %s", email)
@@ -1035,7 +1023,7 @@ def create_app(
             client.send_magic_link(email, _redirect_uri(request))
         except TTTApiError as exc:
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(message=html.escape(str(exc))),
+                _error_page(message=html.escape(str(exc))),
                 status_code=400,
             )
         return HTMLResponse(
@@ -1058,17 +1046,13 @@ def create_app(
 
         if not access_token:
             msg = error_description or error or "No access token returned."
-            return HTMLResponse(
-                _ERROR_TEMPLATE.format(message=html.escape(msg)), status_code=400
-            )
+            return HTMLResponse(_error_page(message=html.escape(msg)), status_code=400)
         try:
             client.set_session_from_token(access_token)
         except (ValueError, KeyError) as exc:
             logger.error("Failed to persist OAuth token: %s", exc)
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
-                    message=f"Token rejected: {html.escape(str(exc))}"
-                ),
+                _error_page(message=f"Token rejected: {html.escape(str(exc))}"),
                 status_code=400,
             )
         logger.info("OAuth sign-in complete; tokens persisted")
@@ -1092,7 +1076,7 @@ def create_app(
             data = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
+                _error_page(
                     message=f"Uploaded file is not valid JSON: {html.escape(str(exc))}"
                 ),
                 status_code=400,
@@ -1100,7 +1084,7 @@ def create_app(
         installed = data.get("installed") or data.get("web") or {}
         if not installed.get("client_id") or not installed.get("client_secret"):
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
+                _error_page(
                     message=(
                         "client_secret.json missing client_id/client_secret. "
                         "Make sure you downloaded it from a Google Cloud "
@@ -1136,7 +1120,7 @@ def create_app(
         secret_file = storage / "youtube" / "client_secret.json"
         if not secret_file.exists():
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
+                _error_page(
                     message=(
                         "No YouTube <code>client_secret.json</code> on disk. "
                         'Run the <a href="/setup/youtube">setup wizard\'s '
@@ -1150,9 +1134,7 @@ def create_app(
         except ImportError as exc:
             logger.error("YouTube upload module unavailable: %s", exc)
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
-                    message=f"YouTube upload module not available: {exc}"
-                ),
+                _error_page(message=f"YouTube upload module not available: {exc}"),
                 status_code=500,
             )
         # Use the same Host the user is hitting us on for the redirect
@@ -1172,7 +1154,7 @@ def create_app(
         except Exception as exc:
             logger.error("Failed to build YouTube OAuth URL: %s", exc)
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
+                _error_page(
                     message=f"Could not start YouTube OAuth: {html.escape(str(exc))}"
                 ),
                 status_code=500,
@@ -1195,23 +1177,19 @@ def create_app(
         """Receive Google's OAuth redirect, persist the user's token."""
         if error:
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
-                    message=f"Google reported an error: {html.escape(error)}"
-                ),
+                _error_page(message=f"Google reported an error: {html.escape(error)}"),
                 status_code=400,
             )
         if not code or not state:
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
-                    message="Callback missing code or state parameter."
-                ),
+                _error_page(message="Callback missing code or state parameter."),
                 status_code=400,
             )
         _yt_states_gc()
         entry = _yt_oauth_states.pop(state, None)
         if entry is None:
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
+                _error_page(
                     message=(
                         "OAuth state mismatch. The sign-in attempt expired or "
                         "was tampered with — please start over from the "
@@ -1225,9 +1203,7 @@ def create_app(
             from video_grouper.utils.youtube_upload import make_youtube_flow
         except ImportError as exc:
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
-                    message=f"YouTube upload module not available: {exc}"
-                ),
+                _error_page(message=f"YouTube upload module not available: {exc}"),
                 status_code=500,
             )
         try:
@@ -1237,9 +1213,7 @@ def create_app(
         except Exception as exc:
             logger.error("YouTube OAuth callback failed: %s", exc)
             return HTMLResponse(
-                _ERROR_TEMPLATE.format(
-                    message=f"OAuth exchange failed: {html.escape(str(exc))}"
-                ),
+                _error_page(message=f"OAuth exchange failed: {html.escape(str(exc))}"),
                 status_code=400,
             )
         token_path = storage / "youtube" / "token.json"

@@ -2026,3 +2026,55 @@ adopt control. The seam is calibrated by hand from the camera's installed state.
 **Not attempted in this pass:** a fix. Colour gating was necessary and insufficient; discriminating a
 ghost from a step is new work with its own acceptance bar, not a parameter tweak. Shards for
 re-analysis: `F:/archive/duo3_stitch/harvest/report_shards_dense/`.
+
+
+---
+
+## Decision: one design system across Soccer-Cam and Team Tech Tools (2026-08-22)
+
+**Context:** the web UI had four background colours (`#0a0b0f`, `#252525`, `#1c2536`, `#1b1b1b`),
+two near-identical oranges (`#fb923c` accent vs `#f97316`), three font stacks, and a **light-mode
+blue dashboard** linking straight into three dark amber pages. Root cause: every page carried its
+own inline `<style>` block, so there was no mechanism by which consistency could hold.
+
+**Rejected: keep amber as Soccer-Cam's accent, blue as TTT's.** The initial proposal was a family
+where the accent hue distinguished the two products (amber = capture, blue = analysis). Withdrawn
+because amber already reads as *warning*, and the palette proved it: `--accent: #fb923c` sat beside
+`--signal-warn: #fbbf24`, so amber meant two things at once and therefore nothing.
+
+**Decision:** Soccer-Cam ships TTT's dark theme **verbatim** — same colour, type, radius, spacing
+and motion tokens. The products differ in register (TTT a workspace with light+dark; Soccer-Cam a
+dark-locked appliance console), not palette.
+
+**Colour now has three separate jobs**, which is the rule the system hangs on:
+
+| Token | Means | Told apart by |
+|---|---|---|
+| `--color-accent` blue | interactive | — |
+| `--color-record` red | capture in progress | motion — the only pulsing element |
+| `--color-danger` red | failure | static, tinted bg, icon |
+| `--color-warning` amber | a warning, and nothing else | — |
+
+Record and danger share a hue deliberately (tally red is the broadcast convention) and separate by
+motion and form, never by hue alone — also the accessible choice. This fixed a live bug on the TTT
+side: `camera-manager` rendered `recording` as `status-badge--info`, making "this camera is
+recording" the same blue as every link and focus ring.
+
+**Mechanism, not just values:** one stylesheet at `video_grouper/web/static/soccer-cam.css`, served
+by the orchestrator at `/static/` and by the annotation server at `/shared/` — one file, two
+servers, never a copy. Pages are assembled from `video_grouper/web/chrome.py`.
+`tests/web/test_design_system.py` (31 tests, ~4s) enforces it, because the previous state was
+caused by nothing checking.
+
+**Navigation** collapsed from four flat nav items to two destinations (Status, Settings) plus tasks
+launched from context: `/setup/*` is entered automatically while config is incomplete, `/stitch`
+from the cameras it acts on. Ordinal markers are now used only where order is real — the setup
+wizard keeps its step tracker; the settings page lost `§ 01 … § 16`, which implied a procedure that
+does not exist.
+
+**Deliberately preserved:** the seam-calibration page still skips the webfont CDN (a phone at a
+pitch should not wait on it) and now also inlines the stylesheet, so it issues no follow-up request
+at all. Its condensed look rides the token fallback chain — do not trim those fallbacks.
+
+**Exempt from tokens:** canvas stroke colours and categorical label swatches in the annotation
+tools. Those are data-encoding and must stay mutually distinguishable.
