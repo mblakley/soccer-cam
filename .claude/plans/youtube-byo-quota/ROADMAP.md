@@ -222,16 +222,22 @@ Rig: publisher client `soccer-cam-e1-client`, account `flashparent4`, channel
 | U9 | `statistics.videoCount` counts **public videos only** | Reported 0 for a channel holding 251 unlisted videos. Useless for detecting whether a channel is in use |
 | U10 | Very short clips are **unreliable test data** | 30 of 38 two-second clips were tombstoned while the 2-minute control survived. Anything that short plausibly goes down the Shorts pipeline. Use >= 2 min clips for any future test |
 
+| U11 | The duration limit **destroys long uploads on the production path too**, silently | 16-min via `MediaFileUpload(resumable=True)`: `next_chunk()` raised nothing, insert returned id `m9Rc44xume4`, then 0 items through t+240s. Two 2-minute controls on the same channel the same hour both reached `processed` and are alive |
+| U12 | `uploadStatus: uploaded` is a **transient state that lies** | The doomed 16-min video reported `upload=uploaded reject=None privacy=unlisted` at t+10s, then vanished. Presence alone is not proof of success -- only `uploadStatus: processed` is. Both controls reached `processed` within ~20 s |
+
+Duration failure is now n=2 per condition across two independent upload paths
+(multipart and resumable), each with a contemporaneous 2-minute control that
+survived. Treated as established.
+
 ### Not established
 
-- **Whether the 16-minute death was the duration limit.** n=1. The 2-minute
-  control on the same channel survived, but 2-second clips died too (U10), so
-  shortness is a live confound. Re-test pending.
-- **Whether the resumable path also discards silently.** The production path
-  (`MediaFileUpload(resumable=True)`) hit `uploadLimitExceeded` before reaching
-  the duration behaviour. It *does* raise a proper `HttpError` for the account
-  limit, which `youtube_upload.py:548` already handles.
 - **Whether the user is notified** when a video is destroyed.
+- **The exact duration threshold.** Tested 16 min vs 2 min; the 15:00 boundary
+  itself is untested.
+- **How `uploadLimitExceeded` recovers.** Two intervals measured after a
+  38-upload burst: +92 min for the first slot, +202 min for the second. Not a
+  fixed window; possibly an adaptive throttle. Do not model it -- poll, which is
+  what `base_queue_processor.py` already does.
 
 ### Corrections to earlier claims
 
@@ -247,9 +253,12 @@ Rig: publisher client `soccer-cam-e1-client`, account `flashparent4`, channel
 
 1. **Pre-flight `longUploadsStatus`** before any upload over 15 minutes; refuse
    with a pointer to `youtube.com/verify` rather than burning a 90-minute upload.
-2. **Verify by presence, not by response.** Poll `videos.list` until the id
-   appears with `uploadStatus` in `uploaded`/`processed`; treat never-appearing
-   as failure. Checking `rejectionReason` alone does not work (U5).
+2. **Require `uploadStatus: processed`.** Not the insert response (U11), not
+   mere presence, and not `uploaded` -- that state appears ~10 s in on videos
+   that are about to be destroyed (U12). Poll until `processed`, and treat
+   both disappearance and timeout as failure. Checking `rejectionReason` does
+   not work at all: the video object is gone, so no field survives to carry
+   one (U5).
 3. **Handle the no-channel case** (U8) as its own wizard state.
 4. **Fix the wizard's quota text** in `web/setup/router.py`, which still claims
    ~3 games/day per OAuth client.
