@@ -25,12 +25,15 @@ under test.
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -205,10 +208,13 @@ def _harness_source(out_exe: Path) -> str:
     )
 
 
-@pytest.mark.integration
-@pytest.mark.skipif(not _have_makensis(), reason=pytestmark_reason)
-def test_uninstall_removes_everything_it_installed(tmp_path):
-    """The round-trip the manual debugging session needed and did not have."""
+def _build_and_install(tmp_path: Path) -> Path:
+    """Compile the harness and install it into a fresh sandbox.
+
+    Returns the install directory. The sandbox deliberately has no space in
+    its path: NSIS's /D takes the rest of the command line verbatim, so a
+    spaced path cannot be quoted.
+    """
     out_exe = tmp_path / "HarnessSetup.exe"
     harness = NSI.parent / "_pytest_harness.nsi"
     harness.write_text(_harness_source(out_exe), encoding="utf-8")
@@ -217,44 +223,48 @@ def test_uninstall_removes_everything_it_installed(tmp_path):
             [_MAKENSIS, "/V2", str(harness)],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=300,
         )
         assert built.returncode == 0, f"makensis failed:\n{built.stdout}{built.stderr}"
         assert out_exe.is_file(), "installer was not produced"
-
-        # A sandbox with no space in the path: /D takes the rest of the command
-        # line verbatim, so quoting a spaced path does not work.
-        sandbox = Path(tempfile.mkdtemp(prefix="vg-uninst-")) / "app"
-        subprocess.run(
-            f'"{out_exe}" /S /D={sandbox}', shell=True, check=True, timeout=180
-        )
-        assert (sandbox / "uninstall.exe").is_file(), "install did not land"
-
-        # /S alone is silent but NOT synchronous: NSIS copies itself to %TEMP%,
-        # relaunches, and the first process returns immediately -- measured at
-        # 1.06s to return against 3.19s to actually finish. Polling for the
-        # directory to vanish would make this test a race.
-        #
-        # _?=<dir> runs the uninstaller in place and blocks until it is done.
-        # The documented cost is that NSIS cannot delete a running executable,
-        # so uninstall.exe (and therefore $INSTDIR) survive -- which is why the
-        # assertion below excludes it. This is also exactly what the registered
-        # QuietUninstallString passes.
-        subprocess.run(
-            f'"{sandbox / "uninstall.exe"}" /S _?={sandbox}',
-            shell=True,
-            check=True,
-            timeout=180,
-        )
-
-        leftovers = (
-            sorted(p.name for p in sandbox.iterdir() if p.name != "uninstall.exe")
-            if sandbox.exists()
-            else []
-        )
-        assert not leftovers, f"uninstall left {leftovers} in {sandbox}"
     finally:
         harness.unlink(missing_ok=True)
+
+    sandbox = Path(tempfile.mkdtemp(prefix="vg-uninst-")) / "app"
+    subprocess.run(f'"{out_exe}" /S /D={sandbox}', shell=True, check=True, timeout=180)
+    assert (sandbox / "uninstall.exe").is_file(), "install did not land"
+    return sandbox
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _have_makensis(), reason=pytestmark_reason)
+def test_uninstall_removes_everything_it_installed(tmp_path):
+    """The round-trip the manual debugging session needed and did not have."""
+    sandbox = _build_and_install(tmp_path)
+
+    # /S alone is silent but NOT synchronous: NSIS copies itself to %TEMP%,
+    # relaunches, and the first process returns immediately -- measured at
+    # 1.06s to return against 3.19s to actually finish. Polling for the
+    # directory to vanish would make this test a race.
+    #
+    # _?=<dir> runs the uninstaller in place and blocks until it is done. The
+    # documented cost is that NSIS cannot delete a running executable, so
+    # uninstall.exe (and therefore $INSTDIR) survive -- which is why the
+    # assertion below excludes it. This is also exactly what the registered
+    # QuietUninstallString passes.
+    subprocess.run(
+        f'"{sandbox / "uninstall.exe"}" /S _?={sandbox}',
+        shell=True,
+        check=True,
+        timeout=180,
+    )
+
+    leftovers = (
+        sorted(p.name for p in sandbox.iterdir() if p.name != "uninstall.exe")
+        if sandbox.exists()
+        else []
+    )
+    assert not leftovers, f"uninstall left {leftovers} in {sandbox}"
 
 
 def test_a_silent_uninstall_string_is_registered():
@@ -312,6 +322,192 @@ def test_the_real_script_compiles(tmp_path):
         assert out_exe.is_file(), "compile reported success but produced nothing"
     finally:
         probe.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# The Add/Remove Programs path
+# ---------------------------------------------------------------------------
+#
+# ARP does two things: reads UninstallString out of the registry, and runs it
+# with no extra arguments -- so the interactive uninstaller. Silent tooling
+# (winget, Chocolatey, MDM) reads QuietUninstallString instead. Both strings
+# are read back from the registry here rather than composed in the test, so
+# what is exercised is what the installer actually registers.
+
+_ARP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VideoGrouper"
+
+
+def _registered_values(install_dir: Path) -> dict[str, str]:
+    """The ARP values as installer.nsi declares them, resolved for a sandbox."""
+    src = _install()
+    out: dict[str, str] = {}
+    for name in ("UninstallString", "QuietUninstallString"):
+        match = re.search(r'"' + name + r'" "(.*)"\s*$', src, re.M)
+        assert match, f"{name} not found in the installer source"
+        # NSIS: $\" is an escaped quote; $INSTDIR is the install directory.
+        value = match.group(1).replace('$\\"', '"')
+        out[name] = value.replace("$INSTDIR", str(install_dir))
+    return out
+
+
+@contextlib.contextmanager
+def _arp_entry(install_dir: Path):
+    """Register the app in Add/Remove Programs, and always clean up.
+
+    Uses the real key name so this is the path Windows would take. The
+    uninstaller deletes the key itself, so a missing key on teardown is the
+    expected outcome, not a failure.
+    """
+    import winreg
+
+    values = _registered_values(install_dir)
+    with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, _ARP_KEY) as key:
+        for name, value in values.items():
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+        winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "VideoGrouper")
+    try:
+        yield values
+    finally:
+        try:
+            winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, _ARP_KEY)
+        except FileNotFoundError:
+            pass
+
+
+def _read_arp(name: str) -> str:
+    """Read a value the way Add/Remove Programs does."""
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _ARP_KEY) as key:
+        return winreg.QueryValueEx(key, name)[0]
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _have_makensis(), reason=pytestmark_reason)
+def test_quiet_uninstall_string_removes_the_install(tmp_path):
+    """Run QuietUninstallString exactly as winget or MDM tooling would."""
+    sandbox = _build_and_install(tmp_path)
+    with _arp_entry(sandbox):
+        command = _read_arp("QuietUninstallString")
+        started = time.perf_counter()
+        done = subprocess.run(command, shell=True, timeout=180)
+        elapsed = time.perf_counter() - started
+
+    assert done.returncode == 0, f"quiet uninstall failed: rc={done.returncode}"
+    leftovers = (
+        sorted(p.name for p in sandbox.iterdir() if p.name != "uninstall.exe")
+        if sandbox.exists()
+        else []
+    )
+    # _?= blocks, so the work is finished when the call returns -- no polling.
+    assert not leftovers, f"quiet uninstall left {leftovers}"
+    assert elapsed < 60, (
+        "slow enough to suggest it was waiting on a person -- "
+        "QuietUninstallString must not open the interactive uninstaller"
+    )
+
+
+# Driving the GUI happens in a subprocess. pywinauto's win32 backend goes
+# through comtypes, which needs COM in a single-threaded apartment; inside
+# pytest the process is already in MTA and connect() dies with "Error loading
+# type library/DLL". A fresh interpreter gets a clean apartment, and the
+# uninstaller is a separate process anyway.
+_GUI_DRIVER = """
+import subprocess, sys, time
+from pathlib import Path
+
+command, sandbox = sys.argv[1], Path(sys.argv[2])
+
+from pywinauto import Application
+
+from pywinauto import Desktop
+
+def handles():
+    out = set()
+    try:
+        for w in Desktop(backend="win32").windows():
+            try:
+                if "Uninstall" in w.window_text():
+                    out.add(w.handle)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+# Snapshot first, then launch, then wait for a window that was not already
+# there. Matching on the title alone attaches to a leftover from an earlier
+# test and clicks its buttons while the real one sits waiting.
+before = handles()
+subprocess.Popen(command, shell=True)
+
+target = None
+for _ in range(60):
+    new = handles() - before
+    if new:
+        target = new.pop()
+        break
+    time.sleep(0.5)
+if target is None:
+    print("no new uninstaller window appeared")
+    raise SystemExit(2)
+app = Application(backend="win32").connect(handle=target)
+
+# MUI_UNPAGE_CONFIRM then MUI_UNPAGE_INSTFILES: Uninstall, then Close.
+for label in ("&Uninstall", "&Close", "&Finish"):
+    try:
+        window = app.window(handle=target)
+        button = window.child_window(title=label, class_name="Button")
+        if button.exists() and button.is_enabled():
+            button.click()
+            time.sleep(1.5)
+    except Exception:
+        continue
+
+for _ in range(40):
+    if not sandbox.exists() or not any(
+        p.name != "uninstall.exe" for p in sandbox.iterdir()
+    ):
+        raise SystemExit(0)
+    time.sleep(0.5)
+raise SystemExit(3)
+"""
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _have_makensis(), reason=pytestmark_reason)
+def test_add_remove_programs_uninstall_completes(tmp_path):
+    """Drive the interactive uninstaller the way clicking Uninstall does.
+
+    UninstallString carries no arguments, so this is the GUI path -- the one a
+    person actually takes, and the one no other test covers.
+    """
+    # Deliberately not importorskip: importing pywinauto in *this* process
+    # loads comtypes, which fails under pytest's COM apartment. find_spec
+    # checks availability without executing the module; the driver subprocess
+    # does the importing.
+    if importlib.util.find_spec("pywinauto") is None:
+        pytest.skip("pywinauto not installed")
+
+    sandbox = _build_and_install(tmp_path)
+    with _arp_entry(sandbox):
+        command = _read_arp("UninstallString")
+        driver = subprocess.run(
+            [sys.executable, "-c", _GUI_DRIVER, command, str(sandbox)],
+            capture_output=True,
+            text=True,
+            timeout=240,
+        )
+
+    assert driver.returncode == 0, (
+        f"GUI uninstall failed (rc={driver.returncode}): {driver.stdout}{driver.stderr}"
+    )
+    leftovers = (
+        sorted(p.name for p in sandbox.iterdir() if p.name != "uninstall.exe")
+        if sandbox.exists()
+        else []
+    )
+    assert not leftovers, f"the GUI uninstall left {leftovers}"
 
 
 if sys.platform != "win32":  # pragma: no cover - the installer is Windows-only
