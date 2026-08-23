@@ -30,6 +30,7 @@ from video_grouper.utils.config import (
     TeamSnapConfig,
     TTTConfig,
     YouTubeConfig,
+    load_config,
     save_config,
 )
 from video_grouper.web import chrome
@@ -1304,7 +1305,22 @@ def build_router(config_path: Path) -> APIRouter:
                 detail="Wizard state missing or incomplete; restart the wizard.",
             )
 
-        config = _build_config(state)
+        # Merge into whatever is already on disk. Re-running the wizard on a
+        # configured install must not reset the integrations it never asks
+        # about; a config that cannot be read is treated as absent rather than
+        # blocking the user out of setup.
+        existing = None
+        if config_path.exists():
+            try:
+                existing = load_config(config_path)
+            except Exception as exc:
+                logger.warning(
+                    "SETUP: could not read %s (%s); writing a fresh config.",
+                    config_path,
+                    exc,
+                )
+
+        config = _build_config(state, existing)
         try:
             save_config(config, config_path)
         except OSError as exc:
@@ -1323,32 +1339,52 @@ def build_router(config_path: Path) -> APIRouter:
     return router
 
 
-def _build_config(state) -> Config:
-    """Materialize wizard state into a complete Config with safe defaults."""
-    # YOUTUBE.enabled tracks whether the user completed the OAuth flow
-    # (token.json exists). Skipping the YouTube wizard step leaves it
-    # disabled; the user can enable it later from the dashboard.
-    yt_token = Path(state.storage_path) / "youtube" / "token.json"
-    youtube_cfg = YouTubeConfig(enabled=yt_token.exists())
-    # Seed a starting [PIPELINE] from the homegrown preset so a fresh install
-    # has a real, hand-editable pipeline scaffold (stitch -> detect -> track ->
-    # render) rather than a blank section. It's left DISABLED: the detect step
-    # needs a model source the wizard doesn't collect (TTT login resolves a
-    # model_key, or the user points model_path at a local .onnx), so the user
-    # finishes wiring it up on /config before flipping enabled = true. We keep
-    # onboarding minimal here — no visual pipeline editor.
-    pipeline_cfg = apply_preset("homegrown", enabled=False)
-    return Config.model_validate(
-        {
-            "cameras": [
-                CameraConfig(
-                    name=state.camera_name,
-                    type=state.camera_type,
-                    device_ip=state.camera_ip,
-                    username=state.camera_username,
-                    password=state.camera_password,
-                ).model_dump()
-            ],
+def _upsert_camera(cameras: list[dict], state) -> list[dict]:
+    """Return ``cameras`` with the wizard's camera added or updated in place.
+
+    Matched on name, which is what keys the ``[CAMERA.<name>]`` section. An
+    install with a second camera configured by hand keeps it; re-running the
+    wizard for "field" updates "field" rather than replacing the list.
+    """
+    entry = CameraConfig(
+        name=state.camera_name,
+        type=state.camera_type,
+        device_ip=state.camera_ip,
+        username=state.camera_username,
+        password=state.camera_password,
+    ).model_dump()
+
+    merged = [dict(c) for c in cameras]
+    for existing in merged:
+        if str(existing.get("name", "")).lower() == state.camera_name.lower():
+            existing.update(entry)
+            return merged
+    merged.append(entry)
+    return merged
+
+
+def _build_config(state, existing: Config | None = None) -> Config:
+    """Fold the wizard's answers into ``existing``, or into defaults.
+
+    The wizard asks for six things: a storage path and one camera. Everything
+    else in config.ini -- NTFY, TeamSnap, PlayMetrics, TTT, AutoCam, cloud
+    sync, the pipeline, YouTube playlists -- it never mentions, so re-running
+    it must not reset them. Before this merged, finishing the wizard on a
+    configured install rebuilt every section from defaults and silently
+    discarded the lot.
+
+    Only these are written:
+      * ``STORAGE.path``            -- not the section, so min_free_gb survives
+      * ``cameras``                 -- upserted by name, not replaced
+      * ``YOUTUBE.enabled``         -- not the section, so playlists survive
+      * ``SETUP.onboarding_completed``
+      * ``PIPELINE``                -- seeded only when there is not one yet
+    """
+    if existing is not None:
+        data = existing.model_dump(by_alias=True)
+    else:
+        data = {
+            "cameras": [],
             "STORAGE": StorageConfig(path=state.storage_path).model_dump(),
             "RECORDING": RecordingConfig().model_dump(),
             "PROCESSING": ProcessingConfig().model_dump(),
@@ -1357,16 +1393,46 @@ def _build_config(state) -> Config:
             "TEAMSNAP": TeamSnapConfig().model_dump(),
             "PLAYMETRICS": PlayMetricsConfig().model_dump(),
             "NTFY": NtfyConfig().model_dump(),
-            "YOUTUBE": youtube_cfg.model_dump(),
+            "YOUTUBE": YouTubeConfig().model_dump(),
             "AUTOCAM": AutocamConfig().model_dump(),
             "CLOUD_SYNC": CloudSyncConfig().model_dump(),
             "TTT": TTTConfig().model_dump(),
-            "SETUP": SetupConfig(onboarding_completed=True).model_dump(),
-            "PIPELINE": pipeline_cfg.model_dump(),
-        },
-        by_alias=True,
-        by_name=True,
-    )
+            "SETUP": SetupConfig().model_dump(),
+            "PIPELINE": {},
+        }
+
+    # Seed a starting [PIPELINE] from the homegrown preset so a fresh install
+    # has a real, hand-editable scaffold (stitch -> detect -> track -> render)
+    # rather than a blank section. Left DISABLED: the detect step needs a model
+    # source the wizard doesn't collect (TTT login resolves a model_key, or the
+    # user points model_path at a local .onnx), so the user finishes wiring it
+    # up on /config before flipping enabled = true.
+    #
+    # Only when there isn't one already -- a pipeline the user has since wired
+    # up is exactly the kind of work re-running setup must not throw away.
+    if not (data.get("PIPELINE") or {}).get("steps"):
+        data["PIPELINE"] = apply_preset("homegrown", enabled=False).model_dump()
+
+    # Storage: the path only. Replacing the section would reset min_free_gb.
+    storage = dict(data.get("STORAGE") or {})
+    storage["path"] = state.storage_path
+    data["STORAGE"] = storage
+
+    # YOUTUBE.enabled tracks whether the user completed the OAuth flow
+    # (token.json exists). Skipping the YouTube step leaves it disabled. Only
+    # the flag: privacy_status, the playlists and playlist_map are the user's.
+    yt_token = Path(state.storage_path) / "youtube" / "token.json"
+    youtube = dict(data.get("YOUTUBE") or {})
+    youtube["enabled"] = yt_token.exists()
+    data["YOUTUBE"] = youtube
+
+    data["cameras"] = _upsert_camera(data.get("cameras") or [], state)
+
+    setup = dict(data.get("SETUP") or {})
+    setup["onboarding_completed"] = True
+    data["SETUP"] = setup
+
+    return Config.model_validate(data, by_alias=True, by_name=True)
 
 
 # Optional helper used by the dashboard to detect "no config yet" and
