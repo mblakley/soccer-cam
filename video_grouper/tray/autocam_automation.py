@@ -120,6 +120,36 @@ _NO_WINDOW = 0x08000000
 # authoritative end-of-run signal.
 _SHUTDOWN_MARKERS = ("framereader_close", "finished processing")
 
+# States AutoCam will never leave on its own: it is refusing to process until
+# a human does something to the installation. Polling through these is what
+# turned "AutoCam needs upgrading" into a five-minute wait that then reported
+# "did not start processing -- a reboot may be required", which is both wrong
+# and unactionable. Observed verbatim on 3.1.1:
+#
+#     Autocam status: 'Please update Autocam or contact support.'
+#
+# Kept deliberately narrow. A substring that also appears in normal operation
+# would abort healthy renders, so this matches only text that is unambiguously
+# the app declining to run.
+_NEEDS_ATTENTION_MARKERS = (
+    "please update autocam",
+    "contact support",
+    "license has expired",
+    "licence has expired",
+    "invalid license",
+    "invalid licence",
+)
+
+
+class AutocamNeedsAttentionError(RuntimeError):
+    """AutoCam is refusing to process until the installation is seen to.
+
+    Raised rather than returned as a plain failure so the reason survives all
+    the way to the step's log and the group's recorded status. Every game will
+    fail identically until it is resolved, so the message names the vendor's
+    own words instead of a generic timeout.
+    """
+
 
 # Output-validation thresholds. AutoCam 3.x hardcodes ~8 Mbps output;
 # a healthy completed render is roughly input_duration_seconds * 1 MB/s.
@@ -809,6 +839,17 @@ def _wait_for_completion_and_cleanup(
                 notification_text = raw_notification.lower()
                 logger.info("Autocam status: %r", raw_notification)
 
+                # Checked before anything else: waiting cannot clear this, and
+                # every subsequent game will hit it too. Fail immediately with
+                # the vendor's own words rather than spending the startup
+                # timeout to report something misleading.
+                if any(m in notification_text for m in _NEEDS_ATTENTION_MARKERS):
+                    raise AutocamNeedsAttentionError(
+                        f"AutoCam will not process until the installation is "
+                        f"seen to -- it reports: {raw_notification!r}. "
+                        f"Every game will fail this way until it is resolved."
+                    )
+
                 # Shutdown-marker fast path: when AutoCam's notification
                 # contains a shutdown marker (e.g. "framereader_close"),
                 # the render pipeline has finished writing the output
@@ -897,6 +938,12 @@ def _wait_for_completion_and_cleanup(
                     if not processing_started:
                         processing_started = True
                         logger.info("Processing started: %r", raw_notification)
+            except AutocamNeedsAttentionError:
+                # Must escape this handler. The catch-all below exists so a
+                # transient UI-read glitch doesn't kill a long render, but
+                # this is the opposite: a permanent state that polling will
+                # never resolve.
+                raise
             except Exception as e:
                 logger.warning(f"Error while checking for success message: {e}")
 

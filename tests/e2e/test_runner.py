@@ -88,9 +88,18 @@ class E2ETestRunner:
         self.test_data_path = self.project_root / "tests/e2e/test_data"
         self.test_logs_path = self.project_root / "tests/e2e/test_logs"
 
-        # Log file paths for monitoring
+        # Log file paths for monitoring.
+        #
+        # [LOGGING] log_dir is a RELATIVE path, and the app resolves it against
+        # its storage path (it chdirs there on startup so relative paths work
+        # from a Windows service). Resolving it against project_root instead
+        # pointed this at a file that never existed, so the monitor read "" for
+        # the application log on every poll and reported every stage PENDING
+        # while the pipeline was in fact completing.
         self.video_grouper_log_path = (
-            self.test_logs_path / f"{self.config.logging.app_name}.log"
+            self.test_data_path
+            / self.config.logging.log_dir
+            / f"{self.config.logging.app_name}.log"
         )
         self.tray_log_path = self.test_logs_path / "tray_app.log"
 
@@ -752,6 +761,11 @@ class E2ETestRunner:
             # Set up environment variables for mock services
             env = os.environ.copy()
             # Environment variables are already set by setup_e2e_environment, just copy them
+            # Unbuffered: stdout redirected to a file is block-buffered, so the
+            # child's output only lands when a 8KB block fills or it exits. The
+            # monitor polls that file while the run is in flight, so buffered
+            # output is invisible to it -- and to anyone tailing a stuck run.
+            env["PYTHONUNBUFFERED"] = "1"
 
             # Start the process with logging to file
             with open(subprocess_log_path, "w") as log_file:
