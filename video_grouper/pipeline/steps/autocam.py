@@ -78,7 +78,20 @@ class AutocamStep(PipelineStep[AutocamStepConfig]):
                 str(ctx.group_dir),
                 self.config.license_key,
             )
-        except Exception:
+        except Exception as exc:
+            # AutoCam refusing to run is an installation problem, not a problem
+            # with this game: every game will fail the same way until someone
+            # updates it. Say so in one readable line, rather than burying the
+            # vendor's message in a traceback that reads like a per-game fault.
+            #
+            # Matched by name, not isinstance: the class lives in the tray
+            # driver, which imports pywinauto and win32gui at module scope, so
+            # importing it here would break every non-desktop install. The
+            # driver is imported lazily inside _invoke_autocam for the same
+            # reason.
+            if type(exc).__name__ == "AutocamNeedsAttentionError":
+                logger.error("autocam: %s", exc)
+                return False
             logger.exception(
                 "autocam: failed to process %s -> %s", input_path, output_path
             )
