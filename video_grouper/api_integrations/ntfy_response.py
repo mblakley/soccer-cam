@@ -395,7 +395,10 @@ def create_ntfy_response_service(config) -> NtfyResponseService:
     Returns:
         NtfyResponseService instance
     """
-    topic = getattr(config, "topic", "video_grouper_mblakley43431")
+    # The fallback must never be a topic a human subscribes to. This defaulted
+    # to a maintainer's personal topic, so any caller that reached the fallback
+    # published notifications to a real phone.
+    topic = getattr(config, "topic", None) or "video-grouper-e2e-suite-do-not-subscribe"
     server_url = getattr(config, "server_url", "https://ntfy.sh")
     auto_respond = getattr(config, "auto_respond", False)
 
