@@ -186,6 +186,27 @@ section.cfg {
 }
 .toggle:focus-within { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
+/* A section whose `enabled` toggle is off hides the rest of its controls --
+   there is nothing to decide until it is switched on. Driven by :has(), the
+   same mechanism the toggle already uses for its own highlight, so it
+   responds to the click rather than waiting for a save-and-reload.
+
+   Hidden, not removed: display:none inputs still post, so switching a
+   section off does not quietly discard what was configured in it. */
+.cfg-off-note {
+  display: none;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+section.cfg:has(.cfg-field--gate input[type="checkbox"]:not(:checked)) .cfg-gated {
+  display: none;
+}
+section.cfg:has(.cfg-field--gate input[type="checkbox"]:not(:checked))
+  .cfg-off-note {
+  display: block;
+}
+
 /* Sticky save bar. */
 .savebar {
   position: sticky;
@@ -285,11 +306,13 @@ def _render_field(section_alias: str, field_name: str, field_info, value: Any) -
 
     if input_type == "checkbox":
         is_on = bool(value)
+        # `enabled` gates the rest of its section -- see _render_section.
+        gate = " cfg-field--gate" if field_name == "enabled" else ""
         # Visual highlight is driven by `.toggle:has(input:checked)` in CSS,
         # so it stays accurate when the user clicks; we don't need a render-
         # time class. Hidden input ensures unchecked posts a value at all.
         return (
-            f'<div class="cfg-field">'
+            f'<div class="cfg-field{gate}">'
             f'<label class="cfg-field-label" for="{name}">{label}</label>'
             f'<div class="cfg-field-control">'
             f'<label class="toggle">'
@@ -323,21 +346,51 @@ def _render_field(section_alias: str, field_name: str, field_info, value: Any) -
 
 
 def _render_section(section_alias: str, model: BaseModel) -> str:
+    """Render one config section.
+
+    Where a section has an ``enabled`` field, that toggle is hoisted out and
+    the rest of the section is wrapped in ``.cfg-gated``, which CSS collapses
+    while the toggle is off. Nine sections work this way; TTT alone hides
+    twenty fields that mean nothing until it is switched on.
+
+    The gated fields stay in the DOM rather than being dropped at render time,
+    for two reasons: the section shows and hides the instant the toggle moves,
+    with no round trip; and ``display: none`` inputs still post, so turning a
+    section off never silently discards what was configured in it.
+    """
+    gate = ""
     rows: list[str] = []
     for field_name, field_info in type(model).model_fields.items():
         if not _is_scalar_field(field_info.annotation):
             continue  # Lists / dicts / nested models out of scope for v1
         value = getattr(model, field_name)
-        rows.append(_render_field(section_alias, field_name, field_info, value))
-    if not rows:
+        rendered = _render_field(section_alias, field_name, field_info, value)
+        if field_name == "enabled":
+            gate = rendered
+        else:
+            rows.append(rendered)
+    if not gate and not rows:
         return ""
+
     anchor = _section_anchor(section_alias)
     title = html.escape(section_alias)
+    body = "\n".join(rows)
+    if gate and rows:
+        body = (
+            f"{gate}"
+            f'<p class="cfg-off-note">Turn this on to configure it.</p>'
+            f'<div class="cfg-gated">{body}</div>'
+        )
+    elif gate:
+        # Only the toggle is editable here -- the section's other fields are
+        # lists or dicts, which this editor does not render. Nothing to gate,
+        # so do not promise settings that are not there.
+        body = gate
     return (
         f'<section class="cfg" id="{anchor}">'
         f'<header class="sec-head">'
         f'<h2 class="sec-title">{title}</h2>'
-        f"</header>" + "\n".join(rows) + "</section>"
+        f"</header>" + body + "</section>"
     )
 
 
