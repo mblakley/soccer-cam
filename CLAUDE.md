@@ -71,6 +71,15 @@ The game registry (`F:/training_data/game_registry.json`) is the source of truth
 4. **Prefer editing existing files** over creating new ones. A new function in an existing module beats a new module.
 5. **Clean up after yourself.** If a file was scaffolding or is superseded, delete it in the same session.
 
+### Web UI
+
+The orchestrator's pages are assembled from `video_grouper/web/chrome.py` and
+styled by the single shared stylesheet `video_grouper/web/static/soccer-cam.css`
+(also served to the annotation tools at `/shared/soccer-cam.css`). Never add a
+page-level `<style>` block with its own tokens — see `docs/UI-DESIGN.md`, and
+run `uv run pytest tests/web/test_design_system.py` before committing UI work.
+Preview every page with `uv run python -m video_grouper.web.preview`.
+
 ### Project Structure (training/)
 
 ```
@@ -221,9 +230,15 @@ powershell -ExecutionPolicy Bypass -File training\worker\deploy_worker.ps1 -Mach
 
 Package manager: `uv` (not pip)
 
+See `docs/DEVELOPMENT.md` for setup, test timings, and the UI preview command.
+
 ```bash
-# Install all dependencies (dev + GUI + service)
-uv sync --extra dev --extra tray --extra service
+# Everything needed to lint, format and test. No flags required.
+uv sync
+
+# Extras, only if you need them: tray = PyQt6, service = pywin32,
+# dev = PyInstaller/Cython for building installers.
+uv sync --extra tray --extra service
 
 # Run the main application
 uv run python run.py

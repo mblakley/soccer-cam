@@ -78,7 +78,7 @@ def client(tmp_path, config_path):
 
 def test_get_config_renders_form_with_existing_values(client):
     body = client.get("/config").text
-    assert "<title>Soccer-Cam · Configuration</title>" in body
+    assert "<title>Soccer-Cam · Settings</title>" in body
     # Several known fields should appear with their current values.
     assert 'name="STORAGE.path"' in body
     assert 'value="/shared_data"' in body
@@ -179,10 +179,11 @@ def test_post_config_invalid_returns_422(client, config_path):
     )
     # Either Python coercion or Pydantic validation rejects it.
     assert resp.status_code in (422, 500)
-    # Validation flash must include both classes — `flash` provides the
-    # padding/border/font, `flash-err` provides the red signal color.
+    # The validation banner must carry both classes — `banner` provides the
+    # padding/border/type, `banner--bad` the danger signal. Both come from the
+    # shared stylesheet; the page must not restyle them locally.
     if resp.status_code == 422:
-        assert 'class="flash flash-err"' in resp.text
+        assert 'class="banner banner--bad"' in resp.text
 
 
 def test_get_config_rail_nav_anchors_match_sections(client):
@@ -326,3 +327,62 @@ def test_autocam_license_key_is_editable_and_masked(client, config_path):
         follow_redirects=False,
     )
     assert load_config(config_path).autocam.license_key == "SECRET-KEY-1"
+
+
+class TestSectionGating:
+    """A section that is switched off should not show controls for itself."""
+
+    def test_gated_sections_wrap_their_other_fields(self, client):
+        body = client.get("/config").text
+        # Every section with an `enabled` toggle marks it, so CSS can find it.
+        assert body.count("cfg-field--gate") >= 9
+
+    def test_the_toggle_is_outside_the_gated_group(self, client):
+        """Gating the toggle inside its own group would make it unreachable."""
+        import re
+
+        body = client.get("/config").text
+        for section in re.findall(
+            r'<section class="cfg" id="[^"]+">(.*?)</section>', body, re.S
+        ):
+            if "cfg-field--gate" not in section or "cfg-gated" not in section:
+                continue
+            assert section.index("cfg-field--gate") < section.index("cfg-gated")
+
+    def test_gated_fields_are_hidden_not_dropped(self, client):
+        """They must still post, or switching a section off wipes its config."""
+        body = client.get("/config").text
+        # TTT is off by default and has many fields; they must still be in the
+        # document so the browser submits them.
+        assert 'name="TTT.supabase_url"' in body
+        assert 'name="TTT.api_base_url"' in body
+
+    def test_a_section_with_nothing_to_gate_promises_nothing(self, client):
+        """TEAMSNAP's remaining fields are dicts, which this editor skips."""
+        import re
+
+        body = client.get("/config").text
+        teamsnap = re.search(
+            r'<section class="cfg" id="sec-teamsnap">(.*?)</section>', body, re.S
+        )
+        assert teamsnap is not None
+        assert "cfg-off-note" not in teamsnap.group(1)
+
+    def test_round_trip_preserves_a_disabled_sections_values(self, client):
+        """Posting the form with a section off must not blank its settings."""
+        get_body = client.get("/config").text
+        assert 'name="TTT.api_base_url"' in get_body
+
+        resp = client.post(
+            "/config",
+            data={
+                "STORAGE.path": "/shared_data",
+                "TTT.enabled": "false",
+                "TTT.api_base_url": "https://example.invalid",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code in (303, 422, 500)
+        if resp.status_code == 303:
+            after = client.get("/config").text
+            assert "https://example.invalid" in after

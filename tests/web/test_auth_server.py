@@ -165,10 +165,10 @@ def test_dashboard_includes_pipeline_status_from_provider(storage):
     # Queues
     assert "download" in body and ">2<" in body
     assert "video" in body and ">0<" in body
-    # Cameras
+    # Cameras. Status labels are sentence case, matching the rest of the UI.
     assert "default" in body and "192.168.1.100" in body
-    assert "connected" in body
-    assert "backyard" in body and "not connected" in body
+    assert ">Connected<" in body or "Connected" in body
+    assert "backyard" in body and "Not connected" in body
 
 
 def test_dashboard_pipeline_section_when_no_status_provider(client):

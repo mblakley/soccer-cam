@@ -2026,3 +2026,94 @@ adopt control. The seam is calibrated by hand from the camera's installed state.
 **Not attempted in this pass:** a fix. Colour gating was necessary and insufficient; discriminating a
 ghost from a step is new work with its own acceptance bar, not a parameter tweak. Shards for
 re-analysis: `F:/archive/duo3_stitch/harvest/report_shards_dense/`.
+
+
+---
+
+## Decision: one design system across Soccer-Cam and Team Tech Tools (2026-08-22)
+
+**Context:** the web UI had four background colours (`#0a0b0f`, `#252525`, `#1c2536`, `#1b1b1b`),
+two near-identical oranges (`#fb923c` accent vs `#f97316`), three font stacks, and a **light-mode
+blue dashboard** linking straight into three dark amber pages. Root cause: every page carried its
+own inline `<style>` block, so there was no mechanism by which consistency could hold.
+
+**Rejected: keep amber as Soccer-Cam's accent, blue as TTT's.** The initial proposal was a family
+where the accent hue distinguished the two products (amber = capture, blue = analysis). Withdrawn
+because amber already reads as *warning*, and the palette proved it: `--accent: #fb923c` sat beside
+`--signal-warn: #fbbf24`, so amber meant two things at once and therefore nothing.
+
+**Decision:** Soccer-Cam ships TTT's dark theme **verbatim** — same colour, type, radius, spacing
+and motion tokens. The products differ in register (TTT a workspace with light+dark; Soccer-Cam a
+dark-locked appliance console), not palette.
+
+**Colour now has three separate jobs**, which is the rule the system hangs on:
+
+| Token | Means | Told apart by |
+|---|---|---|
+| `--color-accent` blue | interactive | — |
+| `--color-record` red | capture in progress | motion — the only pulsing element |
+| `--color-danger` red | failure | static, tinted bg, icon |
+| `--color-warning` amber | a warning, and nothing else | — |
+
+Record and danger share a hue deliberately (tally red is the broadcast convention) and separate by
+motion and form, never by hue alone — also the accessible choice. This fixed a live bug on the TTT
+side: `camera-manager` rendered `recording` as `status-badge--info`, making "this camera is
+recording" the same blue as every link and focus ring.
+
+**Mechanism, not just values:** one stylesheet at `video_grouper/web/static/soccer-cam.css`, served
+by the orchestrator at `/static/` and by the annotation server at `/shared/` — one file, two
+servers, never a copy. Pages are assembled from `video_grouper/web/chrome.py`.
+`tests/web/test_design_system.py` (31 tests, ~4s) enforces it, because the previous state was
+caused by nothing checking.
+
+**Navigation** collapsed from four flat nav items to two destinations (Status, Settings) plus tasks
+launched from context: `/setup/*` is entered automatically while config is incomplete, `/stitch`
+from the cameras it acts on. Ordinal markers are now used only where order is real — the setup
+wizard keeps its step tracker; the settings page lost `§ 01 … § 16`, which implied a procedure that
+does not exist.
+
+**Deliberately preserved:** the seam-calibration page still skips the webfont CDN (a phone at a
+pitch should not wait on it) and now also inlines the stylesheet, so it issues no follow-up request
+at all. Its condensed look rides the token fallback chain — do not trim those fallbacks.
+
+**Exempt from tokens:** canvas stroke colours and categorical label swatches in the annotation
+tools. Those are data-encoding and must stay mutually distinguishable.
+
+
+---
+
+## Decision: camera discovery cannot rely on ONVIF alone (2026-08-22)
+
+**Finding:** Reolink ships with ONVIF **disabled**. Verified on the bench unit, a Reolink Duo 3
+PoE at `192.168.86.24` — `GetNetPort` reports `"onvifEnable": 0`, and `GET /onvif/device_service`
+returns 502. A WS-Discovery probe therefore finds nothing, on any interface. Confirmed it was not
+an interface-selection problem by re-probing with `IP_MULTICAST_IF` bound to each of this machine's
+five sweepable networks in turn: zero replies from all of them.
+
+This matters because the setup wizard's "Scan for cameras" would have found nothing for most
+Reolink owners while appearing to work.
+
+**Decision:** discover by two methods at once and merge (`discovery.discover_cameras`):
+
+1. **ONVIF WS-Discovery** — the only method that yields a model name without credentials, but only
+   when the owner has turned ONVIF on. Kept for that reason.
+2. **LAN sweep + unauthenticated fingerprint** — TCP-knock every host on the attached /24s, then
+   ask whoever answers on port 80 what it is. Both vendors identify themselves in how they *reject*
+   an unauthenticated request:
+   - Reolink: `POST /cgi-bin/api.cgi?cmd=GetDevInfo&token=null` → 200 with `rspCode: -6`
+     ("please login first")
+   - Dahua: `GET /cgi-bin/magicBox.cgi?action=getSystemInfo` → 401 with a Digest challenge
+
+   No credentials, no port-scanning of anything but port 80, and it works with ONVIF off.
+
+**Sizing:** 256 concurrent connects at a 0.5s timeout. This machine has five sweepable networks
+(~1270 addresses) because of WSL, Hyper-V and Tailscale adapters; the sweep completes in ~3.2s,
+inside the ONVIF probe's own 3s, and the two run concurrently. Networks wider than /22 are refused
+outright — a /16 is 65k hosts, which is not a scan.
+
+**Also found:** the camera had moved from the `192.168.86.200` recorded in `config.ini` to
+`192.168.86.24` via DHCP. A stale address in config is precisely what discovery is for; this is an
+argument for offering a re-scan from Settings later, not only during onboarding.
+
+**Not done:** no attempt at Reolink's or Dahua's proprietary UDP discovery broadcasts. The HTTP
+fingerprint is vendor-documented behaviour and needed no reverse engineering.

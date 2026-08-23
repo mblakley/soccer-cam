@@ -5,23 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Ball Verification</title>
+<link rel="stylesheet" href="/shared/soccer-cam.css">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
-  --green: #22c55e; --red: #ef4444; --blue: #3b82f6;
-  --yellow: #eab308; --bg: #111; --surface: #1a1a1a; --text: #f0f0f0;
-}
 html, body {
   font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  background: var(--bg); color: var(--text);
+  background: var(--color-bg-primary); color: var(--color-text-primary);
   height: 100%; overflow: hidden; touch-action: manipulation;
 }
 .header {
   display: flex; align-items: center; padding: 12px 16px;
-  background: var(--surface); border-bottom: 1px solid #333;
+  background: var(--color-bg-card); border-bottom: 1px solid var(--color-border);
 }
 .header h1 { font-size: 16px; font-weight: 600; flex: 1; }
-.stats { font-size: 12px; color: #888; }
+.stats { font-size: 12px; color: var(--color-text-secondary); }
 .image-container {
   flex: 1; display: flex; align-items: center; justify-content: center;
   padding: 8px; overflow: hidden; position: relative;
@@ -31,13 +28,13 @@ html, body {
   touch-action: pinch-zoom;
 }
 .info-bar {
-  padding: 8px 16px; background: var(--surface);
-  font-size: 12px; color: #888; text-align: center;
+  padding: 8px 16px; background: var(--color-bg-card);
+  font-size: 12px; color: var(--color-text-secondary); text-align: center;
 }
 .buttons {
   display: flex; gap: 12px; padding: 16px;
   padding-bottom: max(16px, env(safe-area-inset-bottom));
-  background: var(--surface); border-top: 1px solid #333;
+  background: var(--color-bg-card); border-top: 1px solid var(--color-border);
 }
 .btn {
   flex: 1; padding: 16px; border: none; border-radius: 12px;
@@ -45,16 +42,16 @@ html, body {
   transition: transform 0.1s;
 }
 .btn:active { transform: scale(0.95); }
-.btn-ball { background: var(--green); color: #000; }
-.btn-not { background: var(--red); color: #fff; }
-.btn-unclear { background: var(--yellow); color: #000; }
+.btn-ball { background: var(--color-success); color: #000; }
+.btn-not { background: var(--color-danger); color: #fff; }
+.btn-unclear { background: var(--color-warning); color: #000; }
 .btn-toggle {
   position: absolute; top: 8px; right: 8px;
-  background: rgba(0,0,0,0.7); color: #fff; border: 1px solid #555;
+  background: rgba(0,0,0,0.7); color: #fff; border: 1px solid var(--color-border);
   padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
 }
 .container { display: flex; flex-direction: column; height: 100%; }
-.loading { text-align: center; padding: 40px; color: #888; }
+.loading { text-align: center; padding: 40px; color: var(--color-text-secondary); }
 </style>
 </head>
 <body>
@@ -70,12 +67,12 @@ html, body {
   <div class="info-bar" id="infoBar">—</div>
   <div style="padding: 4px 16px;">
     <input type="text" id="notes" placeholder="Notes (optional)"
-      style="width:100%; padding:8px 12px; background:#222; border:1px solid #444;
+      style="width:100%; padding:8px 12px; background:var(--color-border-light); border:1px solid var(--color-border);
       border-radius:8px; color:#fff; font-size:14px;">
   </div>
   <div class="buttons">
     <button class="btn btn-ball" onclick="submit('ball')">⚽ Ball</button>
-    <button class="btn" style="background:#f97316;color:#000" onclick="submit('ball_out')">⚽ Out</button>
+    <button class="btn" style="background:var(--color-accent);color:#000" onclick="submit('ball_out')">⚽ Out</button>
     <button class="btn btn-unclear" onclick="submit('unclear')">❓</button>
     <button class="btn btn-not" onclick="submit('not_ball')">✖ Not</button>
   </div>

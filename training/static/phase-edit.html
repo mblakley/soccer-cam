@@ -4,20 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Phase editor (game.json)</title>
+<link rel="stylesheet" href="/shared/soccer-cam.css">
 <style>
-  body { margin: 0; font-family: sans-serif; background: #111; color: #eee; display: flex; height: 100vh; }
-  #side { width: 320px; overflow-y: auto; border-right: 1px solid #333; padding: 8px; font-size: 13px; }
-  #side .g { padding: 6px; cursor: pointer; border-bottom: 1px solid #222; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
-  #side .g:hover { background: #1c2536; } #side .g.sel { background: #1f3a2a; }
+  body { margin: 0; font-family: sans-serif; background: var(--color-bg-primary); color: var(--color-text-primary); display: flex; height: 100vh; }
+  #side { width: 320px; overflow-y: auto; border-right: 1px solid var(--color-border); padding: 8px; font-size: 13px; }
+  #side .g { padding: 6px; cursor: pointer; border-bottom: 1px solid var(--color-border-light); display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+  #side .g:hover { background: var(--color-bg-card); } #side .g.sel { background: var(--color-success-bg); }
   .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
-  .b-ver { background: #1a7f37; } .b-pw { background: #9a6700; color: #000; } .b-none { background: #7a1f1f; }
+  .b-ver { background: var(--color-success); } .b-pw { background: var(--color-warning); color: #000; } .b-none { background: var(--color-danger); }
   #main { flex: 1; display: flex; flex-direction: column; padding: 10px; overflow-y: auto; }
-  h2 { margin: 4px 0; font-size: 15px; } .hint { color: #9ab; font-size: 12px; }
-  .row { display: flex; gap: 14px; align-items: flex-start; margin: 10px 0; border-bottom: 1px solid #222; padding-bottom: 10px; }
-  .row img { width: 480px; border: 1px solid #444; background: #000; }
+  h2 { margin: 4px 0; font-size: 15px; } .hint { color: var(--color-text-secondary); font-size: 12px; }
+  .row { display: flex; gap: 14px; align-items: flex-start; margin: 10px 0; border-bottom: 1px solid var(--color-border-light); padding-bottom: 10px; }
+  .row img { width: 480px; border: 1px solid var(--color-border); background: #000; }
   .ctl { display: flex; flex-direction: column; gap: 6px; }
   .ctl .lab { font-weight: bold; font-size: 14px; } .ctl .t { color: #6cf; font-variant-numeric: tabular-nums; }
-  button { background: #243; color: #eee; border: 1px solid #456; padding: 6px 10px; cursor: pointer; border-radius: 4px; }
+  button { background: #243; color: var(--color-text-primary); border: 1px solid #456; padding: 6px 10px; cursor: pointer; border-radius: 4px; }
   button:hover { background: #365; } .nav button { margin: 2px; }
   #save { background: #1a5; padding: 9px 16px; font-size: 14px; }
 </style>

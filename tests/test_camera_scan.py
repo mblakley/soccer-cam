@@ -1,0 +1,287 @@
+"""Tests for network camera discovery in the setup wizard.
+
+Covers the two things the wizard leans on: that a ProbeMatch's advertised
+scopes survive parsing (so a camera can be shown as more than a bare address
+before anyone types a password), and that the make is worked out by asking the
+camera rather than by asking the user.
+"""
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from video_grouper.cameras.discovery import (
+    DiscoveredCamera,
+    DiscoveredDevice,
+    _extract_devices_from_probe_match,
+    _parse_scopes,
+    _sort_key,
+    identify_camera,
+)
+
+# A two-camera reply: a Reolink and a Dahua, each with its own scopes. Shaped
+# like the real thing -- one datagram can carry several ProbeMatch elements.
+TWO_CAMERAS = b"""<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery">
+  <s:Body>
+    <d:ProbeMatches>
+      <d:ProbeMatch>
+        <d:Scopes>onvif://www.onvif.org/name/RLC-810A onvif://www.onvif.org/hardware/RLC-810A onvif://www.onvif.org/manufacturer/Reolink</d:Scopes>
+        <d:XAddrs>http://192.168.1.50/onvif/device_service</d:XAddrs>
+      </d:ProbeMatch>
+      <d:ProbeMatch>
+        <d:Scopes>onvif://www.onvif.org/name/IPC-HDW2431T onvif://www.onvif.org/manufacturer/Dahua</d:Scopes>
+        <d:XAddrs>http://192.168.1.60/onvif/device_service</d:XAddrs>
+      </d:ProbeMatch>
+    </d:ProbeMatches>
+  </s:Body>
+</s:Envelope>"""
+
+
+class TestScopeParsing:
+    def test_name_hardware_and_vendor_are_extracted(self):
+        name, hardware, vendor = _parse_scopes(
+            "onvif://www.onvif.org/name/RLC-810A "
+            "onvif://www.onvif.org/hardware/IPC-1 "
+            "onvif://www.onvif.org/manufacturer/Reolink"
+        )
+        assert (name, hardware, vendor) == ("RLC-810A", "IPC-1", "Reolink")
+
+    def test_percent_escapes_are_decoded(self):
+        """Scopes are URIs, so a name with a space arrives percent-encoded."""
+        name, _, _ = _parse_scopes("onvif://www.onvif.org/name/Front%20Door")
+        assert name == "Front Door"
+
+    def test_vendor_is_blank_when_nothing_identifies_it(self):
+        _, _, vendor = _parse_scopes("onvif://www.onvif.org/Profile/Streaming")
+        assert vendor == ""
+
+    def test_amcrest_is_treated_as_dahua(self):
+        """Amcrest units speak the Dahua CGI API."""
+        _, _, vendor = _parse_scopes("onvif://www.onvif.org/name/Amcrest-IP2M")
+        assert vendor == "Dahua"
+
+
+class TestProbeMatchToDevices:
+    def test_each_match_keeps_its_own_scopes(self):
+        """The classic bug here is one camera's model landing on another's IP."""
+        devices = {d.ip: d for d in _extract_devices_from_probe_match(TWO_CAMERAS)}
+        assert set(devices) == {"192.168.1.50", "192.168.1.60"}
+        assert devices["192.168.1.50"].vendor == "Reolink"
+        assert devices["192.168.1.50"].name == "RLC-810A"
+        assert devices["192.168.1.60"].vendor == "Dahua"
+        assert devices["192.168.1.60"].name == "IPC-HDW2431T"
+
+    def test_device_without_scopes_still_appears(self):
+        """An unrecognised camera is still worth offering, by address."""
+        xml = b"""<d:ProbeMatches xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery">
+          <d:ProbeMatch><d:XAddrs>http://10.0.0.7/onvif/device_service</d:XAddrs></d:ProbeMatch>
+        </d:ProbeMatches>"""
+        devices = _extract_devices_from_probe_match(xml)
+        assert [d.ip for d in devices] == ["10.0.0.7"]
+        assert devices[0].vendor == ""
+
+    def test_invalid_xml_is_not_fatal(self):
+        assert _extract_devices_from_probe_match(b"not xml") == []
+
+    def test_label_falls_back_when_nothing_was_advertised(self):
+        assert DiscoveredDevice("10.0.0.7").label == ""
+        assert DiscoveredDevice("10.0.0.7", vendor="Dahua").label == "Dahua"
+        assert (
+            DiscoveredDevice("10.0.0.7", name="RLC-810A", vendor="Reolink").label
+            == "Reolink RLC-810A"
+        )
+
+
+class TestAddressSorting:
+    def test_addresses_sort_numerically(self):
+        """.9 before .10 -- lexical order puts them the wrong way round."""
+        ips = ["192.168.1.10", "192.168.1.9", "192.168.1.100"]
+        assert sorted(ips, key=_sort_key) == [
+            "192.168.1.9",
+            "192.168.1.10",
+            "192.168.1.100",
+        ]
+
+    def test_hostname_does_not_crash_the_sort(self):
+        assert _sort_key("camera.local")[0] == 1
+
+
+def _camera(manufacturer):
+    return DiscoveredCamera(
+        ip="192.168.1.50",
+        name="Field",
+        model="RLC-810A",
+        mac="aa:bb",
+        firmware="1.0",
+        serial="123",
+        manufacturer=manufacturer,
+    )
+
+
+class TestIdentifyCamera:
+    @pytest.mark.asyncio
+    async def test_reolink_is_reported_without_asking_the_user(self):
+        with (
+            patch(
+                "video_grouper.cameras.discovery.probe_reolink",
+                new=AsyncMock(return_value=_camera("Reolink")),
+            ),
+            patch(
+                "video_grouper.cameras.discovery.probe_dahua", new=AsyncMock()
+            ) as dahua,
+        ):
+            result = await identify_camera("192.168.1.50", "admin", "pw")
+        assert result is not None
+        assert result[0] == "reolink"
+        dahua.assert_not_awaited(), "a Reolink answer must not also probe Dahua"
+
+    @pytest.mark.asyncio
+    async def test_falls_through_to_dahua(self):
+        with (
+            patch(
+                "video_grouper.cameras.discovery.probe_reolink",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "video_grouper.cameras.discovery.probe_dahua",
+                new=AsyncMock(return_value=_camera("Dahua")),
+            ),
+        ):
+            result = await identify_camera("192.168.1.60", "admin", "pw")
+        assert result is not None and result[0] == "dahua"
+
+    @pytest.mark.asyncio
+    async def test_neither_answering_is_not_an_exception(self):
+        """Wrong password looks the same as no camera; both return None."""
+        with (
+            patch(
+                "video_grouper.cameras.discovery.probe_reolink",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "video_grouper.cameras.discovery.probe_dahua",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            assert await identify_camera("192.168.1.99", "admin", "wrong") is None
+
+
+class TestLanFingerprint:
+    """The sweep exists because ONVIF is off by default on Reolink."""
+
+    @pytest.mark.asyncio
+    async def test_reolink_is_recognised_from_its_rejection(self):
+        """An unauthenticated Reolink returns JSON carrying rspCode -6."""
+        from video_grouper.cameras.discovery import _fingerprint
+
+        client = AsyncMock()
+        client.post.return_value = type(
+            "R", (), {"status_code": 200, "text": '[{"error":{"rspCode":-6}}]'}
+        )()
+        device = await _fingerprint("192.168.86.24", client)
+        assert device is not None and device.vendor == "Reolink"
+
+    @pytest.mark.asyncio
+    async def test_dahua_is_recognised_from_its_digest_challenge(self):
+        from video_grouper.cameras.discovery import _fingerprint
+
+        client = AsyncMock()
+        client.post.side_effect = OSError("not reolink")
+        client.get.return_value = type(
+            "R",
+            (),
+            {
+                "status_code": 401,
+                "headers": {"www-authenticate": 'Digest realm="Login to DVR"'},
+                "text": "",
+            },
+        )()
+        device = await _fingerprint("192.168.86.60", client)
+        assert device is not None and device.vendor == "Dahua"
+
+    @pytest.mark.asyncio
+    async def test_a_web_server_that_is_not_a_camera_is_ignored(self):
+        """Plenty of things answer on port 80; only cameras should be listed."""
+        from video_grouper.cameras.discovery import _fingerprint
+
+        client = AsyncMock()
+        client.post.return_value = type(
+            "R", (), {"status_code": 200, "text": "<html>a printer</html>"}
+        )()
+        client.get.return_value = type(
+            "R", (), {"status_code": 200, "headers": {}, "text": "<html>"}
+        )()
+        assert await _fingerprint("192.168.86.99", client) is None
+
+
+class TestLocalNetworks:
+    def test_link_local_and_loopback_are_skipped(self):
+        """169.254/16 is unreachable, and sweeping it wastes the whole budget."""
+        from video_grouper.cameras.discovery import local_ipv4_networks
+
+        with patch(
+            "video_grouper.cameras.discovery.socket.getaddrinfo",
+            return_value=[
+                (2, 1, 6, "", ("127.0.0.1", 0)),
+                (2, 1, 6, "", ("169.254.43.45", 0)),
+                (2, 1, 6, "", ("192.168.86.50", 0)),
+            ],
+        ):
+            nets = [str(n) for n in local_ipv4_networks()]
+        assert nets == ["192.168.86.0/24"]
+
+
+class TestScanProgress:
+    """The bar has to mean something, so the count has to be real."""
+
+    @pytest.mark.asyncio
+    async def test_progress_is_reported_for_every_address(self):
+        """Exactly one tick per address, ending at the total it announced."""
+        import ipaddress
+
+        from video_grouper.cameras.discovery import discover_on_lan
+
+        calls: list[tuple[int, int]] = []
+        net = [ipaddress.IPv4Network("10.9.9.0/29")]  # 6 usable hosts
+
+        with patch(
+            "video_grouper.cameras.discovery._connect", new=AsyncMock(return_value=None)
+        ):
+            await discover_on_lan(net, on_progress=lambda d, t: calls.append((d, t)))
+
+        # One priming call at zero, then one per host.
+        assert calls[0] == (0, 6)
+        assert calls[-1] == (6, 6)
+        assert [d for d, _ in calls] == [0, 1, 2, 3, 4, 5, 6]
+
+    @pytest.mark.asyncio
+    async def test_progress_counts_unreachable_hosts_too(self):
+        """A bar that only advanced on hits would stall on an empty network."""
+        import ipaddress
+
+        from video_grouper.cameras.discovery import discover_on_lan
+
+        calls: list[tuple[int, int]] = []
+        with patch(
+            "video_grouper.cameras.discovery._connect",
+            new=AsyncMock(side_effect=OSError("refused")),
+        ):
+            with pytest.raises(OSError):
+                await discover_on_lan(
+                    [ipaddress.IPv4Network("10.9.9.0/30")],
+                    on_progress=lambda d, t: calls.append((d, t)),
+                )
+        # Even the failures ticked, because the tick is in a finally.
+        assert calls[-1][0] > 0
+
+
+def test_sse_frames_are_well_formed():
+    """An SSE frame is terminated by a blank line; without it nothing fires."""
+    from video_grouper.web.setup.router import _sse
+
+    frame = _sse("progress", {"done": 5, "total": 10})
+    assert frame.startswith("event: progress\n")
+    assert frame.endswith("\n\n")
+    assert '"done": 5' in frame

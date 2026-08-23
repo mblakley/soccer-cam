@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -10,7 +11,7 @@ import string
 from pathlib import Path
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from video_grouper.pipeline.presets import apply_preset
 from video_grouper.utils.config import (
@@ -29,8 +30,10 @@ from video_grouper.utils.config import (
     TeamSnapConfig,
     TTTConfig,
     YouTubeConfig,
+    load_config,
     save_config,
 )
+from video_grouper.web import chrome
 from video_grouper.web.setup.state import (
     cookie_name,
     discard,
@@ -41,116 +44,159 @@ from video_grouper.web.setup.state import (
 logger = logging.getLogger(__name__)
 
 
+def _sse(event: str, payload: dict) -> str:
+    """Format one server-sent event. The blank line terminates the frame."""
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+
 _PAGE_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<title>Soccer-Cam setup &mdash; __TITLE__</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+__CHROME_HEAD__
 <style>
-:root {
-  --bg-base: #0a0b0f;
-  --bg-surface: #13141a;
-  --bg-elev: #181a22;
-  --bg-input: #0f1015;
-  --rule: #2a2c34;
-  --rule-strong: #3b3e48;
-  --text: #e6e7ec;
-  --text-mute: #94969f;
-  --text-faint: #5e616b;
-  --accent: #fb923c;
-  --accent-glow: rgba(251,146,60,0.16);
-  --signal-on: #22c55e;
-  --signal-bad: #f43f5e;
-  --display: 'Barlow Condensed', 'Bebas Neue', sans-serif;
-  --body: 'IBM Plex Sans', system-ui, sans-serif;
-  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+/* Page-specific: the step tracker, the settings summary and the storage
+   path picker. Everything else comes from static/soccer-cam.css. */
+
+.shell { max-width: 720px; }
+
+.steps {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
 }
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  font-family: var(--body);
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--text);
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(251,146,60,0.06), transparent 60%),
-    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(34,197,94,0.04), transparent 60%),
-    var(--bg-base);
-  background-attachment: fixed;
-  position: relative;
+.steps .step {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
 }
-body::before {
-  content: ""; position: fixed; inset: 0;
-  background-image: repeating-linear-gradient(
-    0deg, transparent 0, transparent 2px, rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 3px);
-  pointer-events: none; z-index: 1;
+.steps .step.now {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
 }
-.topbar { position: relative; z-index: 2; border-bottom: 1px solid var(--rule); background: rgba(10,11,15,0.72); backdrop-filter: blur(8px); }
-.topbar-inner { max-width: 720px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; }
-.brand { font-family: var(--display); font-weight: 700; letter-spacing: 0.18em; font-size: 18px; text-transform: uppercase; }
-.brand .dot { color: var(--accent); }
-.crumb { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-mute); }
-.shell {
-  position: relative; z-index: 2;
-  max-width: 720px; margin: 0 auto;
-  padding: 32px 28px 80px;
-  animation: page-in 320ms ease-out both;
+
+.headline {
+  font-family: var(--font-headline);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: clamp(32px, 5vw, 48px);
+  line-height: 0.95;
+  margin: 0 0 8px;
 }
-@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
-.steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint); }
-.steps .step { padding: 6px 10px; border: 1px solid var(--rule); }
-.steps .step.now { color: var(--accent); border-color: var(--accent); }
-.headline { font-family: var(--display); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: clamp(32px, 5vw, 48px); line-height: 0.95; margin: 0 0 8px; }
-.lede { color: var(--text-mute); max-width: 56ch; margin: 0 0 24px; }
-.lede code { font-family: var(--mono); font-size: 12px; background: var(--bg-elev); padding: 1px 6px; border: 1px solid var(--rule); }
-form { display: flex; flex-direction: column; gap: 18px; }
-label { display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-mute); }
-input[type="text"], input[type="password"], input[type="number"], select {
-  width: 100%; font: inherit; font-family: var(--mono); font-size: 13px;
-  color: var(--text); background: var(--bg-input);
-  border: 1px solid var(--rule); padding: 10px 12px; border-radius: 0;
-  outline: none; transition: border-color 120ms ease, box-shadow 120ms ease;
+.lede { max-width: 56ch; margin: 0 0 24px; }
+
+.summary {
+  padding: 18px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
 }
-input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, select:focus {
-  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow);
+.summary dt {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-top: 10px;
 }
-input::placeholder { color: var(--text-faint); font-style: italic; }
-.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.btn { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; padding: 11px 22px; background: var(--accent); color: #1a0e02 !important; border: 0; cursor: pointer; text-decoration: none; transition: filter 120ms ease, transform 120ms ease; }
-.btn:hover { filter: brightness(1.08); }
-.btn:active { transform: translateY(1px); }
-.btn-ghost { background: transparent; color: var(--text-mute) !important; border: 1px solid var(--rule); }
-.btn-ghost:hover { color: var(--text); border-color: var(--rule-strong); }
-.summary { padding: 18px 22px; border: 1px solid var(--rule); background: var(--bg-elev); }
-.summary dt { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-faint); margin-top: 10px; }
 .summary dt:first-child { margin-top: 0; }
-.summary dd { margin: 0 0 6px; font-family: var(--mono); font-size: 13px; }
-.summary code { color: var(--accent); }
-.muted { color: var(--text-mute); font-family: var(--mono); font-size: 12px; }
-.err { padding: 10px 14px; background: rgba(244,63,94,0.06); color: var(--signal-bad); border: 1px solid rgba(244,63,94,0.4); font-family: var(--mono); font-size: 12px; }
-.path-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
-.path-chip { text-align: left; padding: 8px 12px; background: var(--bg-input); border: 1px solid var(--rule); cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--text); }
-.path-chip:hover { background: var(--bg-elev); border-color: var(--accent); color: var(--accent); }
+.summary dd {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.summary code { color: var(--color-accent); }
+
+/* Each field in this wizard is a bare <label> wrapping its input. Labels are
+   inline by default, so a trailing hint and the next label share a line --
+   which is how "Make" ended up printed after the config.ini note. */
+form label {
+  display: block;
+  margin-bottom: 16px;
+  font-size: 14px;
+  font-weight: 500;
+}
+form label .hint,
+form label .muted {
+  display: block;
+  margin-top: 4px;
+  font-weight: 400;
+}
+form label input,
+form label select {
+  margin-top: 6px;
+}
+
+.path-list { max-height: 280px; overflow-y: auto; }
+.path-chip {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+.path-chip:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+/* A picked camera, not merely hovered. */
+.path-chip.active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-light);
+  color: var(--color-text-primary);
+}
+.path-chip strong { font-weight: 600; }
+.path-chip .faint { margin-left: 8px; }
+
+/* Advanced entry, folded away. */
+details.panel > summary {
+  cursor: pointer;
+  font-family: var(--font-headline);
+  font-weight: 700;
+  font-size: 18px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::before {
+  content: "+";
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 16px;
+}
+details.panel[open] > summary::before { content: "−"; }
+details.panel[open] > summary { margin-bottom: 12px; }
 </style>
 </head>
 <body>
-<header class="topbar">
-  <div class="topbar-inner">
-    <div class="brand">SOCCER<span class="dot">·</span>CAM</div>
-    <div class="crumb">Setup</div>
-  </div>
-</header>
-<div class="shell">
+__CHROME_TOPBAR__
+<main class="shell shell--narrow">
 <__STEPS__>
 <h1 class="headline">__TITLE__</h1>
 <p class="lede">__LEDE__</p>
 __BODY__
-</div>
+</main>
 </body>
 </html>
 """
@@ -200,9 +246,161 @@ _STORAGE_PICKER_JS = """
         }
       })
       .catch((err) => {
-        modal.innerHTML = '<div class="err">Browse failed: ' + err + "</div>";
+        modal.innerHTML = '<div class="banner banner--bad">Browse failed: ' + err + "</div>";
       });
   }
+})();
+</script>
+"""
+
+_CAMERA_SCAN_JS = """
+<script>
+(function () {
+  const btn = document.getElementById("scan-btn");
+  const out = document.getElementById("scan-result");
+  const list = document.getElementById("scan-list");
+  if (!btn || !out || !list) return;
+
+  const ipField = document.getElementById("camera-ip");
+  const nameField = document.getElementById("camera-name");
+  const typeField = document.getElementById("camera-type");
+
+  // Default the config section name from the model, so most people never
+  // have to invent one. Sanitised to what an INI section key allows.
+  function suggestName(device) {
+    const raw = device.name || device.hardware || ("cam-" + device.ip.split(".").pop());
+    return raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  function select(device, card) {
+    list.querySelectorAll(".path-chip").forEach((c) => c.classList.remove("active"));
+    card.classList.add("active");
+    ipField.value = device.ip;
+    if (device.vendor === "Reolink") typeField.value = "reolink";
+    else if (device.vendor === "Dahua") typeField.value = "dahua";
+    if (!nameField.value) nameField.value = suggestName(device);
+    out.textContent = "Selected " + device.ip + ". Enter the username and password, then Test connection.";
+  }
+
+  function render(devices) {
+    list.innerHTML = "";
+    devices.forEach((d) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "path-chip";
+      const detail = d.label || "Unrecognised device";
+      card.innerHTML =
+        '<strong>' + d.ip + '</strong> <span class="faint">' + detail + '</span>';
+      card.addEventListener("click", () => select(d, card));
+      list.appendChild(card);
+    });
+  }
+
+  const bar = document.getElementById("scan-bar");
+  const fill = document.getElementById("scan-bar-fill");
+
+  function showProgress(done, total) {
+    // Only claim a percentage while there is a real count behind it.
+    if (!total) return;
+    bar.hidden = false;
+    bar.classList.remove("progress--indeterminate");
+    const pct = Math.round((done / total) * 100);
+    fill.style.width = pct + "%";
+    if (done >= total) {
+      // The sweep is finished but the ONVIF listen window has not closed.
+      // Say so rather than let a full bar sit there looking stuck.
+      out.textContent = "Listening for ONVIF replies…";
+      // Clear the inline width so the indeterminate rule can take over.
+      fill.style.width = "";
+      bar.classList.add("progress--indeterminate");
+    } else {
+      out.textContent = "Scanning… " + pct + "%";
+    }
+  }
+
+  function hideProgress() {
+    bar.hidden = true;
+    bar.classList.remove("progress--indeterminate");
+    fill.style.width = "0%";
+  }
+
+  function finish(devices) {
+    hideProgress();
+    if (devices.length === 0) {
+      out.textContent =
+        "No cameras answered. They may be on another network, or blocked by " +
+        "this machine's firewall. Enter the camera manually below.";
+      const manual = document.querySelector("details.panel");
+      if (manual) manual.open = true;
+    } else {
+      out.textContent =
+        devices.length === 1 ? "Found 1 camera." : "Found " + devices.length + " cameras.";
+      render(devices);
+    }
+    btn.disabled = false;
+  }
+
+  function scanStreaming() {
+    // EventSource gives progress as it happens. The count is real: the sweep
+    // knows every address it intends to check before it starts.
+    const src = new EventSource("/setup/camera/scan/stream");
+    let settled = false;
+
+    src.addEventListener("progress", (e) => {
+      const d = JSON.parse(e.data);
+      showProgress(d.done, d.total);
+    });
+    src.addEventListener("done", (e) => {
+      settled = true;
+      src.close();
+      finish(JSON.parse(e.data).devices || []);
+    });
+    src.addEventListener("failed", (e) => {
+      settled = true;
+      src.close();
+      hideProgress();
+      out.textContent = JSON.parse(e.data).message || "Scan failed.";
+      btn.disabled = false;
+    });
+    src.onerror = () => {
+      if (settled) return;
+      // The stream died. Fall back to the plain request rather than leaving
+      // the user with a stalled bar.
+      src.close();
+      scanPlain();
+    };
+  }
+
+  async function scanPlain() {
+    bar.hidden = false;
+    fill.style.width = "";
+    bar.classList.add("progress--indeterminate");
+    out.textContent = "Looking for cameras on this network…";
+    try {
+      const r = await fetch("/setup/camera/scan", { method: "POST" });
+      const data = await r.json();
+      if (!data.ok) {
+        hideProgress();
+        out.textContent = data.message || "Scan failed.";
+        btn.disabled = false;
+        return;
+      }
+      finish(data.devices || []);
+    } catch (e) {
+      hideProgress();
+      out.textContent = "Scan failed: " + e;
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    list.innerHTML = "";
+    hideProgress();
+    if (window.EventSource) scanStreaming();
+    else scanPlain();
+  });
+
 })();
 </script>
 """
@@ -213,23 +411,31 @@ _CAMERA_TEST_JS = """
   const btn = document.getElementById("test-btn");
   const out = document.getElementById("test-result");
   if (!btn || !out) return;
+  const typeField = document.getElementById("camera-type");
+
   btn.addEventListener("click", async () => {
     const form = new FormData();
-    form.set("camera_type", document.getElementById("camera-type").value);
     form.set("camera_ip", document.getElementById("camera-ip").value);
     form.set("camera_username", document.getElementById("camera-username").value);
     form.set("camera_password", document.getElementById("camera-password").value);
+    btn.disabled = true;
     out.textContent = "Testing…";
-    out.className = "muted";
+    out.style.color = "";
     try {
-      const r = await fetch("/setup/camera/test", { method: "POST", body: form });
+      // Identify rather than test against a chosen make: the camera can say
+      // what it is, which keeps the make dropdown out of the common path.
+      const r = await fetch("/setup/camera/identify", { method: "POST", body: form });
       const data = await r.json();
-      out.textContent = (data.ok ? "✓ " : "✗ ") + (data.message || "");
-      out.className = data.ok ? "muted" : "err";
-      out.style.color = data.ok ? "#15803d" : "#7f1d1d";
+      if (data.ok && data.camera_type) typeField.value = data.camera_type;
+      out.textContent = (data.ok ? "\\u2713 " : "\\u2717 ") + (data.message || "");
+      out.style.color = data.ok
+        ? "var(--color-success)"
+        : "var(--color-danger)";
     } catch (e) {
-      out.textContent = "✗ " + e;
-      out.style.color = "#7f1d1d";
+      out.textContent = "\\u2717 " + e;
+      out.style.color = "var(--color-danger)";
+    } finally {
+      btn.disabled = false;
     }
   });
 })();
@@ -409,9 +615,24 @@ def _render_steps(active: str) -> str:
     return '<div class="steps">' + " &rsaquo; ".join(parts) + "</div>"
 
 
-def _page(active: str, title: str, lede: str, body: str) -> str:
+def _page(
+    active: str,
+    title: str,
+    lede: str,
+    body: str,
+    onboarding_complete: bool = False,
+) -> str:
+    # Defaults to False: this is the wizard, so assume setup is unfinished
+    # unless the caller knows better. Status is dropped from the nav while
+    # that holds, because "/" would redirect straight back here.
     return (
-        _PAGE_TEMPLATE.replace("<__STEPS__>", _render_steps(active))
+        _PAGE_TEMPLATE.replace("__CHROME_HEAD__", chrome.head(f"Setup · {title}"))
+        .replace(
+            "__CHROME_TOPBAR__",
+            chrome.tally()
+            + chrome.topbar("/setup", onboarding_complete=onboarding_complete),
+        )
+        .replace("<__STEPS__>", _render_steps(active))
         .replace("__TITLE__", title)
         .replace("__LEDE__", lede)
         .replace("__BODY__", body)
@@ -435,6 +656,67 @@ def _redirect_with_cookie(target: str, token: str) -> RedirectResponse:
 # ---------------------------------------------------------------------------
 
 
+def _camera_body(state) -> str:
+    """Return the camera step's form markup for a wizard state.
+
+    Split out from the route so it can be rendered without a request --
+    the preview harness and tests both build this page directly.
+    """
+    # Scanning is the primary path: most people do not know their camera's
+    # address, and the camera can simply be asked. Typing a name and address
+    # is still here, folded away, for a camera on another subnet or with
+    # ONVIF discovery turned off.
+    manual_open = " open" if state.camera_ip else ""
+    return (
+        '<form method="post" action="/setup/camera" id="camera-form">'
+        '<section class="panel">'
+        '<div class="btn-row">'
+        '<button type="button" class="btn" id="scan-btn">'
+        "Scan for cameras</button>"
+        '<span id="scan-result" class="hint" role="status" aria-live="polite">'
+        "</span>"
+        "</div>"
+        '<div class="progress" id="scan-bar" hidden>'
+        '<div class="progress-fill" id="scan-bar-fill"></div>'
+        "</div>"
+        '<div id="scan-list" class="path-list" style="margin-top:12px"></div>'
+        "</section>"
+        "<label>Username"
+        f'<input name="camera_username" id="camera-username" type="text" value="{html.escape(state.camera_username)}" required></label>'
+        "<label>Password"
+        '<input name="camera_password" id="camera-password" type="password" value="" placeholder="(set on save)" required>'
+        "</label>"
+        f'<details class="panel"{manual_open}>'
+        "<summary>Enter the camera manually</summary>"
+        '<p class="hint">For a camera on a different network, or one with '
+        "ONVIF discovery switched off.</p>"
+        "<label>IP address"
+        f'<input name="camera_ip" id="camera-ip" type="text" value="{html.escape(state.camera_ip)}" placeholder="192.168.1.100" required>'
+        "</label>"
+        "<label>Name"
+        f'<input name="camera_name" id="camera-name" type="text" value="{html.escape(state.camera_name)}" required>'
+        '<span class="hint">Names the [CAMERA.&lt;name&gt;] section in '
+        "config.ini. Anything you like, e.g. <code>field</code>.</span></label>"
+        "<label>Make"
+        '<select name="camera_type" id="camera-type" required>'
+        f'<option value="dahua" {"selected" if state.camera_type == "dahua" else ""}>Dahua</option>'
+        f'<option value="reolink" {"selected" if state.camera_type == "reolink" else ""}>Reolink</option>'
+        "</select>"
+        '<span class="hint">Set for you when you pick a scanned camera.</span>'
+        "</label>"
+        "</details>"
+        '<div class="row">'
+        '<button type="button" class="btn btn-secondary" id="test-btn">'
+        "Test connection</button>"
+        '<span id="test-result" class="hint"></span>'
+        "</div>"
+        '<div class="row">'
+        '<a class="btn-ghost btn" href="/setup/storage">Back</a>'
+        '<button class="btn" type="submit">Next</button>'
+        "</div></form>" + _CAMERA_SCAN_JS + _CAMERA_TEST_JS
+    )
+
+
 def build_router(config_path: Path) -> APIRouter:
     """Build the wizard router. Persists to ``config_path`` on submit."""
     router = APIRouter(prefix="/setup")
@@ -451,7 +733,7 @@ def build_router(config_path: Path) -> APIRouter:
             "Soccer-Cam recording: where to store videos and one camera "
             "to poll. After you finish, integrations (YouTube, NTFY, "
             "PlayMetrics, TeamSnap) and any advanced settings live on "
-            'the <a href="/config">configuration page</a>.</p>'
+            '<a href="/config">Settings</a>.</p>'
             '<p><a class="btn" href="/setup/storage">Get started</a></p>'
         )
         resp = HTMLResponse(
@@ -505,8 +787,8 @@ def build_router(config_path: Path) -> APIRouter:
             "Browse…</button>"
             "</div>"
             '<div id="browse-modal" style="display:none; margin-top:0.75rem; '
-            "padding:0.75rem; border:1px solid #cbd5e1; border-radius:6px; "
-            'background:#f8fafc;"></div>'
+            "padding:12px; border:1px solid var(--color-border); "
+            'border-radius:4px; background:var(--color-bg-card);"></div>'
             '<div class="row">'
             '<a class="btn-ghost btn" href="/setup/welcome">Back</a>'
             '<button class="btn" type="submit">Next</button>'
@@ -583,13 +865,13 @@ def build_router(config_path: Path) -> APIRouter:
         except OSError as exc:
             return HTMLResponse(
                 header_html
-                + f'<div class="err">Cannot access: {html.escape(str(path_obj))} '
+                + f'<div class="banner banner--bad">Cannot access: {html.escape(str(path_obj))} '
                 + f"&mdash; {html.escape(str(exc))}</div>"
             )
         if not is_dir:
             return HTMLResponse(
                 header_html
-                + f'<div class="err">Not a directory: {html.escape(str(path_obj))}</div>'
+                + f'<div class="banner banner--bad">Not a directory: {html.escape(str(path_obj))}</div>'
             )
 
         # Parent navigation. Drive roots (C:\) and UNC share roots
@@ -651,40 +933,12 @@ def build_router(config_path: Path) -> APIRouter:
     def camera_get(request: Request) -> HTMLResponse:
         token, state = get_or_create(request.cookies.get(cookie_name()))
         # No password echo on render (sensitive)
-        body = (
-            '<form method="post" action="/setup/camera" id="camera-form">'
-            "<label>Camera type"
-            '<select name="camera_type" id="camera-type" required>'
-            f'<option value="dahua" {"selected" if state.camera_type == "dahua" else ""}>Dahua</option>'
-            f'<option value="reolink" {"selected" if state.camera_type == "reolink" else ""}>Reolink</option>'
-            "</select></label>"
-            "<label>Camera name"
-            f'<input name="camera_name" id="camera-name" type="text" value="{html.escape(state.camera_name)}" required>'
-            '<span class="muted">Used as the [CAMERA.&lt;name&gt;] section in '
-            "config.ini. Pick anything (e.g. <code>field</code>).</span></label>"
-            "<label>IP address"
-            f'<input name="camera_ip" id="camera-ip" type="text" value="{html.escape(state.camera_ip)}" placeholder="192.168.1.100" required>'
-            "</label>"
-            "<label>Username"
-            f'<input name="camera_username" id="camera-username" type="text" value="{html.escape(state.camera_username)}" required></label>'
-            "<label>Password"
-            '<input name="camera_password" id="camera-password" type="password" value="" placeholder="(set on save)" required>'
-            "</label>"
-            '<div class="row">'
-            '<button type="button" class="btn btn-ghost" id="test-btn">'
-            "Test connection</button>"
-            '<span id="test-result" class="muted"></span>'
-            "</div>"
-            '<div class="row">'
-            '<a class="btn-ghost btn" href="/setup/storage">Back</a>'
-            '<button class="btn" type="submit">Next</button>'
-            "</div></form>" + _CAMERA_TEST_JS
-        )
+        body = _camera_body(state)
         resp = HTMLResponse(
             _page(
                 "camera",
                 "Camera",
-                "How do we reach your camera?",
+                "Find the camera on your network, or enter it yourself.",
                 body,
             )
         )
@@ -696,6 +950,150 @@ def build_router(config_path: Path) -> APIRouter:
             samesite="lax",
         )
         return resp
+
+    @router.post("/camera/scan")
+    async def camera_scan() -> dict:
+        """Ask the local network which cameras are on it.
+
+        Two methods at once, because neither is sufficient alone:
+
+        * ONVIF WS-Discovery -- gives a model name without credentials, but
+          only when the owner has enabled ONVIF. Reolink ships with it **off**
+          (``GetNetPort`` reports ``onvifEnable: 0``), so on its own this finds
+          nothing for most Reolink owners.
+        * A sweep of the attached networks, fingerprinting whatever answers on
+          port 80. Both vendors identify themselves in how they reject an
+          unauthenticated request, so this works with ONVIF off.
+
+        No credentials are involved either way. ``/camera/identify`` is what
+        confirms the make once the user supplies them.
+        """
+        from video_grouper.cameras.discovery import discover_cameras
+
+        try:
+            devices = await discover_cameras(3.0)
+        except Exception as exc:
+            logger.warning("Camera scan failed: %s", exc)
+            return {"ok": False, "devices": [], "message": f"Scan failed: {exc}"}
+
+        return {
+            "ok": True,
+            "devices": [
+                {
+                    "ip": d.ip,
+                    "name": d.name,
+                    "hardware": d.hardware,
+                    "vendor": d.vendor,
+                    "label": d.label,
+                }
+                for d in devices
+            ],
+        }
+
+    @router.get("/camera/scan/stream")
+    async def camera_scan_stream() -> StreamingResponse:
+        """Stream scan progress, then the result, as server-sent events.
+
+        The progress is real, not a pacifier: the sweep knows every address it
+        intends to check before it starts, and reports each one as it lands.
+        The ONVIF probe cannot be measured that way -- it is a fixed listen
+        window -- so once the sweep finishes the client is told it is waiting
+        on ONVIF rather than being shown a bar that invents movement.
+
+        GET because EventSource only issues GETs. Safe: the scan changes
+        nothing on this machine, and the same-origin Host allowlist still
+        applies (see auth_server's middleware).
+        """
+        from video_grouper.cameras.discovery import discover_cameras
+
+        # Updated from the sweep callback, sampled by the generator. A shared
+        # cell rather than a queue: 1270 addresses would mean 1270 events, and
+        # the client only ever needs the latest number.
+        state = {"done": 0, "total": 0}
+
+        def on_progress(done: int, total: int) -> None:
+            state["done"] = done
+            state["total"] = total
+
+        async def events():
+            task = asyncio.create_task(discover_cameras(3.0, on_progress))
+            try:
+                while not task.done():
+                    yield _sse("progress", state)
+                    await asyncio.sleep(0.15)
+
+                devices = await task
+            except Exception as exc:
+                logger.warning("Camera scan failed: %s", exc)
+                yield _sse("failed", {"message": f"Scan failed: {exc}"})
+                return
+
+            yield _sse(
+                "done",
+                {
+                    "devices": [
+                        {
+                            "ip": d.ip,
+                            "name": d.name,
+                            "hardware": d.hardware,
+                            "vendor": d.vendor,
+                            "label": d.label,
+                        }
+                        for d in devices
+                    ]
+                },
+            )
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @router.post("/camera/identify")
+    async def camera_identify(
+        camera_ip: str = Form(...),
+        camera_username: str = Form(...),
+        camera_password: str = Form(...),
+    ) -> dict:
+        """Confirm what the device at this address is, using credentials.
+
+        Removes the type dropdown from the common path: the camera tells us
+        whether it is Reolink or Dahua, and a successful authenticated probe
+        is proof where an ONVIF scope was only a hint.
+        """
+        from video_grouper.cameras.discovery import identify_camera
+
+        ip = camera_ip.strip()
+        if not ip:
+            return {"ok": False, "message": "Enter an address first."}
+
+        try:
+            result = await identify_camera(ip, camera_username, camera_password)
+        except Exception as exc:
+            logger.warning("Identify failed for %s: %s", ip, exc)
+            return {"ok": False, "message": f"Could not reach {ip}: {exc}"}
+
+        if result is None:
+            return {
+                "ok": False,
+                "message": (
+                    f"Reached {ip}, but neither a Reolink nor a Dahua answered. "
+                    "Check the username and password."
+                ),
+            }
+
+        camera_type, info = result
+        return {
+            "ok": True,
+            "camera_type": camera_type,
+            "name": info.name,
+            "model": info.model,
+            "message": " ".join(
+                p for p in (info.manufacturer, info.model, info.name) if p
+            )
+            or f"{camera_type} at {ip}",
+        }
 
     @router.post("/camera/test")
     async def camera_test(
@@ -907,7 +1305,22 @@ def build_router(config_path: Path) -> APIRouter:
                 detail="Wizard state missing or incomplete; restart the wizard.",
             )
 
-        config = _build_config(state)
+        # Merge into whatever is already on disk. Re-running the wizard on a
+        # configured install must not reset the integrations it never asks
+        # about; a config that cannot be read is treated as absent rather than
+        # blocking the user out of setup.
+        existing = None
+        if config_path.exists():
+            try:
+                existing = load_config(config_path)
+            except Exception as exc:
+                logger.warning(
+                    "SETUP: could not read %s (%s); writing a fresh config.",
+                    config_path,
+                    exc,
+                )
+
+        config = _build_config(state, existing)
         try:
             save_config(config, config_path)
         except OSError as exc:
@@ -926,32 +1339,52 @@ def build_router(config_path: Path) -> APIRouter:
     return router
 
 
-def _build_config(state) -> Config:
-    """Materialize wizard state into a complete Config with safe defaults."""
-    # YOUTUBE.enabled tracks whether the user completed the OAuth flow
-    # (token.json exists). Skipping the YouTube wizard step leaves it
-    # disabled; the user can enable it later from the dashboard.
-    yt_token = Path(state.storage_path) / "youtube" / "token.json"
-    youtube_cfg = YouTubeConfig(enabled=yt_token.exists())
-    # Seed a starting [PIPELINE] from the homegrown preset so a fresh install
-    # has a real, hand-editable pipeline scaffold (stitch -> detect -> track ->
-    # render) rather than a blank section. It's left DISABLED: the detect step
-    # needs a model source the wizard doesn't collect (TTT login resolves a
-    # model_key, or the user points model_path at a local .onnx), so the user
-    # finishes wiring it up on /config before flipping enabled = true. We keep
-    # onboarding minimal here — no visual pipeline editor.
-    pipeline_cfg = apply_preset("homegrown", enabled=False)
-    return Config.model_validate(
-        {
-            "cameras": [
-                CameraConfig(
-                    name=state.camera_name,
-                    type=state.camera_type,
-                    device_ip=state.camera_ip,
-                    username=state.camera_username,
-                    password=state.camera_password,
-                ).model_dump()
-            ],
+def _upsert_camera(cameras: list[dict], state) -> list[dict]:
+    """Return ``cameras`` with the wizard's camera added or updated in place.
+
+    Matched on name, which is what keys the ``[CAMERA.<name>]`` section. An
+    install with a second camera configured by hand keeps it; re-running the
+    wizard for "field" updates "field" rather than replacing the list.
+    """
+    entry = CameraConfig(
+        name=state.camera_name,
+        type=state.camera_type,
+        device_ip=state.camera_ip,
+        username=state.camera_username,
+        password=state.camera_password,
+    ).model_dump()
+
+    merged = [dict(c) for c in cameras]
+    for existing in merged:
+        if str(existing.get("name", "")).lower() == state.camera_name.lower():
+            existing.update(entry)
+            return merged
+    merged.append(entry)
+    return merged
+
+
+def _build_config(state, existing: Config | None = None) -> Config:
+    """Fold the wizard's answers into ``existing``, or into defaults.
+
+    The wizard asks for six things: a storage path and one camera. Everything
+    else in config.ini -- NTFY, TeamSnap, PlayMetrics, TTT, AutoCam, cloud
+    sync, the pipeline, YouTube playlists -- it never mentions, so re-running
+    it must not reset them. Before this merged, finishing the wizard on a
+    configured install rebuilt every section from defaults and silently
+    discarded the lot.
+
+    Only these are written:
+      * ``STORAGE.path``            -- not the section, so min_free_gb survives
+      * ``cameras``                 -- upserted by name, not replaced
+      * ``YOUTUBE.enabled``         -- not the section, so playlists survive
+      * ``SETUP.onboarding_completed``
+      * ``PIPELINE``                -- seeded only when there is not one yet
+    """
+    if existing is not None:
+        data = existing.model_dump(by_alias=True)
+    else:
+        data = {
+            "cameras": [],
             "STORAGE": StorageConfig(path=state.storage_path).model_dump(),
             "RECORDING": RecordingConfig().model_dump(),
             "PROCESSING": ProcessingConfig().model_dump(),
@@ -960,16 +1393,46 @@ def _build_config(state) -> Config:
             "TEAMSNAP": TeamSnapConfig().model_dump(),
             "PLAYMETRICS": PlayMetricsConfig().model_dump(),
             "NTFY": NtfyConfig().model_dump(),
-            "YOUTUBE": youtube_cfg.model_dump(),
+            "YOUTUBE": YouTubeConfig().model_dump(),
             "AUTOCAM": AutocamConfig().model_dump(),
             "CLOUD_SYNC": CloudSyncConfig().model_dump(),
             "TTT": TTTConfig().model_dump(),
-            "SETUP": SetupConfig(onboarding_completed=True).model_dump(),
-            "PIPELINE": pipeline_cfg.model_dump(),
-        },
-        by_alias=True,
-        by_name=True,
-    )
+            "SETUP": SetupConfig().model_dump(),
+            "PIPELINE": {},
+        }
+
+    # Seed a starting [PIPELINE] from the homegrown preset so a fresh install
+    # has a real, hand-editable scaffold (stitch -> detect -> track -> render)
+    # rather than a blank section. Left DISABLED: the detect step needs a model
+    # source the wizard doesn't collect (TTT login resolves a model_key, or the
+    # user points model_path at a local .onnx), so the user finishes wiring it
+    # up on /config before flipping enabled = true.
+    #
+    # Only when there isn't one already -- a pipeline the user has since wired
+    # up is exactly the kind of work re-running setup must not throw away.
+    if not (data.get("PIPELINE") or {}).get("steps"):
+        data["PIPELINE"] = apply_preset("homegrown", enabled=False).model_dump()
+
+    # Storage: the path only. Replacing the section would reset min_free_gb.
+    storage = dict(data.get("STORAGE") or {})
+    storage["path"] = state.storage_path
+    data["STORAGE"] = storage
+
+    # YOUTUBE.enabled tracks whether the user completed the OAuth flow
+    # (token.json exists). Skipping the YouTube step leaves it disabled. Only
+    # the flag: privacy_status, the playlists and playlist_map are the user's.
+    yt_token = Path(state.storage_path) / "youtube" / "token.json"
+    youtube = dict(data.get("YOUTUBE") or {})
+    youtube["enabled"] = yt_token.exists()
+    data["YOUTUBE"] = youtube
+
+    data["cameras"] = _upsert_camera(data.get("cameras") or [], state)
+
+    setup = dict(data.get("SETUP") or {})
+    setup["onboarding_completed"] = True
+    data["SETUP"] = setup
+
+    return Config.model_validate(data, by_alias=True, by_name=True)
 
 
 # Optional helper used by the dashboard to detect "no config yet" and

@@ -7,6 +7,12 @@ import pytest
 # Add the project root to the Python path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# The tray is Windows-only and optional -- Linux/Docker installs run the
+# orchestrator without it (see CLAUDE.md). Skip rather than fail collection
+# when PyQt6 is absent; `uv sync --extra tray` installs it, and CI's
+# Windows service workflow always does.
+pytest.importorskip("PyQt6")
+
 from PyQt6.QtWidgets import QApplication
 
 from video_grouper.pipeline.config import PipelineConfig

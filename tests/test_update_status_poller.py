@@ -13,6 +13,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
+# video_grouper.tray.main imports PyQt6, which is optional (`--extra tray`).
+# Linux/Docker installs run the orchestrator without a tray at all.
+pytest.importorskip("PyQt6")
+
 from video_grouper.tray.main import UpdateStatusPoller
 
 

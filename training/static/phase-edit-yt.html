@@ -4,24 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Phase Verify (YouTube)</title>
+<link rel="stylesheet" href="/shared/soccer-cam.css">
 <style>
-  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
-  header { padding: 8px 12px; background: #1b1b1b; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  select, button { font: inherit; padding: 5px 9px; background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 5px; cursor: pointer; }
-  button:hover { background: #383838; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: var(--color-bg-primary); color: var(--color-text-primary); }
+  header { padding: 8px 12px; background: var(--color-bg-primary); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, button { font: inherit; padding: 5px 9px; background: var(--color-bg-hover); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: 5px; cursor: pointer; }
+  button:hover { background: var(--color-bg-hover); }
   #wrap { display: flex; gap: 14px; padding: 12px; align-items: flex-start; flex-wrap: wrap; }
   #player { width: 960px; max-width: 100%; aspect-ratio: 16/9; background: #000; }
   #panel { width: 360px; }
   .now { font-size: 22px; font-variant-numeric: tabular-nums; margin: 6px 0; }
   .nudge button { min-width: 46px; }
   table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-  td { padding: 5px 4px; border-bottom: 1px solid #2a2a2a; }
+  td { padding: 5px 4px; border-bottom: 1px solid var(--color-bg-hover); }
   .t { font-variant-numeric: tabular-nums; font-size: 16px; min-width: 78px; display: inline-block; }
-  .set { background: #245; } .seek { background: #333; }
+  .set { background: #245; } .seek { background: var(--color-border); }
   #save { background: #2a5; color: #021; font-weight: 600; padding: 8px 16px; margin-top: 12px; }
   .src { color: #9c9; } .warn { color: #e96; }
   .lbl { color: #9bd; font-weight: 600; }
-  small { color: #888; }
+  small { color: var(--color-text-secondary); }
 </style>
 </head>
 <body>
