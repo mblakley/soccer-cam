@@ -308,12 +308,12 @@ _CAMERA_SCAN_JS = """
     if (done >= total) {
       // The sweep is finished but the ONVIF listen window has not closed.
       // Say so rather than let a full bar sit there looking stuck.
-      out.textContent = "Checked " + total + " addresses. Listening for ONVIF replies…";
+      out.textContent = "Listening for ONVIF replies…";
       // Clear the inline width so the indeterminate rule can take over.
       fill.style.width = "";
       bar.classList.add("progress--indeterminate");
     } else {
-      out.textContent = "Checking " + total + " addresses on this network… " + pct + "%";
+      out.textContent = "Scanning… " + pct + "%";
     }
   }
 
