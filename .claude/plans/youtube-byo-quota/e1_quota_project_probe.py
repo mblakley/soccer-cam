@@ -145,7 +145,7 @@ def main() -> int:
         secret_file, token_file = paths(args)
         token_file.parent.mkdir(parents=True, exist_ok=True)
         flow = InstalledAppFlow.from_client_secrets_file(str(secret_file), SCOPES)
-        creds = flow.run_local_server(port=args.port, prompt="consent")
+        creds = flow.run_local_server(port=args.port, prompt="select_account consent")
         token_file.write_text(creds.to_json())
         print(f"  token written to {token_file}")
         print(f"  scopes: {list(creds.scopes or [])}")

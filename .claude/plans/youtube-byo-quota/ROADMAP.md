@@ -69,7 +69,7 @@ Established 2026-08-22. Re-check anything Google-side before relying on it.
 
 | # | Fact | Source |
 |---|---|---|
-| F1 | Quota is per-project; `videos.insert` = 1600 units; default 10,000/day → ~6 videos ≈ 3 games/day | YouTube Data API docs |
+| F1 | ~~`videos.insert` = 1600 units; 10,000/day → ~3 games/day~~ **WRONG — retired 2026-08-23, see Upload limits below.** `videos.insert` and `search.list` have their own per-day call buckets; the unit pool governs other methods | measured |
 | F2 | External + *Testing* publishing status → refresh tokens expire in 7 days | Google OAuth docs |
 | F3 | Unverified in *Production* → warning screen + 100-new-user cap | support.google.com/cloud/answer/7454865 |
 | F4 | `youtube.upload` is **sensitive**, not restricted → verification needs justification + demo video, no CASA assessment | Google verification docs |
@@ -200,3 +200,56 @@ fresh account.
   an already-approved app triggers re-verification, so this is a now-decision.
 - **The 100-user cap (F3) is not the binding constraint** at ~1 camera manager
   per team, and verification removes it regardless.
+
+
+---
+
+## Upload limits — measured 2026-08-23
+
+Rig: publisher client `soccer-cam-e1-client`, account `flashparent4`, channel
+"Throwaway" (`longUploadsStatus: eligible`), quota project `soccer-cam-e2-15a668`.
+
+| # | Finding | Evidence |
+|---|---|---|
+| U1 | `videos.insert` is **not** 1600 units against a 10,000/day pool | 11 uploads on one account and 38 on another with no unit-quota refusal; the old model predicts failure at #7 |
+| U2 | The binding limit is **account-level, not API quota** | Refused at #39 with `400 uploadLimitExceeded`, "The user has exceeded the number of videos they may upload", carrying **no** `quota_metric`/`quota_limit` metadata. The project's `videos.insert` bucket still had ~60 left |
+| U3 | `uploadLimitExceeded` is a **rolling window of ~75-90 min**, not a daily reset | Probed every 15 min: refused at +0/+15/+30/+45/+60/+75, accepted at +90 |
+| U4 | Capacity returns **one slot at a time** | The +90 min success consumed the slot; the next attempt 85 s later was refused again |
+| U5 | YouTube can **accept an upload and then destroy it** | `200` + a real video id, then `videos.list` returns 0 items permanently. Only trace is a `"Deleted video"` tombstone in the uploads playlist. There is no `rejectionReason` to read -- the object is gone, so no field survives to carry one |
+| U6 | Long uploads require channel verification | `youtube.com/verify` by SMS or voice call, then 12 h / 256 GB. Detectable as `longUploadsStatus`: `allowed` / `eligible` / `disallowed`. Videos rejected before verification are destroyed, not held -- Google's docs say to re-upload |
+| U7 | There is a **propagation window of ~10-20 s** | Readback immediately after insert returns null status fields; `videos.delete` returned 404 for 8 of 11 videos seconds after upload and succeeded on retry |
+| U8 | `channels.list` returns **200 with empty `items`** when the Google account has no YouTube channel | Not an error. Sign-in looks healthy and uploads fail later for an unrelated-looking reason |
+| U9 | `statistics.videoCount` counts **public videos only** | Reported 0 for a channel holding 251 unlisted videos. Useless for detecting whether a channel is in use |
+| U10 | Very short clips are **unreliable test data** | 30 of 38 two-second clips were tombstoned while the 2-minute control survived. Anything that short plausibly goes down the Shorts pipeline. Use >= 2 min clips for any future test |
+
+### Not established
+
+- **Whether the 16-minute death was the duration limit.** n=1. The 2-minute
+  control on the same channel survived, but 2-second clips died too (U10), so
+  shortness is a live confound. Re-test pending.
+- **Whether the resumable path also discards silently.** The production path
+  (`MediaFileUpload(resumable=True)`) hit `uploadLimitExceeded` before reaching
+  the duration behaviour. It *does* raise a proper `HttpError` for the account
+  limit, which `youtube_upload.py:548` already handles.
+- **Whether the user is notified** when a video is destroyed.
+
+### Corrections to earlier claims
+
+- The deferral is **not** midnight-Pacific. `base_queue_processor.py:258`
+  already polls on a bounded interval (`quota_retry_minutes`, default 30) and
+  documents the same conclusion from 2026-08-04. The measured 75-90 min window
+  confirms that design and shows 30 min is well matched.
+  `docs/TROUBLESHOOTING.md` was stale and has been corrected.
+- The claim that **burst uploading triggers mass discard** is probably wrong.
+  The deaths track clip length (U10), not burst timing.
+
+### Product actions
+
+1. **Pre-flight `longUploadsStatus`** before any upload over 15 minutes; refuse
+   with a pointer to `youtube.com/verify` rather than burning a 90-minute upload.
+2. **Verify by presence, not by response.** Poll `videos.list` until the id
+   appears with `uploadStatus` in `uploaded`/`processed`; treat never-appearing
+   as failure. Checking `rejectionReason` alone does not work (U5).
+3. **Handle the no-channel case** (U8) as its own wizard state.
+4. **Fix the wizard's quota text** in `web/setup/router.py`, which still claims
+   ~3 games/day per OAuth client.

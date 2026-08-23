@@ -48,7 +48,7 @@ The app monitors available disk space to prevent running out of storage mid-down
 
 Several things can cause upload failures:
 
-- **Quota exceeded:** YouTube enforces a daily upload quota. The app detects this and automatically waits until midnight Pacific Time when the quota resets, then retries. No action is needed on your part.
+- **Quota exceeded:** YouTube refuses further uploads once you hit its limit. The app detects this, holds the upload, and re-probes every 30 minutes (`quota_retry_minutes`) until the limit frees. It deliberately does not wait for a fixed reset time: the limit that usually bites is an account-level one that rolls off on its own schedule -- measured at 75-90 minutes in one test, and observed still rejecting 3h39m after midnight Pacific in another. No action is needed on your part.
 - **Token expired:** If your YouTube authentication has expired, re-authenticate through the tray app's YouTube settings. The app sends an NTFY notification when this happens so you know to take action.
 - **Missing credentials:** Make sure `client_secret.json` is present in your `youtube/` directory. This file is required for YouTube API access.
 - **Upload interrupted:** If an upload is cut short (network drop, app restart, etc.), the file will be retried up to 3 times automatically.
