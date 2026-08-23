@@ -797,6 +797,42 @@ tbody tr:hover {
   background: var(--color-accent-light);
 }
 
+/* -------------------------------------------------------------- progress --
+   Determinate by default: only show this when there is a real count behind
+   it. Where the work cannot be measured, add .progress--indeterminate rather
+   than animating a number that means nothing.
+   -------------------------------------------------------------------------- */
+
+.progress {
+  height: 4px;
+  margin: 12px 0 0;
+  background: var(--color-bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--color-accent);
+  transition: width var(--transition-normal);
+}
+
+/* Work of unknown length: a band travels, and no percentage is implied. */
+.progress--indeterminate .progress-fill {
+  width: 35%;
+  animation: progress-sweep 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
 /* --------------------------------------------------------------- banners -- */
 
 .banner {

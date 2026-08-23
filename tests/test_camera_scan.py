@@ -231,3 +231,57 @@ class TestLocalNetworks:
         ):
             nets = [str(n) for n in local_ipv4_networks()]
         assert nets == ["192.168.86.0/24"]
+
+
+class TestScanProgress:
+    """The bar has to mean something, so the count has to be real."""
+
+    @pytest.mark.asyncio
+    async def test_progress_is_reported_for_every_address(self):
+        """Exactly one tick per address, ending at the total it announced."""
+        import ipaddress
+
+        from video_grouper.cameras.discovery import discover_on_lan
+
+        calls: list[tuple[int, int]] = []
+        net = [ipaddress.IPv4Network("10.9.9.0/29")]  # 6 usable hosts
+
+        with patch(
+            "video_grouper.cameras.discovery._connect", new=AsyncMock(return_value=None)
+        ):
+            await discover_on_lan(net, on_progress=lambda d, t: calls.append((d, t)))
+
+        # One priming call at zero, then one per host.
+        assert calls[0] == (0, 6)
+        assert calls[-1] == (6, 6)
+        assert [d for d, _ in calls] == [0, 1, 2, 3, 4, 5, 6]
+
+    @pytest.mark.asyncio
+    async def test_progress_counts_unreachable_hosts_too(self):
+        """A bar that only advanced on hits would stall on an empty network."""
+        import ipaddress
+
+        from video_grouper.cameras.discovery import discover_on_lan
+
+        calls: list[tuple[int, int]] = []
+        with patch(
+            "video_grouper.cameras.discovery._connect",
+            new=AsyncMock(side_effect=OSError("refused")),
+        ):
+            with pytest.raises(OSError):
+                await discover_on_lan(
+                    [ipaddress.IPv4Network("10.9.9.0/30")],
+                    on_progress=lambda d, t: calls.append((d, t)),
+                )
+        # Even the failures ticked, because the tick is in a finally.
+        assert calls[-1][0] > 0
+
+
+def test_sse_frames_are_well_formed():
+    """An SSE frame is terminated by a blank line; without it nothing fires."""
+    from video_grouper.web.setup.router import _sse
+
+    frame = _sse("progress", {"done": 5, "total": 10})
+    assert frame.startswith("event: progress\n")
+    assert frame.endswith("\n\n")
+    assert '"done": 5' in frame

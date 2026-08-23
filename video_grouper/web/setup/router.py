@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -10,7 +11,7 @@ import string
 from pathlib import Path
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from video_grouper.pipeline.presets import apply_preset
 from video_grouper.utils.config import (
@@ -40,6 +41,11 @@ from video_grouper.web.setup.state import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sse(event: str, payload: dict) -> str:
+    """Format one server-sent event. The blank line terminates the frame."""
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
 
 _PAGE_TEMPLATE = """\
@@ -289,35 +295,111 @@ _CAMERA_SCAN_JS = """
     });
   }
 
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
+  const bar = document.getElementById("scan-bar");
+  const fill = document.getElementById("scan-bar-fill");
+
+  function showProgress(done, total) {
+    // Only claim a percentage while there is a real count behind it.
+    if (!total) return;
+    bar.hidden = false;
+    bar.classList.remove("progress--indeterminate");
+    const pct = Math.round((done / total) * 100);
+    fill.style.width = pct + "%";
+    if (done >= total) {
+      // The sweep is finished but the ONVIF listen window has not closed.
+      // Say so rather than let a full bar sit there looking stuck.
+      out.textContent = "Checked " + total + " addresses. Listening for ONVIF replies…";
+      // Clear the inline width so the indeterminate rule can take over.
+      fill.style.width = "";
+      bar.classList.add("progress--indeterminate");
+    } else {
+      out.textContent = "Checking " + total + " addresses on this network… " + pct + "%";
+    }
+  }
+
+  function hideProgress() {
+    bar.hidden = true;
+    bar.classList.remove("progress--indeterminate");
+    fill.style.width = "0%";
+  }
+
+  function finish(devices) {
+    hideProgress();
+    if (devices.length === 0) {
+      out.textContent =
+        "No cameras answered. They may be on another network, or blocked by " +
+        "this machine's firewall. Enter the camera manually below.";
+      const manual = document.querySelector("details.panel");
+      if (manual) manual.open = true;
+    } else {
+      out.textContent =
+        devices.length === 1 ? "Found 1 camera." : "Found " + devices.length + " cameras.";
+      render(devices);
+    }
+    btn.disabled = false;
+  }
+
+  function scanStreaming() {
+    // EventSource gives progress as it happens. The count is real: the sweep
+    // knows every address it intends to check before it starts.
+    const src = new EventSource("/setup/camera/scan/stream");
+    let settled = false;
+
+    src.addEventListener("progress", (e) => {
+      const d = JSON.parse(e.data);
+      showProgress(d.done, d.total);
+    });
+    src.addEventListener("done", (e) => {
+      settled = true;
+      src.close();
+      finish(JSON.parse(e.data).devices || []);
+    });
+    src.addEventListener("failed", (e) => {
+      settled = true;
+      src.close();
+      hideProgress();
+      out.textContent = JSON.parse(e.data).message || "Scan failed.";
+      btn.disabled = false;
+    });
+    src.onerror = () => {
+      if (settled) return;
+      // The stream died. Fall back to the plain request rather than leaving
+      // the user with a stalled bar.
+      src.close();
+      scanPlain();
+    };
+  }
+
+  async function scanPlain() {
+    bar.hidden = false;
+    fill.style.width = "";
+    bar.classList.add("progress--indeterminate");
     out.textContent = "Looking for cameras on this network…";
-    list.innerHTML = "";
     try {
       const r = await fetch("/setup/camera/scan", { method: "POST" });
       const data = await r.json();
-      const devices = data.devices || [];
       if (!data.ok) {
+        hideProgress();
         out.textContent = data.message || "Scan failed.";
-      } else if (devices.length === 0) {
-        // Say what to do about it, not just that it failed.
-        out.textContent =
-          "No cameras answered. They may be on another network, have ONVIF " +
-          "turned off, or be blocked by this machine's firewall. Enter the " +
-          "camera manually below.";
-        const manual = document.querySelector("details.panel");
-        if (manual) manual.open = true;
-      } else {
-        out.textContent =
-          devices.length === 1 ? "Found 1 camera." : "Found " + devices.length + " cameras.";
-        render(devices);
+        btn.disabled = false;
+        return;
       }
+      finish(data.devices || []);
     } catch (e) {
+      hideProgress();
       out.textContent = "Scan failed: " + e;
-    } finally {
       btn.disabled = false;
     }
+  }
+
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    list.innerHTML = "";
+    hideProgress();
+    if (window.EventSource) scanStreaming();
+    else scanPlain();
   });
+
 })();
 </script>
 """
@@ -577,7 +659,11 @@ def _camera_body(state) -> str:
         '<div class="btn-row">'
         '<button type="button" class="btn" id="scan-btn">'
         "Scan for cameras</button>"
-        '<span id="scan-result" class="hint"></span>'
+        '<span id="scan-result" class="hint" role="status" aria-live="polite">'
+        "</span>"
+        "</div>"
+        '<div class="progress" id="scan-bar" hidden>'
+        '<div class="progress-fill" id="scan-bar-fill"></div>'
         "</div>"
         '<div id="scan-list" class="path-list" style="margin-top:12px"></div>'
         "</section>"
@@ -889,6 +975,66 @@ def build_router(config_path: Path) -> APIRouter:
                 for d in devices
             ],
         }
+
+    @router.get("/camera/scan/stream")
+    async def camera_scan_stream() -> StreamingResponse:
+        """Stream scan progress, then the result, as server-sent events.
+
+        The progress is real, not a pacifier: the sweep knows every address it
+        intends to check before it starts, and reports each one as it lands.
+        The ONVIF probe cannot be measured that way -- it is a fixed listen
+        window -- so once the sweep finishes the client is told it is waiting
+        on ONVIF rather than being shown a bar that invents movement.
+
+        GET because EventSource only issues GETs. Safe: the scan changes
+        nothing on this machine, and the same-origin Host allowlist still
+        applies (see auth_server's middleware).
+        """
+        from video_grouper.cameras.discovery import discover_cameras
+
+        # Updated from the sweep callback, sampled by the generator. A shared
+        # cell rather than a queue: 1270 addresses would mean 1270 events, and
+        # the client only ever needs the latest number.
+        state = {"done": 0, "total": 0}
+
+        def on_progress(done: int, total: int) -> None:
+            state["done"] = done
+            state["total"] = total
+
+        async def events():
+            task = asyncio.create_task(discover_cameras(3.0, on_progress))
+            try:
+                while not task.done():
+                    yield _sse("progress", state)
+                    await asyncio.sleep(0.15)
+
+                devices = await task
+            except Exception as exc:
+                logger.warning("Camera scan failed: %s", exc)
+                yield _sse("failed", {"message": f"Scan failed: {exc}"})
+                return
+
+            yield _sse(
+                "done",
+                {
+                    "devices": [
+                        {
+                            "ip": d.ip,
+                            "name": d.name,
+                            "hardware": d.hardware,
+                            "vendor": d.vendor,
+                            "label": d.label,
+                        }
+                        for d in devices
+                    ]
+                },
+            )
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @router.post("/camera/identify")
     async def camera_identify(

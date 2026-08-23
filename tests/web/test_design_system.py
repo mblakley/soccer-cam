@@ -119,12 +119,24 @@ def test_record_is_not_the_accent():
     assert accent.lower() != record.lower()
 
 
-def test_recording_is_the_only_looping_animation():
-    """Motion is what separates 'recording' from 'error'. Keep it exclusive."""
+#: Loops allowed in the stylesheet, and why each one earns it.
+#:   tally-live     the capture indicator -- motion is what separates
+#:                  "recording" from "error", which share a hue
+#:   progress-sweep a progress bar with no measurable total; it indicates
+#:                  duration, not state, so it does not compete with the tally
+ALLOWED_LOOPS = {"tally-live", "progress-sweep"}
+
+
+def test_no_status_indicator_loops_except_the_tally():
+    """Motion is what separates 'recording' from 'error'. Keep it exclusive.
+
+    New loops need a line in ALLOWED_LOOPS saying what they mean. Anything
+    that loops next to a status colour is competing with the tally.
+    """
     css = _text(SHEET)
-    looping = re.findall(r"animation:\s*([a-z-]+)[^;]*infinite", css)
-    assert set(looping) <= {"tally-live"}, (
-        f"only the tally may loop; found {sorted(set(looping))}"
+    looping = set(re.findall(r"animation:\s*([a-z-]+)[^;]*infinite", css))
+    assert looping <= ALLOWED_LOOPS, (
+        f"undocumented looping animation(s): {sorted(looping - ALLOWED_LOOPS)}"
     )
 
 

@@ -11,6 +11,7 @@ import struct
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 
@@ -431,8 +432,18 @@ async def _fingerprint(ip: str, client: httpx.AsyncClient) -> DiscoveredDevice |
     return None
 
 
-async def _reachable(ip: str, sem: asyncio.Semaphore) -> str | None:
+async def _reachable(
+    ip: str, sem: asyncio.Semaphore, tick: Callable[[], None] | None = None
+) -> str | None:
     """Return ``ip`` if something accepts a connection on the probe port."""
+    try:
+        return await _connect(ip, sem)
+    finally:
+        if tick is not None:
+            tick()
+
+
+async def _connect(ip: str, sem: asyncio.Semaphore) -> str | None:
     async with sem:
         try:
             _, writer = await asyncio.wait_for(
@@ -450,6 +461,7 @@ async def _reachable(ip: str, sem: asyncio.Semaphore) -> str | None:
 
 async def discover_on_lan(
     networks: list[ipaddress.IPv4Network] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[DiscoveredDevice]:
     """Find cameras by sweeping the local network and fingerprinting hosts.
 
@@ -461,6 +473,10 @@ async def discover_on_lan(
 
     Two passes so it stays quick: a wide TCP knock to find what is even there,
     then an HTTP fingerprint of only the hosts that answered.
+
+    ``on_progress(done, total)`` is called as each address is checked, so a
+    caller can show real progress. The count is exact: the host list is known
+    before the sweep starts.
     """
     nets = local_ipv4_networks() if networks is None else networks
     hosts = [str(h) for net in nets for h in net.hosts()]
@@ -468,9 +484,20 @@ async def discover_on_lan(
         return []
 
     sem = asyncio.Semaphore(_SWEEP_CONCURRENCY)
+    total = len(hosts)
+    done = 0
+
+    def tick() -> None:
+        nonlocal done
+        done += 1
+        if on_progress is not None:
+            on_progress(done, total)
+
+    if on_progress is not None:
+        on_progress(0, total)
     reachable = [
         ip
-        for ip in await asyncio.gather(*(_reachable(h, sem) for h in hosts))
+        for ip in await asyncio.gather(*(_reachable(h, sem, tick) for h in hosts))
         if ip is not None
     ]
     logger.info(
@@ -494,7 +521,10 @@ async def discover_on_lan(
     return devices
 
 
-async def discover_cameras(timeout: float = 3.0) -> list[DiscoveredDevice]:
+async def discover_cameras(
+    timeout: float = 3.0,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[DiscoveredDevice]:
     """Find cameras by every means available, and merge the answers.
 
     ONVIF gives a model name without credentials but only when the owner has
@@ -504,7 +534,7 @@ async def discover_cameras(timeout: float = 3.0) -> list[DiscoveredDevice]:
     """
     onvif, swept = await asyncio.gather(
         asyncio.to_thread(discover_onvif_details, timeout),
-        discover_on_lan(),
+        discover_on_lan(on_progress=on_progress),
         return_exceptions=True,
     )
     if isinstance(onvif, BaseException):
