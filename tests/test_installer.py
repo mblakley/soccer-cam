@@ -230,27 +230,51 @@ def test_uninstall_removes_everything_it_installed(tmp_path):
         )
         assert (sandbox / "uninstall.exe").is_file(), "install did not land"
 
+        # /S alone is silent but NOT synchronous: NSIS copies itself to %TEMP%,
+        # relaunches, and the first process returns immediately -- measured at
+        # 1.06s to return against 3.19s to actually finish. Polling for the
+        # directory to vanish would make this test a race.
+        #
+        # _?=<dir> runs the uninstaller in place and blocks until it is done.
+        # The documented cost is that NSIS cannot delete a running executable,
+        # so uninstall.exe (and therefore $INSTDIR) survive -- which is why the
+        # assertion below excludes it. This is also exactly what the registered
+        # QuietUninstallString passes.
         subprocess.run(
-            f'"{sandbox / "uninstall.exe"}" /S', shell=True, check=True, timeout=180
+            f'"{sandbox / "uninstall.exe"}" /S _?={sandbox}',
+            shell=True,
+            check=True,
+            timeout=180,
         )
-        # NSIS relaunches itself from %TEMP%; give it a moment to finish.
-        for _ in range(40):
-            if not sandbox.exists():
-                break
-            _sleep(0.25)
 
         leftovers = (
-            sorted(p.name for p in sandbox.iterdir()) if sandbox.exists() else []
+            sorted(p.name for p in sandbox.iterdir() if p.name != "uninstall.exe")
+            if sandbox.exists()
+            else []
         )
         assert not leftovers, f"uninstall left {leftovers} in {sandbox}"
     finally:
         harness.unlink(missing_ok=True)
 
 
-def _sleep(seconds: float) -> None:
-    import time
+def test_a_silent_uninstall_string_is_registered():
+    """Without QuietUninstallString, winget/MDM launch the interactive GUI.
 
-    time.sleep(seconds)
+    It also carries _?=, so the caller blocks until the uninstall finishes
+    rather than racing a detached copy running out of %TEMP%.
+    """
+    install = _install()
+    assert '"QuietUninstallString"' in install, (
+        "register QuietUninstallString so unattended tooling can remove this"
+    )
+    # The value embeds NSIS-escaped quotes ($\"), so take the rest of the line
+    # rather than trying to parse NSIS's quoting rules.
+    quiet = re.search(r'"QuietUninstallString"(.*)', install)
+    assert quiet, "QuietUninstallString should have a value"
+    assert "/S" in quiet.group(1), "the quiet string must be silent"
+    assert "_?=" in quiet.group(1), (
+        "the quiet string must use _?= so the caller waits for it to finish"
+    )
 
 
 @pytest.mark.integration
