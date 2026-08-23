@@ -372,6 +372,13 @@ Section "Install" SecInstall
     ; later if the user picks a different storage path.
     WriteRegStr HKLM "Software\${APPNAME}" "StoragePath" "${STORAGE_PATH}"
 
+    ; Record where we installed, because InstallDirRegKey (top of this file)
+    ; reads it back to default $INSTDIR on the next run. Without it an
+    ; upgrade over a custom location silently retargets to $PROGRAMFILES64
+    ; and leaves the old directory behind -- and the auto-updater runs the
+    ; installer with no /D, so it is the upgrade path that hits this.
+    WriteRegStr HKLM "Software\${APPNAME}" "Install_Dir" "$INSTDIR"
+
     !insertmacro WritePhase "complete"
 SectionEnd
 
