@@ -127,28 +127,43 @@ def tally(state: str = "idle") -> str:
     return f'<div class="tally" data-state="{state}" role="presentation"></div>'
 
 
-def topbar(active: str = "", *, crumb: str = "") -> str:
+def topbar(
+    active: str = "", *, crumb: str = "", onboarding_complete: bool = True
+) -> str:
     """Return the shared topbar.
 
     Args:
         active: Path of the current page (e.g. ``/config``), marked with
             ``aria-current`` so it reads as current to assistive tech too.
         crumb: Optional trailing context, e.g. a section name.
+        onboarding_complete: When ``False``, Status is left out of the nav.
+            ``/`` redirects to the wizard until setup is finished (a
+            deliberate product decision -- a fresh install should land
+            there), so offering Status would be offering a link that
+            silently lands somewhere else. A nav that lies is worse than a
+            nav with one fewer item; Status returns the moment setup does.
     """
     links = []
     for href, label in _NAV:
+        if href == "/" and not onboarding_complete:
+            continue
         current = ' aria-current="page"' if href == active else ""
         links.append(f'<a href="{href}"{current}>{label}</a>')
     nav = "".join(links)
 
     trailing = f'<span class="crumb">{crumb}</span>' if crumb else ""
 
+    # The wordmark goes home, and while setup is unfinished "home" is the
+    # wizard -- "/" would bounce there anyway, via a redirect the reader did
+    # not ask for.
+    home = "/" if onboarding_complete else "/setup"
+
     # Nav and crumb share one right-hand group so the nav sits in the same
     # place on every page. Left as siblings under space-between, the nav slid
     # to the centre whenever a crumb was present.
     return (
         '<header class="topbar"><div class="topbar-inner">'
-        '<a class="brand" href="/">Soccer<span class="dot">·</span>Cam</a>'
+        f'<a class="brand" href="{home}">Soccer<span class="dot">·</span>Cam</a>'
         '<div class="topbar-end">'
         f'<nav class="topnav">{nav}</nav>'
         f"{trailing}"
@@ -200,6 +215,7 @@ def page(
     extra_css: str = "",
     extra_js: str = "",
     refresh: int | None = None,
+    onboarding_complete: bool = True,
 ) -> str:
     """Assemble a complete page from the shared chrome.
 
@@ -212,6 +228,7 @@ def page(
         extra_css: Page-specific CSS. See :func:`head`.
         extra_js: Page-specific script, injected before ``</body>``.
         refresh: Seconds between automatic reloads. See :func:`head`.
+        onboarding_complete: See :func:`topbar`.
     """
     script = f"<script>{extra_js}</script>" if extra_js else ""
     return (
@@ -220,7 +237,7 @@ def page(
         f"{head(title, extra_css=extra_css, refresh=refresh)}"
         "</head><body>"
         f"{tally(capture_state)}"
-        f"{topbar(active, crumb=crumb)}"
+        f"{topbar(active, crumb=crumb, onboarding_complete=onboarding_complete)}"
         f"{body}"
         f"{script}"
         "</body></html>"

@@ -614,10 +614,23 @@ def _render_steps(active: str) -> str:
     return '<div class="steps">' + " &rsaquo; ".join(parts) + "</div>"
 
 
-def _page(active: str, title: str, lede: str, body: str) -> str:
+def _page(
+    active: str,
+    title: str,
+    lede: str,
+    body: str,
+    onboarding_complete: bool = False,
+) -> str:
+    # Defaults to False: this is the wizard, so assume setup is unfinished
+    # unless the caller knows better. Status is dropped from the nav while
+    # that holds, because "/" would redirect straight back here.
     return (
         _PAGE_TEMPLATE.replace("__CHROME_HEAD__", chrome.head(f"Setup · {title}"))
-        .replace("__CHROME_TOPBAR__", chrome.tally() + chrome.topbar("/setup"))
+        .replace(
+            "__CHROME_TOPBAR__",
+            chrome.tally()
+            + chrome.topbar("/setup", onboarding_complete=onboarding_complete),
+        )
         .replace("<__STEPS__>", _render_steps(active))
         .replace("__TITLE__", title)
         .replace("__LEDE__", lede)

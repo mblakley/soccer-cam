@@ -284,6 +284,23 @@ def test_topbar_nav_position_does_not_move_between_pages():
         assert bar.index("topbar-end") < bar.index("topnav")
 
 
+def test_nav_offers_no_link_that_redirects_elsewhere():
+    """While setup is unfinished, "/" bounces to the wizard.
+
+    Offering Status there would be offering a link that silently lands
+    somewhere else -- which is exactly what it did until someone clicked it.
+    """
+    mid = chrome.topbar("/setup", onboarding_complete=False)
+    assert ">Status</a>" not in mid, "Status is unreachable until setup is done"
+    assert ">Setup</a>" in mid and ">Settings</a>" in mid
+    # The wordmark goes somewhere reachable too, not through the redirect.
+    assert 'class="brand" href="/setup"' in mid
+
+    done = chrome.topbar("/", onboarding_complete=True)
+    assert ">Status</a>" in done, "Status returns once setup is finished"
+    assert 'class="brand" href="/"' in done
+
+
 def test_every_class_chrome_emits_is_styled():
     """Markup must not reference a class the stylesheet never defines.
 

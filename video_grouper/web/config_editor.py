@@ -24,7 +24,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ValidationError
 
-from video_grouper.utils.config import Config, load_config, save_config
+from video_grouper.utils.config import (
+    Config,
+    config_needs_onboarding,
+    load_config,
+    save_config,
+)
 from video_grouper.web import chrome
 
 logger = logging.getLogger(__name__)
@@ -392,7 +397,9 @@ def _render_section(section_alias: str, model: BaseModel) -> str:
     )
 
 
-def _render_page(config: Config, flash: str = "") -> str:
+def _render_page(
+    config: Config, flash: str = "", onboarding_complete: bool = True
+) -> str:
     sections: list[str] = []
     rail: list[str] = []
     for field_name, field_info in Config.model_fields.items():
@@ -413,7 +420,8 @@ def _render_page(config: Config, flash: str = "") -> str:
         _PAGE.replace("__CHROME_HEAD__", chrome.head("Settings"))
         .replace(
             "__CHROME_TOPBAR__",
-            chrome.tally() + chrome.topbar("/config"),
+            chrome.tally()
+            + chrome.topbar("/config", onboarding_complete=onboarding_complete),
         )
         .replace("__FLASH__", flash)
         .replace("__SECTIONS__", "\n".join(sections))
@@ -519,6 +527,18 @@ def build_router(config_path: Path) -> APIRouter:
     """
     router = APIRouter()
 
+    def _done() -> bool:
+        """Whether setup has been finished, for the nav's benefit.
+
+        Settings is reachable during onboarding, and while onboarding is
+        unfinished ``/`` redirects to the wizard -- so the nav must not offer
+        Status from here either.
+        """
+        try:
+            return not config_needs_onboarding(config_path)
+        except Exception:  # a nav decision must never break the page
+            return True
+
     @router.get("/config", response_class=HTMLResponse)
     def get_config(request: Request, saved: int = 0) -> HTMLResponse:
         config = load_config(config_path)
@@ -530,7 +550,9 @@ def build_router(config_path: Path) -> APIRouter:
         flash = ""
         if saved:
             flash = '<div class="banner banner--ok">Configuration saved. The service picks it up on its next tick.</div>'
-        return HTMLResponse(_render_page(config, flash=flash))
+        return HTMLResponse(
+            _render_page(config, flash=flash, onboarding_complete=_done())
+        )
 
     @router.post("/config", response_class=HTMLResponse)
     async def post_config(request: Request) -> HTMLResponse:
@@ -549,7 +571,10 @@ def build_router(config_path: Path) -> APIRouter:
                 '<div class="banner banner--bad"><strong>Validation failed:</strong>'
                 f"<ul>{err_items}</ul></div>"
             )
-            return HTMLResponse(_render_page(config, flash=flash), status_code=422)
+            return HTMLResponse(
+                _render_page(config, flash=flash, onboarding_complete=_done()),
+                status_code=422,
+            )
 
         try:
             save_config(new_config, config_path)
@@ -559,7 +584,10 @@ def build_router(config_path: Path) -> APIRouter:
                 '<div class="banner banner--bad"><strong>Could not save</strong>Could not write to '
                 f"<code>{html.escape(str(config_path))}</code>: {html.escape(str(exc))}</div>"
             )
-            return HTMLResponse(_render_page(new_config, flash=flash), status_code=500)
+            return HTMLResponse(
+                _render_page(new_config, flash=flash, onboarding_complete=_done()),
+                status_code=500,
+            )
 
         return RedirectResponse(url="/config?saved=1", status_code=303)
 
