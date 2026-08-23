@@ -293,13 +293,17 @@ h3 {
 }
 
 .topnav a {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   padding: 6px 12px;
   border-radius: var(--radius-sm);
+  /* Transparent up front so marking a link current adds no height and
+     nothing shifts sideways. */
+  border-bottom: 2px solid transparent;
   color: var(--color-text-secondary);
   transition:
     background-color var(--transition-fast),
+    border-color var(--transition-fast),
     color var(--transition-fast);
 }
 
@@ -309,9 +313,13 @@ h3 {
   text-decoration: none;
 }
 
+/* Current page: an underline, not a filled pill. This is TTT's documented
+   nav pattern -- ui-design.md: "Active: bottom 2px solid var(--color-accent)"
+   -- and a filled accent block reads as a button you press rather than a
+   place you already are. */
 .topnav a[aria-current='page'] {
   color: var(--color-accent);
-  background: var(--color-accent-light);
+  border-bottom-color: var(--color-accent);
 }
 
 /* ---------------------------------------------------------------- layout -- */

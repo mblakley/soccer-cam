@@ -140,6 +140,30 @@ def test_no_status_indicator_loops_except_the_tally():
     )
 
 
+def test_nav_matches_ttts_documented_pattern():
+    """The current page is underlined, not filled.
+
+    TTT's ui-design.md pins this: nav links are 14px, and the active one gets
+    "bottom 2px solid var(--color-accent)". Soccer-Cam shipped 13px with a
+    filled accent background instead -- a divergence in the very chrome that
+    is supposed to make the two products look like one system.
+    """
+    css = _text(SHEET)
+    start = css.index(".topnav a {")
+    # End at the next section banner *after* the nav block, not the first in
+    # the file -- which sits above it.
+    nav = css[start : css.index("/* ------", start)]
+
+    assert "font-size: 14px;" in nav, "TTT pins nav links at 14px"
+    current = nav[nav.index(".topnav a[aria-current='page']") :]
+    assert "border-bottom-color: var(--color-accent)" in current, (
+        "the current page is marked with an underline"
+    )
+    assert "background" not in current, (
+        "a filled accent block reads as a button, not a location"
+    )
+
+
 def test_no_pill_radii():
     css = _text(SHEET)
     assert not re.search(r"border-radius:\s*9{3,4}px", css)
