@@ -191,6 +191,8 @@ cython_debug/
 tests/e2e/test_data/*
 tests/e2e/test_logs/*
 tests/e2e/test_pids.json
+# Run artifact: the tray agent's single-instance lock.
+tests/e2e/tray_agent.lock
 tests/e2e/test_clips/
 
 # Ralph Wiggum loop state (temporary)

@@ -1,131 +1,110 @@
-"""Generate the synthetic recordings the E2E camera simulator serves.
+"""Stage real camera recordings as the E2E camera simulator's fixture.
 
-``tests/e2e/test_clips/`` is gitignored, so a fresh clone has no fixture data:
-the simulator mounts an empty directory, serves nothing, and
+``tests/e2e/test_clips/`` is gitignored, so a fresh clone mounts an empty
+directory into the simulator, which then serves nothing and
 ``test_complete_pipeline`` ends at ``groups_created: 0/2`` no matter what the
-pipeline does. This regenerates that fixture from nothing, so the E2E suite is
-runnable without hunting down real footage.
+pipeline does.
 
-Synthetic on purpose. The E2E test exercises *plumbing* — discover, download,
-group, combine, trim, hand off, upload — none of which cares what is in the
-frames. Real game footage would be gigabytes, cannot be committed, and would
-make the fixture depend on a specific match.
+This copies real recordings out of ``shared_data/`` — the same thing
+``run_simulator_test.ps1`` does with a hardcoded pair. Real files, not
+synthetic ones: the download path pulls a raw H.265 elementary stream off the
+camera and remuxes it, and a fabricated encode fails that remux with EINVAL
+even when the codec and resolution match. The bytes have to have come from a
+camera.
 
 Run::
 
     uv run python -m tests.e2e.make_test_clips
 
-Written with PyAV rather than an ffmpeg subprocess, matching how the rest of
-soccer-cam does video work.
+Then re-seed the simulator, which caches its manifest in a docker volume and
+will otherwise keep serving whatever it saw first::
+
+    docker compose --profile reolink down -v
 """
 
 from __future__ import annotations
 
 import argparse
-from fractions import Fraction
+import shutil
 from pathlib import Path
 
-import av
-import numpy as np
+# The harness asserts two groups were created. The simulator seeds what it
+# finds into groups of three with a gap between them, so four clips yields the
+# two groups it wants.
+CLIP_COUNT = 4
 
-# Small and short: the suite spends its time on pipeline stages, not decoding.
-# Still a real MP4, because combine/trim run actual ffmpeg over these.
-#
-# H.265 to match what the cameras actually record. The Baichuan download path
-# remuxes a raw elementary stream and defaults to H265 when the camera does not
-# report a codec (reolink_download._download_and_mux_async), so an H.264
-# fixture is parsed as H.265 and the remux fails with EINVAL.
-WIDTH = 640
-HEIGHT = 360
-FPS = 15
-CLIP_SECONDS = 10
-
-# The harness asserts two groups were created. Clips land in the same group
-# when they are within GROUP_GAP_SECONDS (5s) of each other, so two clips per
-# group, with a gap between the groups that is comfortably larger.
-CLIPS_PER_GROUP = 2
-GROUP_COUNT = 2
+# Recordings the camera actually wrote. Reolink names them
+# Rec<stream>_DST<date>_<start>_<end>_..., which is also how they sort.
+CLIP_GLOB = "Rec*.mp4"
 
 
-def _frame(index: int, total: int, group: int) -> av.VideoFrame:
-    """One frame: a moving bar over a per-group background.
+def find_source_clips(search_root: Path, count: int) -> list[Path]:
+    """Pick the smallest real recordings available, for a quick test run.
 
-    Deliberately not a still image — a static frame compresses to almost
-    nothing and would not exercise the decoder the way a real recording does.
+    Smallest rather than first: each one is downloaded over a simulated camera
+    protocol during the test, so a 300 MB clip costs minutes and buys no extra
+    coverage.
     """
-    img = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
-    # Distinct background per group, so a human eyeballing the output can tell
-    # which group a combined video came from.
-    img[:, :] = (30 + 40 * group, 45, 70 - 20 * group)
-
-    # A bar sweeping left to right over the clip.
-    x = int((index / max(total - 1, 1)) * (WIDTH - 60))
-    img[HEIGHT // 3 : 2 * HEIGHT // 3, x : x + 60] = (240, 240, 240)
-
-    return av.VideoFrame.from_ndarray(img, format="rgb24")
-
-
-def write_clip(path: Path, group: int) -> None:
-    """Write one H.265 MP4 the camera simulator can serve."""
-    total = FPS * CLIP_SECONDS
-    with av.open(str(path), mode="w") as container:
-        stream = container.add_stream("libx265", rate=FPS)
-        stream.width = WIDTH
-        stream.height = HEIGHT
-        stream.pix_fmt = "yuv420p"
-        # Keep every clip independently decodable at its start, which is what
-        # lets the pipeline concatenate them without re-encoding.
-        stream.codec_context.options = {
-            "g": str(FPS),
-            "preset": "ultrafast",
-            # Annex-B friendly: the download path pulls a raw elementary
-            # stream off the camera and remuxes it.
-            "x265-params": "log-level=none",
-        }
-        stream.time_base = Fraction(1, FPS)
-
-        for i in range(total):
-            for packet in stream.encode(_frame(i, total, group)):
-                container.mux(packet)
-        for packet in stream.encode():
-            container.mux(packet)
+    candidates = [
+        p
+        for p in search_root.rglob(CLIP_GLOB)
+        # combined.mp4 / *-raw.mp4 are pipeline *outputs*, not camera files.
+        if p.is_file() and not p.name.startswith("combined")
+    ]
+    return sorted(candidates, key=lambda p: p.stat().st_size)[:count]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    here = Path(__file__).resolve().parent
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=here.parents[1] / "shared_data",
+        help="where to look for real recordings (default: shared_data/)",
+    )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(__file__).parent / "test_clips",
-        help="directory to write clips into (default: tests/e2e/test_clips)",
+        default=here / "test_clips",
+        help="directory to stage clips into (default: tests/e2e/test_clips)",
     )
+    parser.add_argument("--count", type=int, default=CLIP_COUNT)
     parser.add_argument(
-        "--force",
-        action="store_true",
-        help="overwrite clips that are already there",
+        "--force", action="store_true", help="restage even if clips are present"
     )
     args = parser.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
-    existing = sorted(args.out.glob("*.mp4"))
-    if existing and not args.force:
-        print(f"{args.out} already has {len(existing)} clip(s); pass --force to redo.")
+    if sorted(args.out.glob("*.mp4")) and not args.force:
+        print(f"{args.out} already has clips; pass --force to restage.")
         return 0
 
-    written = []
-    for group in range(GROUP_COUNT):
-        for n in range(CLIPS_PER_GROUP):
-            # Named in the order the simulator should seed them. It assigns the
-            # recording timestamps itself, so the names only need to sort.
-            path = args.out / f"clip_g{group}_{n}.mp4"
-            write_clip(path, group)
-            written.append(path)
-            print(f"  wrote {path.name} ({path.stat().st_size:,} bytes)")
+    if not args.source.exists():
+        print(f"No source directory at {args.source}.")
+        print("Point --source at a folder holding real camera recordings.")
+        return 1
 
-    print(
-        f"\n{len(written)} clips in {args.out} "
-        f"-- {GROUP_COUNT} groups x {CLIPS_PER_GROUP}, {CLIP_SECONDS}s each."
-    )
+    clips = find_source_clips(args.source, args.count)
+    if len(clips) < args.count:
+        print(
+            f"Found only {len(clips)} recording(s) under {args.source}; "
+            f"need {args.count}."
+        )
+        print("Point --source at a folder holding real camera recordings.")
+        return 1
+
+    for old in args.out.glob("*.mp4"):
+        old.unlink()
+
+    total = 0
+    for clip in clips:
+        shutil.copy2(clip, args.out / clip.name)
+        total += clip.stat().st_size
+        print(f"  staged {clip.name} ({clip.stat().st_size / 1048576:.1f} MB)")
+
+    print(f"\n{len(clips)} clips in {args.out} ({total / 1048576:.1f} MB).")
+    print("Re-seed the simulator: docker compose --profile reolink down -v")
     return 0
 
 
