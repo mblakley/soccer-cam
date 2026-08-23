@@ -245,10 +245,7 @@ __CHROME_TOPBAR__
     <ol>__RAIL__</ol>
   </aside>
   <div>
-    <div class="page-header">
-      <h1 class="headline">Settings</h1>
-      <a class="btn btn-secondary btn-sm" href="/setup/welcome">Run setup</a>
-    </div>
+    <h1 class="headline">Settings</h1>
     <p class="lede">Every setting the pipeline persists. Passwords and secrets show blank &mdash; leave them empty to keep the stored value.</p>
     <p class="lede">YouTube <code>client_secret.json</code> + token are managed on <a href="/#youtube">Status</a> &mdash; binary credential files do not fit this form.</p>
     __FLASH__

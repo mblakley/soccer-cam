@@ -82,23 +82,23 @@ Mono is also the eyebrow face: 11px, `letter-spacing: 0.2em`, uppercase.
 
 ## Structure
 
-### Navigation: two places, and tasks
+### Navigation: places, and tasks
 
-The topbar has exactly **two** destinations, because there are only two ongoing
-modes for an appliance:
+The topbar lists the places you go on purpose:
 
 - **Status** (`/`) — what it is doing right now
-- **Settings** (`/config`) — everything you can change
+- **Settings** (`/config`) — everything you can change, as a reference
+- **Setup** (`/setup`) — the same ground, walked in order
 
-Everything else is a **task**, reached from the context it acts on, and marked
-with a crumb rather than a nav highlight:
+Settings and Setup do overlap, and that was the argument for leaving Setup out
+at first. It was the wrong call: people look for Setup in the nav, and burying
+it in page text made it unfindable. Settings is the reference; Setup is the
+walkthrough. Name them so the difference is obvious and let both be reachable.
 
-- **`/setup/*`** — onboarding. Entered automatically while the config is
-  incomplete; offered from Settings as "Run setup again". As a nav peer of
-  Settings it would be a second door to the same fields with nothing to say
-  which door to use.
-- **`/stitch`** — seam calibration. A job you do after a knock or a remount, on
-  a phone, so it launches from the camera it belongs to.
+A **task** stays out of the nav and carries a crumb instead:
+
+- **`/stitch`** — seam calibration. It acts on a specific camera and is
+  launched from that camera, not from a global menu.
 
 Long pages get an in-page rail (`.shell--rail`) listing their sections.
 

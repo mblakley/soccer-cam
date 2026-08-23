@@ -617,7 +617,7 @@ def _render_steps(active: str) -> str:
 def _page(active: str, title: str, lede: str, body: str) -> str:
     return (
         _PAGE_TEMPLATE.replace("__CHROME_HEAD__", chrome.head(f"Setup · {title}"))
-        .replace("__CHROME_TOPBAR__", chrome.tally() + chrome.topbar(crumb="Setup"))
+        .replace("__CHROME_TOPBAR__", chrome.tally() + chrome.topbar("/setup"))
         .replace("<__STEPS__>", _render_steps(active))
         .replace("__TITLE__", title)
         .replace("__LEDE__", lede)

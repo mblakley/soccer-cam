@@ -33,20 +33,20 @@ _FONTS = (
 
 #: Top-level destinations, in the order they appear in the topbar.
 #:
-#: Two, deliberately. There are only two ongoing modes for this appliance:
-#: watch what it is doing, or change what it does. The other two page groups
-#: are tasks, not places, and are reached from the context they act on:
+#: Setup is here because that is where people look for it. It was left out
+#: at first on the argument that, as a peer of Settings, it is a second door
+#: to the same fields -- true, but it is also the guided way through them,
+#: and burying it made it unfindable. Settings is the reference; Setup is the
+#: walkthrough. Both are places you go on purpose.
 #:
-#:   /setup/*   onboarding. Entered automatically while the config is
-#:              incomplete, and offered from Settings as "Run setup again".
-#:              As a peer of Settings it would be a second door to the same
-#:              fields with nothing to say which door to use.
-#:   /stitch    seam calibration. A maintenance job after a knock or a
-#:              remount, done on a phone at the pitch, so it is launched from
-#:              the camera it belongs to rather than from a global menu.
+#: Still not here:
+#:   /stitch  seam calibration. A maintenance job after a knock or a remount,
+#:            done on a phone at the pitch, so it is launched from the camera
+#:            it belongs to rather than from a global menu.
 _NAV = (
     ("/", "Status"),
     ("/config", "Settings"),
+    ("/setup", "Setup"),
 )
 
 

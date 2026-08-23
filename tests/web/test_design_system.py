@@ -234,17 +234,23 @@ def test_tally_never_invents_a_capture_state():
         assert f'data-state="{good}"' in chrome.tally(good)
 
 
-def test_navigation_is_two_places_and_tasks_carry_a_crumb():
-    """Status and Settings are destinations; setup and stitch are tasks."""
-    assert [href for href, _ in chrome._NAV] == ["/", "/config"]
+def test_navigation_lists_the_places_you_go_on_purpose():
+    """Status, Settings and Setup are destinations; seam calibration is not.
 
-    bar = chrome.topbar("/config")
-    assert 'href="/config" aria-current="page"' in bar
-    assert bar.count("aria-current") == 1, "exactly one current page"
+    Seam calibration stays out because it acts on a specific camera and is
+    launched from that camera, not from a global menu. It carries a crumb
+    instead so the page still says where you are.
+    """
+    assert [href for href, _ in chrome._NAV] == ["/", "/config", "/setup"]
 
-    task = chrome.topbar(crumb="Setup")
+    for path in ("/", "/config", "/setup"):
+        bar = chrome.topbar(path)
+        assert f'href="{path}" aria-current="page"' in bar
+        assert bar.count("aria-current") == 1, "exactly one current page"
+
+    task = chrome.topbar(crumb="Seam calibration")
     assert "aria-current" not in task, "a task page marks no nav item current"
-    assert '<span class="crumb">Setup</span>' in task
+    assert '<span class="crumb">Seam calibration</span>' in task
 
 
 def test_topbar_nav_position_does_not_move_between_pages():
