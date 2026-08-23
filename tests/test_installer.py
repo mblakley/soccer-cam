@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -464,13 +465,42 @@ for label in ("&Uninstall", "&Close", "&Finish"):
     except Exception:
         continue
 
+emptied = False
 for _ in range(40):
     if not sandbox.exists() or not any(
         p.name != "uninstall.exe" for p in sandbox.iterdir()
     ):
-        raise SystemExit(0)
+        emptied = True
+        break
     time.sleep(0.5)
-raise SystemExit(3)
+
+# Close the window. Asserting the files are gone and walking away leaves a
+# dialog sitting on the desktop -- one per run, which is exactly what
+# happened before this.
+pid = None
+try:
+    pid = app.window(handle=target).process_id()
+except Exception:
+    pass
+for _ in range(20):
+    try:
+        window = app.window(handle=target)
+        if not window.exists():
+            break
+        for label in ("&Close", "Close", "&Finish", "Finish", "Cancel"):
+            button = window.child_window(title=label, class_name="Button")
+            if button.exists() and button.is_enabled():
+                button.click()
+                break
+    except Exception:
+        break
+    time.sleep(0.5)
+
+# Backstop: never leave the process behind, whatever the UI did.
+if pid:
+    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+
+raise SystemExit(0 if emptied else 3)
 """
 
 
@@ -508,6 +538,71 @@ def test_add_remove_programs_uninstall_completes(tmp_path):
         else []
     )
     assert not leftovers, f"the GUI uninstall left {leftovers}"
+
+
+def _uninstaller_window_titles() -> list[str]:
+    """Top-level windows that look like an uninstaller, right now."""
+    script = (
+        "Get-Process | Where-Object {$_.MainWindowTitle -like '*Uninstall*'} "
+        "| ForEach-Object { $_.MainWindowTitle }"
+    )
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _have_makensis(), reason=pytestmark_reason)
+@pytest.mark.parametrize("flags", ["/S", "/S _?={box}"])
+def test_a_silent_uninstall_shows_no_window(tmp_path, flags):
+    """Silent must mean silent -- nothing on screen, for either silent form.
+
+    Both are exercised because they take different code paths inside NSIS:
+    plain /S copies the uninstaller to %TEMP% and relaunches it, while _?=
+    runs in place. A window from either would be one a person has to dismiss,
+    which defeats unattended removal.
+    """
+    box = _build_and_install(tmp_path)
+    before = set(_uninstaller_window_titles())
+
+    seen: list[str] = []
+    stop = threading.Event()
+
+    def watch() -> None:
+        while not stop.is_set():
+            for title in _uninstaller_window_titles():
+                if title not in before and title not in seen:
+                    seen.append(title)
+            time.sleep(0.2)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        subprocess.run(
+            f'"{box / "uninstall.exe"}" {flags.format(box=box)}',
+            shell=True,
+            check=True,
+            timeout=180,
+        )
+        # Plain /S returns before its relaunched copy finishes, so keep
+        # watching -- a late window still counts as a window.
+        time.sleep(5)
+    finally:
+        stop.set()
+        watcher.join(timeout=5)
+
+    assert not seen, f"a silent uninstall put a window on screen: {seen}"
+
+    leftovers = (
+        sorted(p.name for p in box.iterdir() if p.name != "uninstall.exe")
+        if box.exists()
+        else []
+    )
+    assert not leftovers, f"silent uninstall left {leftovers}"
 
 
 if sys.platform != "win32":  # pragma: no cover - the installer is Windows-only
