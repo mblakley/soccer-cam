@@ -582,6 +582,52 @@ def _render_tray_section(storage: Path) -> str:
     )
 
 
+def _render_long_upload_warning(storage: Path) -> str:
+    """Warn if this channel cannot keep a full-length game.
+
+    An unverified channel caps at 15 minutes, and YouTube does not refuse the
+    upload -- it accepts it and then destroys the video. Uploads are held
+    rather than lost (see YouTubeChannelNotVerifiedError), but the user has to
+    know to go and verify, so surface it here rather than only in the log.
+    """
+    try:
+        from video_grouper.utils.youtube_upload import YouTubeUploader
+
+        yt_dir = storage / "youtube"
+        uploader = YouTubeUploader(
+            credentials_file=str(yt_dir / "client_secret.json"),
+            token_file=str(yt_dir / "token.json"),
+        )
+        state = uploader.get_long_uploads_status()
+    except Exception as exc:  # never break the dashboard over a status probe
+        logger.debug("long-upload status probe failed: %s", exc)
+        return ""
+
+    if state == "allowed":
+        return (
+            '<p class="muted"><span class="status-dot on"></span>'
+            "Channel verified &mdash; full-length games can be uploaded.</p>"
+        )
+    if state is None:
+        return (
+            '<p class="warn"><span class="status-dot bad"></span>'
+            "Could not read this channel&rsquo;s upload limit. If the Google "
+            "account has no YouTube channel, create one at "
+            '<a href="https://www.youtube.com" target="_blank" rel="noopener">'
+            "youtube.com</a> before uploading.</p>"
+        )
+    return (
+        '<p class="warn"><span class="status-dot bad"></span>'
+        "<strong>This channel cannot accept videos longer than 15 minutes</strong> "
+        f"(<code>{html.escape(state)}</code>). A full game is 60&ndash;90 minutes, "
+        "so YouTube would accept the upload and then silently delete it. "
+        "Uploads are being held, not lost.</p>"
+        '<p><a class="btn" href="https://www.youtube.com/verify" target="_blank" '
+        'rel="noopener">Verify this channel</a> &mdash; held uploads resume '
+        "automatically once verification goes through.</p>"
+    )
+
+
 def _render_youtube_section(storage: Path) -> str:
     """Render the YouTube auth status block on the dashboard.
 
@@ -626,7 +672,8 @@ def _render_youtube_section(storage: Path) -> str:
             else "."
         )
         + "</p>"
-        '<p><a class="btn btn-ghost" href="/auth/youtube/start">'
+        + _render_long_upload_warning(storage)
+        + '<p><a class="btn btn-ghost" href="/auth/youtube/start">'
         "Re-authorize a different account</a></p>"
         f"{_YT_UPLOAD_FORM}"
     )

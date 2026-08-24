@@ -1,0 +1,170 @@
+"""YouTube can accept an upload and then destroy the video.
+
+Measured 2026-08-23 against a real unverified channel, on both the multipart
+and the resumable path that production uses:
+
+    videos.insert    -> 200 with a real video id
+    t+10s            -> uploadStatus="uploaded", rejectionReason=None
+    t+20s onward     -> videos.list returns zero items, permanently
+    uploads playlist -> "Deleted video"
+
+Games are 60-90 minutes and unverified channels cap at 15, so this loses every
+game silently: the old code returned the id, and the caller recorded the game
+as uploaded. These tests cover the two defences -- refuse before uploading, and
+disbelieve a returned id until the video is actually there.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from video_grouper.utils.youtube_upload import (
+    LONG_UPLOAD_LIMIT_SECONDS,
+    YouTubeChannelNotVerifiedError,
+    YouTubeQuotaError,
+    YouTubeUploader,
+)
+
+
+def _uploader(long_uploads_status=None):
+    up = YouTubeUploader.__new__(YouTubeUploader)
+    up.credentials_file = "c.json"
+    up.token_file = "t.json"
+    up.youtube = MagicMock()
+    up._long_uploads_status = long_uploads_status
+    up.skip_upload = False
+    return up
+
+
+def _channels_response(status):
+    items = [] if status == "__none__" else [{"status": {"longUploadsStatus": status}}]
+    resp = MagicMock()
+    resp.execute.return_value = {"items": items}
+    return resp
+
+
+class TestLongUploadGate:
+    @pytest.mark.parametrize("status", ["eligible", "disallowed"])
+    def test_refuses_long_video_on_unverified_channel(self, tmp_path, status):
+        """Nothing is uploaded -- the game is held, not destroyed."""
+        video = tmp_path / "game.mp4"
+        video.write_bytes(b"x" * 32)
+        up = _uploader(long_uploads_status=status)
+
+        with patch(
+            "video_grouper.utils.youtube_upload.probe_duration_seconds",
+            return_value=LONG_UPLOAD_LIMIT_SECONDS + 60,
+        ):
+            with pytest.raises(YouTubeChannelNotVerifiedError) as exc:
+                up.upload_video(str(video), "t", "d")
+
+        assert "youtube.com/verify" in str(exc.value)
+        up.youtube.videos.return_value.insert.assert_not_called()
+
+    def test_parks_like_a_quota_error(self):
+        """The queue processor keys on YouTubeQuotaError to park and re-probe.
+
+        Subclassing is what makes the upload resume by itself after the user
+        verifies, instead of burning retries.
+        """
+        assert issubclass(YouTubeChannelNotVerifiedError, YouTubeQuotaError)
+
+    def test_allows_long_video_on_verified_channel(self, tmp_path):
+        video = tmp_path / "game.mp4"
+        video.write_bytes(b"x" * 32)
+        up = _uploader(long_uploads_status="allowed")
+
+        with patch(
+            "video_grouper.utils.youtube_upload.probe_duration_seconds",
+            return_value=LONG_UPLOAD_LIMIT_SECONDS + 60,
+        ):
+            # Gate must not fire; the upload proceeds and fails later for an
+            # unrelated reason, which is fine -- we only assert on the gate.
+            up.youtube.videos.return_value.insert.side_effect = RuntimeError("stop")
+            up.upload_video(str(video), "t", "d")
+        up.youtube.videos.return_value.insert.assert_called_once()
+
+    def test_short_video_skips_the_check_entirely(self, tmp_path):
+        """A 2-minute clip is fine on any channel and must not cost a probe."""
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"x" * 32)
+        up = _uploader()
+
+        with patch(
+            "video_grouper.utils.youtube_upload.probe_duration_seconds",
+            return_value=120.0,
+        ):
+            up.youtube.videos.return_value.insert.side_effect = RuntimeError("stop")
+            up.upload_video(str(video), "t", "d")
+        up.youtube.channels.assert_not_called()
+
+
+class TestLongUploadsStatus:
+    def test_reports_no_channel_as_unknown(self):
+        """channels.list returns 200 with an empty list when the Google
+        account has no YouTube channel. That is not an error, and it must not
+        be mistaken for a verified channel."""
+        up = _uploader()
+        up.youtube.channels.return_value.list.return_value = _channels_response(
+            "__none__"
+        )
+        assert up.get_long_uploads_status() is None
+
+    def test_caches(self):
+        up = _uploader()
+        up.youtube.channels.return_value.list.return_value = _channels_response(
+            "allowed"
+        )
+        assert up.get_long_uploads_status() == "allowed"
+        assert up.get_long_uploads_status() == "allowed"
+        up.youtube.channels.return_value.list.assert_called_once()
+
+
+class TestSettleVerification:
+    def _videos_returning(self, up, sequence):
+        calls = {"n": 0}
+
+        def _execute():
+            i = min(calls["n"], len(sequence) - 1)
+            calls["n"] += 1
+            return {"items": sequence[i]}
+
+        up.youtube.videos.return_value.list.return_value.execute.side_effect = _execute
+
+    def test_disappearing_video_is_discarded(self):
+        """Seen once, then gone -- exactly what the real 16-minute upload did."""
+        up = _uploader()
+        self._videos_returning(
+            up,
+            [[{"status": {"uploadStatus": "uploaded"}}], [], [], []],
+        )
+        with patch("video_grouper.utils.youtube_upload.time.sleep"):
+            assert up._confirm_upload_settled("vid") == "discarded"
+
+    def test_never_appearing_video_is_discarded(self):
+        up = _uploader()
+        self._videos_returning(up, [[]])
+        with patch("video_grouper.utils.youtube_upload.time.sleep"):
+            assert up._confirm_upload_settled("vid") == "discarded"
+
+    def test_processed_is_success(self):
+        up = _uploader()
+        self._videos_returning(
+            up,
+            [
+                [{"status": {"uploadStatus": "uploaded"}}],
+                [{"status": {"uploadStatus": "processed"}}],
+            ],
+        )
+        with patch("video_grouper.utils.youtube_upload.time.sleep"):
+            assert up._confirm_upload_settled("vid") == "processed"
+
+    def test_still_transcoding_is_accepted(self):
+        """A real game takes a long time to transcode. Staying 'uploaded' is
+        not a failure -- only disappearing is."""
+        up = _uploader()
+        self._videos_returning(up, [[{"status": {"uploadStatus": "uploaded"}}]])
+        with patch("video_grouper.utils.youtube_upload.time.sleep"):
+            assert up._confirm_upload_settled("vid") == "present"
