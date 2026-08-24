@@ -267,7 +267,7 @@ def auto_claim_camera_manager(client: TTTApiClient) -> None:
     When ``GET`` returns empty, POSTs ``/api/internal/device-link/register-camera-manager``
     so every team the signed-in user is approved on gets a camera_managers row.
 
-    All failures are swallowed and logged at WARNING — this is a
+    All failures are swallowed and logged at WARNING â€” this is a
     best-effort bookkeeping step that must never block sign-in. The
     network call sits inline with sign-in (no polling loop, per the
     inline-pipeline-push convention).
@@ -282,7 +282,7 @@ def auto_claim_camera_manager(client: TTTApiClient) -> None:
             "Camera-manager auto-claim skipped: get_team_assignments failed: %s", exc
         )
         return
-    except Exception as exc:  # noqa: BLE001 — best-effort, must not block sign-in
+    except Exception as exc:  # noqa: BLE001 â€” best-effort, must not block sign-in
         logger.warning(
             "Camera-manager auto-claim skipped: get_team_assignments raised: %s", exc
         )
@@ -298,7 +298,7 @@ def auto_claim_camera_manager(client: TTTApiClient) -> None:
     except TTTApiError as exc:
         logger.warning("Camera-manager auto-claim failed: %s", exc)
         return
-    except Exception as exc:  # noqa: BLE001 — best-effort
+    except Exception as exc:  # noqa: BLE001 â€” best-effort
         logger.warning("Camera-manager auto-claim raised: %s", exc)
         return
     logger.info("Camera-manager auto-claim returned %d row(s)", len(rows))
@@ -451,7 +451,7 @@ def _scan_games(storage_path: Path) -> list[dict]:
 
 def _fmt_ts(ts: int | None) -> str:
     if not ts:
-        return "—"
+        return "â€”"
     return datetime.fromtimestamp(int(ts), tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
@@ -515,7 +515,7 @@ def _render_tray_section(storage: Path) -> str:
     """Render a "Tray" status section on the dashboard.
 
     The tray (after load_config) writes to
-    ``<storage>/logs/video_grouper_tray.log`` — same convention the
+    ``<storage>/logs/video_grouper_tray.log`` â€” same convention the
     service uses for its own log. We just read it from there. No
     marker-file lookup, no per-user-profile guesswork.
 
@@ -540,7 +540,7 @@ def _render_tray_section(storage: Path) -> str:
     try:
         # Last 20 lines is enough to spot recent activity / errors
         # without flooding the dashboard. Tail the file by reading
-        # backwards rather than loading it all into memory — these
+        # backwards rather than loading it all into memory â€” these
         # logs grow fast under DEBUG.
         with open(log_path, "rb") as f:
             f.seek(0, 2)
@@ -580,6 +580,38 @@ def _render_tray_section(storage: Path) -> str:
         f"overflow-x:auto;font-size:0.78rem;line-height:1.35;max-height:280px;"
         f'overflow-y:auto;">{body}</pre>'
     )
+
+
+def _youtube_uploads_enabled(config_path: Path | None) -> bool:
+    """Is [YOUTUBE] enabled in config? False if it cannot be determined."""
+    if config_path is None:
+        return False
+    try:
+        from video_grouper.utils.config import load_config
+
+        return bool(load_config(config_path).youtube.enabled)
+    except Exception as exc:
+        logger.debug("could not read youtube.enabled: %s", exc)
+        return False
+
+
+def _youtube_credentials_problem(storage: Path) -> str | None:
+    """Why the stored credentials cannot be used, or None if they are fine.
+
+    _read_youtube_status only inspects the token *file*, so a refresh token
+    that Google has since expired or revoked still reads as "authorized".
+    This actually attempts the refresh, which is the only way to know.
+    """
+    try:
+        from video_grouper.utils.youtube_upload import ensure_valid_token
+
+        yt_dir = storage / "youtube"
+        ok, message = ensure_valid_token(
+            str(yt_dir / "client_secret.json"), str(yt_dir / "token.json")
+        )
+        return None if ok else message
+    except Exception as exc:
+        return f"Could not validate the stored credentials: {exc}"
 
 
 def _render_long_upload_warning(storage: Path) -> str:
@@ -628,7 +660,7 @@ def _render_long_upload_warning(storage: Path) -> str:
     )
 
 
-def _render_youtube_section(storage: Path) -> str:
+def _render_youtube_section(storage: Path, config_path: Path | None = None) -> str:
     """Render the YouTube auth status block on the dashboard.
 
     Shows three states:
@@ -663,8 +695,20 @@ def _render_youtube_section(storage: Path) -> str:
             f"{_YT_UPLOAD_FORM}"
         )
     ident = html.escape(status.get("identity") or "?")
+    creds_warning = ""
+    if _youtube_uploads_enabled(config_path):
+        problem = _youtube_credentials_problem(storage)
+        if problem:
+            creds_warning = (
+                '<p class="warn"><span class="status-dot bad"></span>'
+                "<strong>Warning &mdash; YouTube uploads are enabled, but the "
+                "stored credentials are not usable.</strong> "
+                f"{html.escape(problem)}</p>"
+                '<p><a class="btn" href="/auth/youtube/start">'
+                "Re-authorize</a></p>"
+            )
     return (
-        '<p><span class="status-dot on"></span>Authorized under '
+        creds_warning + '<p><span class="status-dot on"></span>Authorized under '
         f"<code>{ident}</code>"
         + (
             f" &mdash; token expires {_fmt_ts(status['expires_at'])}."
@@ -783,7 +827,7 @@ def _render_reprocess_form(
     flag, POST writes ``reprocess_request.json`` into the group dir.
 
     When the pipeline is currently running for this group, the form is
-    replaced by a Cancel button — one run at a time, with explicit
+    replaced by a Cancel button â€” one run at a time, with explicit
     user-driven cancellation if they want to change settings mid-flight.
     """
     name_esc = html.escape(game_name)
@@ -864,7 +908,7 @@ def create_app(
     ``status_provider``: called on each dashboard render to surface live
     state from the orchestrator. Returns a dict with optional keys
     ``queue_sizes`` (dict[str, int]) and ``cameras`` (list of
-    ``{name, ip, connected}``). The dashboard renders ``—`` /
+    ``{name, ip, connected}``). The dashboard renders ``â€”`` /
     "not available" when ``None`` (used by tests and standalone runs).
     """
     supabase_url = _resolve_url(ttt_config.supabase_url, TTT_SUPABASE_URL)
@@ -904,7 +948,7 @@ def create_app(
         app.include_router(_build_config(config_path))
 
         # And the onboarding wizard at /setup/*. Same trigger as the config
-        # editor — both need a writable config path.
+        # editor â€” both need a writable config path.
         from video_grouper.web.setup.router import build_router as _build_setup
 
         app.include_router(_build_setup(config_path))
@@ -934,15 +978,15 @@ def create_app(
 
     # ---- Hardening: DNS-rebinding + CSRF defenses ----
     #
-    # HTTP loopback is the right default for a local web app — Docker
+    # HTTP loopback is the right default for a local web app â€” Docker
     # Desktop, Ollama, Home Assistant, Jellyfin all do this. HTTPS only
     # matters on a non-trusted segment, which the loopback bind avoids.
     # But two threats remain even on loopback:
     #
-    #   1. DNS rebinding — `evil.com` resolves to 127.0.0.1 and the
+    #   1. DNS rebinding â€” `evil.com` resolves to 127.0.0.1 and the
     #      victim's browser issues requests to localhost. Defense:
     #      validate the Host header against an allowlist.
-    #   2. CSRF on state-changing endpoints — a malicious page can drive
+    #   2. CSRF on state-changing endpoints â€” a malicious page can drive
     #      `<img src="http://localhost:8765/receive-token?access_token=...">`
     #      to silently sign the local pipeline into the attacker's TTT
     #      account. Defense: state-changing endpoints (including
@@ -969,7 +1013,7 @@ def create_app(
         # Origin/Referer check on state-changing methods. Browsers send
         # one or both on every cross-origin request; we require the value
         # to point at us. Requests with neither header (curl, scripts) are
-        # also rejected — there is no legitimate non-browser caller of
+        # also rejected â€” there is no legitimate non-browser caller of
         # these endpoints, and accepting headerless POSTs would re-open
         # the CSRF gap that <img>-style attacks would otherwise hit.
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
@@ -1012,7 +1056,10 @@ def create_app(
                 "__AUTH_FLAGS_BANNER__", _render_auth_flags_banner(storage)
             )
             .replace("__AUTH_BLOCK__", _render_auth_section(token_file, providers))
-            .replace("__YOUTUBE_BLOCK__", _render_youtube_section(storage))
+            .replace(
+                "__YOUTUBE_BLOCK__",
+                _render_youtube_section(storage, config_path),
+            )
             .replace("__TRAY_BLOCK__", _render_tray_section(storage))
             .replace("__QUEUES_BLOCK__", _render_queues_section(status))
             .replace("__CAMERAS_BLOCK__", _render_cameras_section(status))
@@ -1239,7 +1286,7 @@ def create_app(
                 _error_page(
                     message=(
                         "OAuth state mismatch. The sign-in attempt expired or "
-                        "was tampered with — please start over from the "
+                        "was tampered with â€” please start over from the "
                         '<a href="/">dashboard</a>.'
                     )
                 ),
@@ -1287,7 +1334,7 @@ def create_app(
         if not group_dir.is_dir() or storage.resolve() not in group_dir.parents:
             raise HTTPException(status_code=404, detail="recording not found")
         # One pipeline run per group at a time. If something is already
-        # running here, the user must Cancel first — the runner can't
+        # running here, the user must Cancel first â€” the runner can't
         # mid-flight swap configs cleanly and a queued "next config"
         # would silently shadow whatever the in-flight run produces.
         from video_grouper.pipeline.reprocess import is_pipeline_running
