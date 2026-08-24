@@ -617,13 +617,10 @@ def _render_youtube_body(
         return (
             "<p><span style='color:var(--signal-on);'>&#10003;</span> "
             "Authorized &mdash; but this channel is not ready yet.</p>"
-            '<p class="warn"><strong>This YouTube channel cannot accept videos '
-            "longer than 15 minutes.</strong> A full game is 60&ndash;90 "
-            "minutes. YouTube would accept the upload, return success, and "
-            "then delete the video &mdash; so every game would silently "
-            "disappear.</p>"
-            "<p>Verify the channel to lift the limit to 12 hours. It takes a "
-            "minute and needs a phone that can receive a text or call.</p>"
+            '<p class="warn"><strong>YouTube will not accept videos longer '
+            "than 15 minutes on an unverified channel.</strong> Verify this "
+            "channel to lift the limit. It takes a minute and needs a phone "
+            "that can receive a text or call.</p>"
             '<ol class="muted" style="line-height:1.7;">'
             '<li>Open <a href="https://www.youtube.com/verify" target="_blank" '
             'rel="noopener">youtube.com/verify</a>, signed in as the same '
