@@ -24,6 +24,12 @@ _AUTOCAM_WINDOW_PREFIX = "Once Sport Autocam"
 _AUTOCAM_PROCESS_NAMES = ("GUI.exe", "AutocamGUI.exe")
 _AUTOCAM_PROCESS_NAME = _AUTOCAM_PROCESS_NAMES[0]
 
+# Backstop for AutoCam drawing its main window after launch. Generous
+# because it is only reached when AutoCam is alive but not drawing -- an
+# exited launcher with no surviving AutoCam is detected directly and fails
+# in seconds, so a slow start costs patience and a real crash costs none.
+_WINDOW_APPEAR_TIMEOUT_SECONDS = 240
+
 # Output bytes that prove the render is actually writing, used as a
 # UI-independent "processing started" signal. Comfortably above an empty
 # container/header but reached within the first minute of a real render.
@@ -517,6 +523,8 @@ def _wmi_creation_time(pid: int) -> float | None:
             "/FORMAT:CSV",
         ]
     )
+    if out is None:
+        return None
     for line in out.splitlines():
         line = line.strip()
         if (
@@ -532,6 +540,33 @@ def _wmi_creation_time(pid: int) -> float | None:
         if epoch is not None:
             return epoch
     return None
+
+
+def _running_autocam_pids() -> tuple[set[int], bool]:
+    """Return (PIDs of running AutoCam GUI processes, whether we could look).
+
+    ONE unfiltered ``tasklist`` and match the image names here, rather than a
+    call per name. ``/FI IMAGENAME eq`` makes tasklist walk every process
+    anyway, so per-name calls cost the same each and multiply the chance of a
+    timeout -- and half a listing is worse than none, because it looks like a
+    complete answer.
+    """
+    out = _run_console(["tasklist", "/FO", "CSV", "/NH"])
+    if out is None:
+        return set(), False
+    wanted = {name.casefold() for name in _AUTOCAM_PROCESS_NAMES}
+    pids: set[int] = set()
+    for line in out.splitlines():
+        fields = [f.strip().strip('"') for f in line.split('","')]
+        if len(fields) < 2:
+            continue
+        if fields[0].strip('"').casefold() not in wanted:
+            continue
+        try:
+            pids.add(int(fields[1].strip('"').replace(",", "")))
+        except ValueError:
+            continue
+    return pids, True
 
 
 def _find_autocam_gui_pids(
@@ -556,24 +591,8 @@ def _find_autocam_gui_pids(
             the launch path to avoid grabbing PIDs of unrelated GUI.exe
             instances that were already running.
     """
-    pids: list[int] = []
-    for image in _AUTOCAM_PROCESS_NAMES:
-        pids.extend(
-            _parse_tasklist_csv_pids(
-                _run_console(
-                    [
-                        "tasklist",
-                        "/FI",
-                        f"IMAGENAME eq {image}",
-                        "/FO",
-                        "CSV",
-                        "/NH",
-                    ]
-                )
-                or ""
-            )
-        )
-    pids = sorted(set(pids))
+    running, _ = _running_autocam_pids()
+    pids = sorted(running)
     if since_epoch is None:
         return pids
     filtered: list[int] = []
@@ -587,33 +606,24 @@ def _find_autocam_gui_pids(
 def _live_autocam_pids(candidate_pids: list[int]) -> list[int] | None:
     """Filter ``candidate_pids`` to those alive AND named like AutoCam's GUI.
 
-    Returns ``None`` when the probe itself could not be run -- which is NOT
-    the same as "nothing is alive", and the caller must not treat it as such.
+    Returns ``None`` when the probe could not be run -- which is NOT the same
+    as "nothing is alive", and the caller must not treat it as such.
 
-    ``tasklist`` timed out (10s) on 2026-08-23 while AutoCam was rendering
-    7680x2160 footage with Docker and pytest also on the box. The empty result
-    read as "AutoCam exited", so a render 5% of the way in was judged a crash
-    on its part-written output and killed. The give-away was in the very next
-    log line: deleting that "crashed" file failed with WinError 32, because
-    AutoCam still had it open.
+    ``tasklist`` timed out (10s) twice on 2026-08-23 while AutoCam rendered
+    7680x2160 footage with Docker and the test suite also on the box. The
+    empty result read as "AutoCam exited", so a render 5% of the way in was
+    judged a crash on its part-written output and deleted. The give-away was
+    in the very next log line: the delete failed with WinError 32, because
+    AutoCam still had the file open.
 
-    Uses one ``tasklist`` call per image name rather than one per PID, so the
-    30-second poll stays cheap.
+    A positive answer needs no such care -- finding a PID alive is proof on
+    its own, whatever else the probe missed.
     """
-    all_gui: set[int] = set()
-    probed = False
-    for image in _AUTOCAM_PROCESS_NAMES:
-        out = _run_console(
-            ["tasklist", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"]
-        )
-        if out is None:
-            continue
-        probed = True
-        all_gui.update(_parse_tasklist_csv_pids(out))
-    if not probed:
-        # Every probe failed: we know nothing about liveness this poll.
-        return None
-    return [pid for pid in candidate_pids if pid in all_gui]
+    all_gui, probe_ran = _running_autocam_pids()
+    alive = [pid for pid in candidate_pids if pid in all_gui]
+    if alive:
+        return alive
+    return [] if probe_ran else None
 
 
 def _validate_autocam_inputs(
@@ -1259,19 +1269,43 @@ def _execute_autocam_gui_automation(
         # Give Autocam time to start its child window process
         time.sleep(5)
 
+        # How long AutoCam gets to put its window up. A fixed 35s was too
+        # tight: on 2026-08-23 the same box took 59s for one game's cold
+        # start and 14s for the next, purely from load (Docker + the test
+        # suite + a previous render's teardown). Whatever this number is,
+        # some slower moment will exceed it -- so the real signal is
+        # whether AutoCam is still starting, and this is only the backstop
+        # for a process that hangs without ever drawing.
+        window_deadline = time.time() + _WINDOW_APPEAR_TIMEOUT_SECONDS
         hwnd = None
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            remaining = int(deadline - time.time())
+        while time.time() < window_deadline:
             hwnd = _find_autocam_hwnd()
             if hwnd:
                 logger.info(f"Found Autocam window via win32gui (hwnd={hwnd})")
                 break
-            logger.debug(f"Searching for Autocam window... ({remaining}s remaining)")
+            # A launcher that has exited without a window is the genuine
+            # failure, and there is no point waiting out the backstop for
+            # it -- unless a still-running AutoCam picked up the handoff,
+            # which is what the 3.x launcher does. Only act on a probe that
+            # actually ran; an unanswered one must not fail a live start.
+            if launcher.poll() is not None:
+                running, probe_ran = _running_autocam_pids()
+                if probe_ran and not running:
+                    raise RuntimeError(
+                        "Once Autocam exited during startup without opening a "
+                        f"window (launcher exit code {launcher.returncode})"
+                    )
+            logger.debug(
+                "Searching for Autocam window... (%ds remaining)",
+                int(window_deadline - time.time()),
+            )
             time.sleep(1)
 
         if hwnd is None:
-            raise TimeoutError("Once Autocam window not found within 35 seconds")
+            raise TimeoutError(
+                "Once Autocam window not found within "
+                f"{_WINDOW_APPEAR_TIMEOUT_SECONDS}s of launch"
+            )
 
         # Collect the PIDs now (the window-owning PID via win32process is
         # instant and needs no subprocess) but DON'T write the reattach
