@@ -277,6 +277,10 @@ def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> boo
       - no autocam_run marker exists
       - marker exists but input_path doesn't match (different render)
       - marker exists for this input but no PIDs are alive (stale)
+
+    If the liveness probe itself cannot run, this returns True. The two
+    answers are not symmetric: a wrong False deletes a live render's output,
+    while a wrong True only costs one more poll.
     """
     if state is None:
         return False
@@ -286,6 +290,8 @@ def _autocam_still_writing(state: DirectoryState | None, input_path: str) -> boo
     if existing.get("input_path") != input_path:
         return False
     live = _live_autocam_pids(existing.get("gui_pids", []))
+    if live is None:
+        return True
     return bool(live)
 
 
@@ -410,10 +416,13 @@ def _find_autocam_hwnd() -> int | None:
     return found[0] if found else None
 
 
-def _run_console(cmd: list[str], timeout: float = 10.0) -> str:
-    """Run a Windows console helper (tasklist/wmic), return stdout, or ''
-    on timeout / OSError. Swallow-and-log matches the posture of the
-    callers, which treat absent data as 'no match' rather than fatal.
+def _run_console(cmd: list[str], timeout: float = 10.0) -> str | None:
+    """Run a Windows console helper (tasklist/wmic) and return its stdout.
+
+    Returns ``None`` when the command could not be run at all (timeout or
+    OSError), as distinct from ``""`` for "ran fine, matched nothing". The
+    caller decides what an unanswerable question means; for liveness checks it
+    must NOT mean "the process is gone" -- see :func:`_live_autocam_pids`.
     """
     try:
         result = subprocess.run(
@@ -426,7 +435,7 @@ def _run_console(cmd: list[str], timeout: float = 10.0) -> str:
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.debug("console helper %s failed: %s", cmd[0], e)
-        return ""
+        return None
     return result.stdout or ""
 
 
@@ -561,6 +570,7 @@ def _find_autocam_gui_pids(
                         "/NH",
                     ]
                 )
+                or ""
             )
         )
     pids = sorted(set(pids))
@@ -574,29 +584,35 @@ def _find_autocam_gui_pids(
     return filtered
 
 
-def _live_autocam_pids(candidate_pids: list[int]) -> list[int]:
-    """Filter ``candidate_pids`` to those that are alive AND named GUI.exe.
+def _live_autocam_pids(candidate_pids: list[int]) -> list[int] | None:
+    """Filter ``candidate_pids`` to those alive AND named like AutoCam's GUI.
 
-    Uses a single ``tasklist`` call to get all GUI.exe PIDs, then
-    intersects with ``candidate_pids``. This avoids spawning one
-    subprocess per PID on every 30-second poll.
+    Returns ``None`` when the probe itself could not be run -- which is NOT
+    the same as "nothing is alive", and the caller must not treat it as such.
+
+    ``tasklist`` timed out (10s) on 2026-08-23 while AutoCam was rendering
+    7680x2160 footage with Docker and pytest also on the box. The empty result
+    read as "AutoCam exited", so a render 5% of the way in was judged a crash
+    on its part-written output and killed. The give-away was in the very next
+    log line: deleting that "crashed" file failed with WinError 32, because
+    AutoCam still had it open.
+
+    Uses one ``tasklist`` call per image name rather than one per PID, so the
+    30-second poll stays cheap.
     """
     all_gui: set[int] = set()
+    probed = False
     for image in _AUTOCAM_PROCESS_NAMES:
-        all_gui.update(
-            _parse_tasklist_csv_pids(
-                _run_console(
-                    [
-                        "tasklist",
-                        "/FI",
-                        f"IMAGENAME eq {image}",
-                        "/FO",
-                        "CSV",
-                        "/NH",
-                    ]
-                )
-            )
+        out = _run_console(
+            ["tasklist", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"]
         )
+        if out is None:
+            continue
+        probed = True
+        all_gui.update(_parse_tasklist_csv_pids(out))
+    if not probed:
+        # Every probe failed: we know nothing about liveness this poll.
+        return None
     return [pid for pid in candidate_pids if pid in all_gui]
 
 
@@ -954,7 +970,16 @@ def _wait_for_completion_and_cleanup(
             # 2026-06-01; full validation catches that, truncated
             # outputs, and implausibly low bitrates.
             live_pids = _live_autocam_pids(tracked_pids) if tracked_pids else None
-            if tracked_pids and not live_pids:
+            if live_pids is None and tracked_pids:
+                # Probe failed, not "nothing alive". Say nothing about
+                # liveness this poll and look again in 30s -- concluding
+                # "exited" here condemns the part-written output as a crash
+                # and deletes a render that is still going.
+                logger.debug(
+                    "Liveness probe unavailable this poll; assuming AutoCam "
+                    "is still running."
+                )
+            elif tracked_pids and not live_pids:
                 if output_path and os.path.isfile(output_path):
                     ok, reason = _validate_autocam_output(
                         output_path, input_path=input_path
@@ -1155,7 +1180,14 @@ def _execute_autocam_gui_automation(
     if state is not None:
         existing = state.get_autocam_run()
         if existing and existing.get("input_path") == abs_input_path:
-            live = _live_autocam_pids(existing.get("gui_pids", []))
+            recorded_pids = existing.get("gui_pids", [])
+            # A probe that could not run says nothing; fall back to the
+            # recorded PIDs and let the window checks below decide. Every
+            # branch past here re-proves the render is real (a live window
+            # in an active state), so an optimistic start costs nothing.
+            live = _live_autocam_pids(recorded_pids)
+            if live is None:
+                live = recorded_pids
             hwnd = _find_autocam_hwnd() if live else None
             if live and hwnd:
                 logger.info(

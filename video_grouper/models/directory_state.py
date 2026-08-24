@@ -27,7 +27,16 @@ class DirectoryState:
     def __init__(self, directory_path: str, storage_path: str | None = None):
         # Derive storage_path from directory_path if it was omitted.
         if storage_path is None:
-            storage_path = os.path.dirname(os.path.abspath(directory_path))
+            # Anchor directory_path too, or the two disagree about what they
+            # are relative to. get_state_file_path() joins a relative
+            # directory_path onto storage_path, so a relative input paired
+            # with the ABSOLUTE parent derived here produced
+            # <storage>/tests/e2e/test_data/<group>/state.json -- the storage
+            # path repeated inside itself. Every load and every marker write
+            # then failed with ENOENT, silently: the tray logged "Could not
+            # update autocam_run" and carried on with no resume state at all.
+            directory_path = os.path.abspath(directory_path)
+            storage_path = os.path.dirname(directory_path)
 
         self.directory_path = directory_path
         self.storage_path = storage_path

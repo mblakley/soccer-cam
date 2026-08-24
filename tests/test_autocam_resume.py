@@ -19,10 +19,12 @@ import pytest
 
 from video_grouper.models.directory_state import DirectoryState
 from video_grouper.tray.autocam_automation import (
+    _autocam_still_writing,
     _execute_autocam_gui_automation,
     _find_autocam_gui_pids,
     _live_autocam_pids,
     _parse_wmi_datetime,
+    _run_console,
 )
 
 
@@ -84,6 +86,36 @@ class TestSetClearAutocamRun:
         assert DirectoryState(group_dir).get_youtube_playlist_name() == "Heat 2012s"
 
 
+class TestRelativeGroupDirsResolveToOnePlace:
+    """A relative group_dir must not repeat the storage path inside itself.
+
+    The tray is handed the group directory as configured -- and
+    ``[STORAGE] path`` is allowed to be relative. Deriving the storage path
+    from an un-anchored directory_path made the two disagree, so state.json
+    was looked for at <storage>/<storage>/<group>/ and every read and write
+    failed with ENOENT while logging and continuing.
+    """
+
+    def test_state_file_lands_inside_the_group_dir(self, group_dir, monkeypatch):
+        monkeypatch.chdir(os.path.dirname(group_dir))
+        state = DirectoryState(os.path.basename(group_dir))
+
+        assert os.path.dirname(state.state_file_path) == os.path.abspath(group_dir)
+
+    def test_a_marker_written_relatively_is_readable_absolutely(
+        self, group_dir, monkeypatch
+    ):
+        monkeypatch.chdir(os.path.dirname(group_dir))
+        DirectoryState(os.path.basename(group_dir)).set_autocam_run(
+            {"input_path": "C:/in.mp4", "gui_pids": [7]}
+        )
+
+        assert DirectoryState(group_dir).get_autocam_run() == {
+            "input_path": "C:/in.mp4",
+            "gui_pids": [7],
+        }
+
+
 class TestLiveAutocamPids:
     def test_returns_only_alive_gui_exe(self):
         # _live_autocam_pids makes a single tasklist call filtered on
@@ -100,6 +132,52 @@ class TestLiveAutocamPids:
 
     def test_empty_input_returns_empty(self):
         assert _live_autocam_pids([]) == []
+
+
+class TestAnUnanswerableProbeIsNotADeadProcess:
+    """The distinction that keeps a healthy render alive.
+
+    ``tasklist`` timed out under load on 2026-08-23 while AutoCam was 5% into
+    a 7680x2160 render. The empty result read as "AutoCam exited", the
+    part-written output failed validation, and the step deleted it and gave
+    up on a job that was working. "I could not check" and "it is gone" have
+    to be different answers.
+    """
+
+    def test_a_failed_probe_reports_unknown_not_empty(self):
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value=None,
+        ):
+            assert _live_autocam_pids([1, 2]) is None
+
+    def test_a_successful_probe_that_matches_nothing_still_means_gone(self):
+        """The genuine exit case must keep working, or nothing ever completes."""
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value="INFO: No tasks are running which match the criteria.\n",
+        ):
+            assert _live_autocam_pids([1, 2]) == []
+
+    def test_still_writing_assumes_live_when_it_cannot_check(self, group_dir):
+        """Guarding a delete: a wrong 'no' corrupts an in-flight render."""
+        state = DirectoryState(group_dir)
+        state.set_autocam_run({"input_path": "C:/in.mp4", "gui_pids": [4242]})
+
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value=None,
+        ):
+            assert _autocam_still_writing(state, "C:/in.mp4") is True
+
+    def test_run_console_distinguishes_timeout_from_no_output(self):
+        import subprocess as sp
+
+        with patch(
+            "video_grouper.tray.autocam_automation.subprocess.run",
+            side_effect=sp.TimeoutExpired(cmd="tasklist", timeout=10),
+        ):
+            assert _run_console(["tasklist"]) is None
 
 
 class TestFindAutocamGuiPids:
