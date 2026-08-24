@@ -551,10 +551,12 @@ def _render_youtube_body(
     )
     why_byo = (
         '<p class="muted">Why your own GCP project? '
-        "YouTube limits API uploads to ~3 games/day per OAuth client. "
-        "If every soccer-cam install shared one client they'd fight "
-        "over a single quota; with your own client you get your own "
-        "limit (and can request more from Google later if you need to).</p>"
+        "YouTube counts API usage per project, so if every soccer-cam install "
+        "shared one client they would all draw on the same daily allowance. "
+        "With your own project that allowance is yours alone, and normal use "
+        "stays well inside it. (Separately, YouTube caps how many videos an "
+        "account may upload in a day. That limit follows your channel rather "
+        "than the project, so no project setup changes it.)</p>"
     )
     upload_form = (
         '<form method="post" action="/setup/youtube/upload" '
