@@ -145,8 +145,18 @@ class E2ETestRunner:
             "trims_completed": [
                 "VIDEO: Successfully completed task: TrimTask",
             ],
+            # Emitted by pipeline.runner once the step actually returns True.
+            # The old marker, "AUTOCAM: Successfully completed task", was from
+            # the BallTrackingProcessor that the step pipeline replaced -- it
+            # appears nowhere in the codebase any more, so this count sat at
+            # 0/2 through runs where both games rendered perfectly and the
+            # suite failed on a stall timeout with no idea why.
+            #
+            # Deliberately NOT "PipelineProcessor: Successfully completed
+            # processing item": that one means the queue item was handled and
+            # is logged for FAILED steps too.
             "autocams_completed": [
-                "AUTOCAM: Successfully completed task",
+                "pipeline: step autocam complete",
             ],
             "uploads_completed": [
                 "UPLOAD: Successfully completed task",
@@ -1220,12 +1230,21 @@ class E2ETestRunner:
 
         Returns True if any count increased (resets inactivity timeout).
         """
+        # Count distinct lines, not raw substring hits. The app's stdout
+        # capture and its own file handler record the same events, and
+        # `all_logs` concatenates both -- so every count came out at exactly
+        # twice the truth (uploads_completed sat at 7/2, then 16/2, for four
+        # actual uploads). Inflated counts sail past their >= threshold, which
+        # means a stage that never ran would still read as complete. Log lines
+        # carry a timestamp, so two genuine occurrences never collapse.
+        unique_lines = set(log_content.splitlines())
+
         changed = False
         for key, patterns in self.multi_group_patterns.items():
             # Count total occurrences of any pattern for this key
             count = 0
             for pattern in patterns:
-                count += log_content.count(pattern)
+                count += sum(1 for line in unique_lines if pattern in line)
             if count > self.multi_group_counts[key]:
                 old = self.multi_group_counts[key]
                 self.multi_group_counts[key] = count
