@@ -21,7 +21,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from video_grouper.utils.youtube_upload import (
-    LONG_UPLOAD_LIMIT_SECONDS,
     YouTubeChannelNotVerifiedError,
     YouTubeQuotaError,
     YouTubeUploader,
@@ -45,22 +44,36 @@ def _channels_response(status):
     return resp
 
 
-class TestLongUploadGate:
+class TestUploadGate:
+    """No upload is attempted at all while the channel is unverified.
+
+    This is deliberately stricter than YouTube's own rule. YouTube only
+    refuses videos over 15 minutes, so a short clip would technically go
+    through -- but soccer-cam exists to deliver full games, and a channel that
+    cannot receive them is not usable. Length is not consulted.
+    """
+
     @pytest.mark.parametrize("status", ["eligible", "disallowed"])
-    def test_refuses_long_video_on_unverified_channel(self, tmp_path, status):
-        """Nothing is uploaded -- the game is held, not destroyed."""
+    def test_blocks_every_upload_when_unverified(self, tmp_path, status):
         video = tmp_path / "game.mp4"
         video.write_bytes(b"x" * 32)
         up = _uploader(long_uploads_status=status)
 
-        with patch(
-            "video_grouper.utils.youtube_upload.probe_duration_seconds",
-            return_value=LONG_UPLOAD_LIMIT_SECONDS + 60,
-        ):
-            with pytest.raises(YouTubeChannelNotVerifiedError) as exc:
-                up.upload_video(str(video), "t", "d")
+        with pytest.raises(YouTubeChannelNotVerifiedError) as exc:
+            up.upload_video(str(video), "t", "d")
 
         assert "youtube.com/verify" in str(exc.value)
+        assert "15 minutes" in str(exc.value)
+        up.youtube.videos.return_value.insert.assert_not_called()
+
+    def test_length_is_not_consulted(self, tmp_path):
+        """A two-second clip is blocked exactly like a 90-minute game."""
+        video = tmp_path / "tiny.mp4"
+        video.write_bytes(b"x" * 8)
+        up = _uploader(long_uploads_status="eligible")
+
+        with pytest.raises(YouTubeChannelNotVerifiedError):
+            up.upload_video(str(video), "t", "d")
         up.youtube.videos.return_value.insert.assert_not_called()
 
     def test_parks_like_a_quota_error(self):
@@ -71,34 +84,16 @@ class TestLongUploadGate:
         """
         assert issubclass(YouTubeChannelNotVerifiedError, YouTubeQuotaError)
 
-    def test_allows_long_video_on_verified_channel(self, tmp_path):
+    def test_allows_upload_on_verified_channel(self, tmp_path):
         video = tmp_path / "game.mp4"
         video.write_bytes(b"x" * 32)
         up = _uploader(long_uploads_status="allowed")
 
-        with patch(
-            "video_grouper.utils.youtube_upload.probe_duration_seconds",
-            return_value=LONG_UPLOAD_LIMIT_SECONDS + 60,
-        ):
-            # Gate must not fire; the upload proceeds and fails later for an
-            # unrelated reason, which is fine -- we only assert on the gate.
-            up.youtube.videos.return_value.insert.side_effect = RuntimeError("stop")
-            up.upload_video(str(video), "t", "d")
+        # Gate must not fire; the upload proceeds and fails later for an
+        # unrelated reason, which is fine -- we only assert on the gate.
+        up.youtube.videos.return_value.insert.side_effect = RuntimeError("stop")
+        up.upload_video(str(video), "t", "d")
         up.youtube.videos.return_value.insert.assert_called_once()
-
-    def test_short_video_skips_the_check_entirely(self, tmp_path):
-        """A 2-minute clip is fine on any channel and must not cost a probe."""
-        video = tmp_path / "clip.mp4"
-        video.write_bytes(b"x" * 32)
-        up = _uploader()
-
-        with patch(
-            "video_grouper.utils.youtube_upload.probe_duration_seconds",
-            return_value=120.0,
-        ):
-            up.youtube.videos.return_value.insert.side_effect = RuntimeError("stop")
-            up.upload_video(str(video), "t", "d")
-        up.youtube.channels.assert_not_called()
 
 
 class TestLongUploadsStatus:

@@ -49,9 +49,6 @@ class YouTubeChannelNotVerifiedError(YouTubeQuotaError):
 
 MAX_RETRIES = 5
 
-# YouTube refuses >15 min uploads on channels that have not been verified.
-LONG_UPLOAD_LIMIT_SECONDS = 15 * 60
-
 # How long to watch a freshly uploaded video before believing it survived.
 # The discarded 16-minute test video still reported uploadStatus="uploaded"
 # at t+10s and was gone by t+20s, so presence alone -- checked early -- reports
@@ -106,23 +103,6 @@ def _load_embedded_client_config():
 
 
 EMBEDDED_CLIENT_CONFIG = _load_embedded_client_config()
-
-
-def probe_duration_seconds(video_path: str) -> float | None:
-    """Container duration in seconds, or None if it cannot be determined.
-
-    Metadata-only probe -- no decode. Returns None rather than raising so a
-    probe failure never blocks an upload on its own.
-    """
-    try:
-        import av
-
-        with av.open(video_path) as container:
-            if container.duration is not None:
-                return float(container.duration) / av.time_base
-    except Exception as exc:
-        logger.warning("Could not probe duration of %s: %s", video_path, exc)
-    return None
 
 
 def make_youtube_flow(credentials_file: str, redirect_uri: str) -> InstalledAppFlow:
@@ -592,26 +572,25 @@ class YouTubeUploader:
             logger.error(f"Video file not found: {video_path}")
             return None
 
-        # Refuse long uploads the channel cannot keep. YouTube does not reject
-        # these -- it accepts them and then destroys the video -- so this has
-        # to happen before we upload anything.
-        duration = probe_duration_seconds(video_path)
-        if duration is None or duration > LONG_UPLOAD_LIMIT_SECONDS:
-            status = self.get_long_uploads_status()
-            if status is not None and status != "allowed":
-                raise YouTubeChannelNotVerifiedError(
-                    f"This YouTube channel cannot accept videos longer than "
-                    f"15 minutes (longUploadsStatus={status}). "
-                    f"{os.path.basename(video_path)} is "
-                    + (
-                        f"{duration / 60:.0f} minutes"
-                        if duration
-                        else "of unknown length"
-                    )
-                    + ". Verify the channel at https://www.youtube.com/verify "
-                    "-- the upload is being held and will resume by itself "
-                    "once verification goes through."
-                )
+        # Do not attempt any upload while the channel is unverified. YouTube
+        # does not reject an over-length upload -- it accepts it, returns an
+        # id, and then destroys the video -- so this has to happen before we
+        # send anything. We gate every upload rather than only ones over 15
+        # minutes: an unverified channel cannot receive the games this exists
+        # to deliver, and uploading clips into a channel whose games are all
+        # missing produces a confusing half-state.
+        status = self.get_long_uploads_status()
+        if status is not None and status != "allowed":
+            raise YouTubeChannelNotVerifiedError(
+                f"YouTube uploads are blocked: this channel is not verified "
+                f"(longUploadsStatus={status}), so YouTube will not accept "
+                "videos longer than 15 minutes. soccer-cam is holding all "
+                "uploads until the channel is verified. To fix it: open "
+                "https://www.youtube.com/verify, sign in as the Google "
+                "account this install is authorized under, and choose text "
+                "message or voice call to receive a code. Held uploads then "
+                "resume automatically."
+            )
 
         # Get file size for progress tracking
         file_size = os.path.getsize(video_path)
