@@ -485,13 +485,41 @@ def _list_subdirs(path: str) -> list[str]:
     return subdirs
 
 
-def _render_youtube_body(has_secret: bool, has_token: bool) -> str:
+def _youtube_long_uploads_status(storage_path: str | None) -> str | None:
+    """Channel upload capability, or None if it cannot be determined.
+
+    Never raises: a status probe must not be able to break the wizard.
+    """
+    if not storage_path:
+        return None
+    try:
+        from video_grouper.utils.youtube_upload import (
+            YouTubeUploader,
+            get_youtube_paths,
+        )
+
+        credentials_file, token_file = get_youtube_paths(storage_path)
+        return YouTubeUploader(
+            credentials_file=credentials_file, token_file=token_file
+        ).get_long_uploads_status()
+    except Exception:
+        return None
+
+
+def _render_youtube_body(
+    has_secret: bool, has_token: bool, long_uploads_status: str | None = None
+) -> str:
     """Render the wizard body for the YouTube step.
 
-    Three states:
+    Four states:
       - No client_secret yet: show GCP setup instructions + file upload
       - client_secret uploaded, not authorized yet: show "Authorize" button
-      - Both done: show "Authorized" status + "Continue" button
+      - Authorized but the channel is capped at 15 minutes: block Continue and
+        send them to youtube.com/verify. A game is 60-90 minutes and YouTube
+        does not refuse an over-length upload -- it accepts it and then deletes
+        the video -- so finishing setup here would mean every game silently
+        disappears.
+      - Authorized and verified: "Continue"
 
     Skip is always available — YouTube is optional.
     """
@@ -583,9 +611,46 @@ def _render_youtube_body(has_secret: bool, has_token: bool) -> str:
             "</div>"
         )
         return body
+    if long_uploads_status is not None and long_uploads_status != "allowed":
+        # Do not let them finish. Every game would be accepted and then
+        # silently deleted by YouTube.
+        return (
+            "<p><span style='color:var(--signal-on);'>&#10003;</span> "
+            "Authorized &mdash; but this channel is not ready yet.</p>"
+            '<p class="warn"><strong>This YouTube channel cannot accept videos '
+            "longer than 15 minutes.</strong> A full game is 60&ndash;90 "
+            "minutes. YouTube would accept the upload, return success, and "
+            "then delete the video &mdash; so every game would silently "
+            "disappear.</p>"
+            "<p>Verify the channel to lift the limit to 12 hours. It takes a "
+            "minute and needs a phone that can receive a text or call.</p>"
+            '<ol class="muted" style="line-height:1.7;">'
+            '<li>Open <a href="https://www.youtube.com/verify" target="_blank" '
+            'rel="noopener">youtube.com/verify</a>, signed in as the same '
+            "Google account you just authorized.</li>"
+            "<li>Choose text message or voice call and enter the code.</li>"
+            "<li>Come back here and re-check.</li>"
+            "</ol>"
+            '<div class="row">'
+            '<a class="btn" href="/setup/youtube">I&rsquo;ve verified &mdash; '
+            "re-check</a>"
+            '<a class="btn-ghost btn" href="/auth/youtube/start?return_to=/setup/youtube">'
+            "Use a different account</a>"
+            "</div>"
+            '<div class="row" style="margin-top:18px;">'
+            f"{skip_form}"
+            "</div>"
+        )
+    verified_note = (
+        '<p class="muted"><span style="color:var(--signal-on);">&#10003;</span> '
+        "Channel verified &mdash; full-length games can be uploaded.</p>"
+        if long_uploads_status == "allowed"
+        else ""
+    )
     body = (
         "<p><span style='color:var(--signal-on);'>&#10003;</span> "
         "Authorized &mdash; soccer-cam can upload to this YouTube channel.</p>"
+        f"{verified_note}"
         '<div class="row">'
         '<a class="btn-ghost btn" href="/auth/youtube/start?return_to=/setup/youtube">'
         "Re-authorize a different account</a>"
@@ -1186,7 +1251,10 @@ def build_router(config_path: Path) -> APIRouter:
         yt_dir = Path(state.storage_path or "") / "youtube"
         has_secret = (yt_dir / "client_secret.json").exists()
         has_token = (yt_dir / "token.json").exists()
-        body = _render_youtube_body(has_secret, has_token)
+        long_uploads = (
+            _youtube_long_uploads_status(state.storage_path) if has_token else None
+        )
+        body = _render_youtube_body(has_secret, has_token, long_uploads)
         resp = HTMLResponse(
             _page(
                 "youtube",

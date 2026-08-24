@@ -168,3 +168,38 @@ class TestSettleVerification:
         self._videos_returning(up, [[{"status": {"uploadStatus": "uploaded"}}]])
         with patch("video_grouper.utils.youtube_upload.time.sleep"):
             assert up._confirm_upload_settled("vid") == "present"
+
+
+class TestOnboardingGate:
+    """The wizard must not let setup finish on a channel that cannot keep a game.
+
+    Reaching the summary with an unverified channel means every subsequent
+    game is accepted by YouTube and then deleted, with nothing in the UI ever
+    having said so.
+    """
+
+    def _body(self, status):
+        from video_grouper.web.setup.router import _render_youtube_body
+
+        return _render_youtube_body(True, True, status)
+
+    @pytest.mark.parametrize("status", ["eligible", "disallowed"])
+    def test_blocks_continue_and_points_at_verification(self, status):
+        body = self._body(status)
+        assert "youtube.com/verify" in body
+        assert "15 minutes" in body
+        # Continue leads to the summary; it must not be offered here.
+        assert "/setup/summary" not in body
+        # Skipping YouTube entirely is still allowed.
+        assert "/setup/youtube/skip" in body
+
+    def test_allows_continue_once_verified(self):
+        body = self._body("allowed")
+        assert "/setup/summary" in body
+        assert "youtube.com/verify" not in body
+
+    def test_unknown_status_does_not_block(self):
+        """If the probe fails we cannot claim there is a problem; the
+        upload-time gate and the settle check are the backstops."""
+        body = self._body(None)
+        assert "/setup/summary" in body
