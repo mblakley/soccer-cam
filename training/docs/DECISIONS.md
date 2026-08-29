@@ -2117,3 +2117,73 @@ argument for offering a re-scan from Settings later, not only during onboarding.
 
 **Not done:** no attempt at Reolink's or Dahua's proprietary UDP discovery broadcasts. The HTTP
 fingerprint is vendor-documented behaviour and needed no reverse engineering.
+
+## 2026-08-22: Versioned config migrations; one [TEAM.<key>] section per team
+
+**Context:** Per-team settings were spread across six sections and the same team was spelled
+differently in each. On the live install: `BU14 - Guzzetta` in `[TEAMSNAP.TEAM.0]`,
+`Western New York Flash - 13B ECNL-RL Rochester` in `[PLAYMETRICS.TEAM.0]`, and `guzzetta` /
+`13b ecnl-rl rochester` as `[YOUTUBE.PLAYLIST_MAP]` keys (configparser lowercases option keys). There
+was no canonical team identity: TeamSnap matched on a section name, PlayMetrics on an option value,
+and the playlist map on a *lowercased substring* — the last of which is the only reason the short
+keys resolved at all. Two of the six per-team maps were dead code: `[BALL_TRACKING.PER_TEAM]` was
+parsed then dropped, and `[PIPELINE.PER_TEAM]` round-tripped but `ordered_steps` ignored its team
+argument *and* the team name it received was always `None`, because pipeline discovery read
+`[MATCH] team_name` while match_info only ever writes `my_team_name`.
+
+**Decision (a): a versioned migration framework**, `video_grouper/utils/config_migrations.py`.
+`[SCHEMA] version` records the file's schema; every migration above that version is applied in order
+and the result written back once, with the original kept as `config.ini.bak`. Absent version = 0.
+A file from a *newer* build hard-fails rather than being silently mangled by an older one.
+
+Mark's requirement was "solve this for this migration and future migrations… apply all the
+migrations between version x and version y", and explicitly *not* permanent runtime shims. It runs at
+startup, not in the installer: `installer.nsi` mentions `config.ini` only in a comment, auto-upgrade
+returns early, the payload only lands in `$INSTDIR`, and NSIS is Windows-only while soccer-cam also
+ships Docker/Linux. Startup is the only path all installs share. Comments are not preserved
+(ConfigParser cannot); accepted, since `/config` already destroys them on every save.
+
+The existing `[BALL_TRACKING]` → `[PIPELINE]` shim — which ran on *every load, forever* — became
+migration v1, which both removes permanent code and proves the framework.
+
+**Decision (b): `[TEAM.<key>]`** carries `name`, `aliases`, `enabled`, `teamsnap_team_id`,
+`playmetrics_team_id`, `youtube_playlist` and `pipeline` (a per-team step-list override). One
+resolver, `resolve_team`, replaces five matching rules: exact match wins across all teams, then
+substring, longest identifier first. Migration v2 folds the old sections in and preserves the short
+playlist-map keys as `aliases`, so spellings that worked before still resolve.
+
+**Load-bearing detail:** migration v2 *deletes* the sections `TeamSnapService` and
+`PlayMetricsService` build their `teams` lists from. `load_config` therefore projects `[TEAM.*]` back
+into those lists. Without it an upgraded install would silently find no teams and both integrations
+would quietly stop fetching schedules — verified byte-identical across migration on a copy of the
+real server config.
+
+**Decision (c): one default-config generator.** `create_default_config`, the setup wizard's
+`_build_config` and `config.ini.dist` each hand-enumerated sections and all three disagreed (ARCHIVE,
+AUTOCAM, PIPELINE, NODE, MOMENT_TAGGING each missing from a different one). They existed only because
+nine `Config` sections were declared required with no `default_factory`, though eight construct with
+no arguments — only `storage.path` genuinely needs a value. With defaults, a complete config is
+`Config(storage=StorageConfig(path=...))` and a new section needs no generator edit, which is exactly
+what a migration framework wants. `config.ini.dist` stays hand-written (its comments are the point)
+and is guarded by a test that every `Config` section appears in it, minus a machine-owned allowlist
+(`[SETUP]`, `[SCHEMA]`). That test found five undocumented sections, including `[AUTOCAM]` and its
+licence key.
+
+**Also removed, as dead config:** `PipelineConfig.per_team` and
+`YouTubeConfig.playlist_map` (plus `YouTubePlaylistMapConfig`). Both are superseded by
+`[TEAM.<key>]` and neither had a production consumer left. Leaving them would have been the exact
+defect this change fixes — a config key that looks live and is silently ignored. `[PIPELINE.PER_TEAM]`
+stays *reserved* in the parser so an unmigrated file's section is never mistaken for a step spec.
+
+**Scope:** branched off `main`, independent of the unmerged watermark/archive work. Per-team
+*archive* settings are deliberately excluded — `ArchiveConfig` does not exist on `main`. Whichever
+merges second reconciles; the framework makes that a one-migration change.
+
+**Files:** `video_grouper/utils/config_migrations.py`, `video_grouper/utils/config.py`,
+`video_grouper/pipeline/config.py`, `video_grouper/task_processors/pipeline_processor.py`,
+`video_grouper/task_processors/pipeline_discovery_processor.py`,
+`video_grouper/task_processors/tasks/upload/youtube_upload_task.py`,
+`video_grouper/web/setup/router.py`, `video_grouper/__main__.py`,
+`video_grouper/service/main.py`, `video_grouper/config.ini.dist`,
+`tests/test_config_migrations.py`, `tests/test_onboarding.py`,
+`tests/web/test_config_editor.py`

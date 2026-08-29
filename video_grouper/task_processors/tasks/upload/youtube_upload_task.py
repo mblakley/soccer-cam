@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from video_grouper.models import DirectoryState, MatchInfo
-from video_grouper.utils.config import YouTubeConfig
+from video_grouper.utils.config import YouTubeConfig, resolve_team
 from video_grouper.utils.paths import resolve_path
 
 from .base_upload_task import BaseUploadTask
@@ -48,7 +48,7 @@ class YoutubeUploadTask(BaseUploadTask):
         return {"task_type": self.task_type, "group_dir": self.group_dir}
 
     async def execute(
-        self, youtube_config=None, ntfy_service=None, storage_path=None
+        self, youtube_config=None, ntfy_service=None, storage_path=None, teams=None
     ) -> bool:
         """
         Execute the YouTube upload task.
@@ -109,7 +109,7 @@ class YoutubeUploadTask(BaseUploadTask):
 
             # Get playlist names using coordination logic
             processed_playlist_name, raw_playlist_name = await self._get_playlist_names(
-                match_info, youtube_config, ntfy_service, storage_path
+                match_info, youtube_config, ntfy_service, storage_path, teams
             )
 
             # If we don't have playlist names and a request was sent, skip for now
@@ -297,13 +297,14 @@ class YoutubeUploadTask(BaseUploadTask):
         config: YouTubeConfig,
         ntfy_service,
         storage_path: str,
+        teams: dict | None = None,
     ) -> tuple[str | None, str | None]:
         """
         Get playlist names for processed and raw videos.
 
         Lookup order:
         1. DirectoryState (playlist name stored in state.json)
-        2. config.playlist_map (team name → playlist name mapping)
+        2. the team's [TEAM.<key>] youtube_playlist
         3. config.processed_playlist / config.raw_playlist (format strings)
         4. Fall back to ntfy request if nothing found
 
@@ -326,22 +327,22 @@ class YoutubeUploadTask(BaseUploadTask):
         except Exception as e:
             logger.warning(f"Error reading playlist from directory state: {e}")
 
-        # 2. Check config.playlist_map for team-based mapping
-        #    Supports exact match or case-insensitive substring match
-        #    (e.g. key "13b ecnl-rl rochester" matches team "Western New York Flash - 13B ECNL-RL Rochester")
-        if not base_playlist_name:
-            if hasattr(config, "playlist_map") and config.playlist_map:
-                try:
-                    team_lower = match_info.my_team_name.lower()
-                    for key, playlist_name in config.playlist_map.root.items():
-                        if key.lower() == team_lower or key.lower() in team_lower:
-                            base_playlist_name = playlist_name
-                            logger.info(
-                                f"Using playlist from config map: {base_playlist_name} (matched key '{key}')"
-                            )
-                            break
-                except Exception as e:
-                    logger.warning(f"Error looking up playlist in config map: {e}")
+        # 2. The team's configured playlist. Resolution is shared with every
+        #    other per-team lookup (resolve_team), rather than this task
+        #    re-implementing "does the configured key appear in the team
+        #    name?" — that ad-hoc rule is why the same team ended up spelled
+        #    differently in every config section.
+        if not base_playlist_name and teams:
+            try:
+                team = resolve_team(teams, match_info.my_team_name)
+                if team and team.youtube_playlist:
+                    base_playlist_name = team.youtube_playlist
+                    logger.info(
+                        f"Using playlist from [TEAM.*]: {base_playlist_name} "
+                        f"(team '{team.name}')"
+                    )
+            except Exception as e:
+                logger.warning(f"Error resolving team for playlist: {e}")
 
         # 3. If we have a base playlist name, derive processed and raw names
         if base_playlist_name:

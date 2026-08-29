@@ -263,6 +263,17 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         self.config: Config | None = None
         if self.config_path.exists():
+            # The tray shares the service's config.ini and can start first, so
+            # it migrates too. Idempotent and lock-guarded, so whichever
+            # process gets there first does the work and the other no-ops.
+            from video_grouper.utils.config_migrations import migrate_config_file
+            from video_grouper.utils.locking import FileLock
+
+            try:
+                with FileLock(self.config_path):
+                    migrate_config_file(self.config_path)
+            except Exception as exc:  # noqa: BLE001 — never block the tray
+                logger.warning("TRAY: config migration skipped: %s", exc)
             self.config = load_config(self.config_path)
             # Switch logging from the bootstrap LOCALAPPDATA path to
             # the configured storage path (<storage>/logs/...) so the

@@ -196,6 +196,11 @@ async def main() -> int:
         )
         return 2
 
+    # A worker runs on its own machine with its own config.ini, so it needs
+    # the same one-shot schema migration the orchestrator entry points run.
+    from video_grouper.utils.config_migrations import migrate_config_file
+
+    migrate_config_file(config_path)
     config = load_config(config_path)
     setup_logging_from_config(config)
 
