@@ -333,6 +333,13 @@ class QueueProcessor(ABC):
                         logger.error(
                             f"{self.__class__.__name__}: Item exceeded max retries ({self._max_retries}), removing from queue: {item} (queue size: {queue_size})"
                         )
+                        try:
+                            await self.on_item_permanently_failed(item)
+                        except Exception as hook_exc:  # noqa: BLE001
+                            logger.error(
+                                f"{self.__class__.__name__}: on_item_permanently_failed "
+                                f"hook failed for {item}: {hook_exc}"
+                            )
                         await self.save_state()
 
             except Exception as e:
@@ -342,6 +349,16 @@ class QueueProcessor(ABC):
                 await asyncio.sleep(5)
 
         logger.info(f"{self.__class__.__name__}: Processing loop ended")
+
+    async def on_item_permanently_failed(self, item: BaseTask) -> None:
+        """Hook: the item exhausted its retries and is being abandoned.
+
+        Default no-op. Override to record the terminal outcome somewhere
+        durable. Dropping an item from the queue is not itself a record —
+        whatever persisted state the item represents still reads as
+        "unfinished" to everything else, forever.
+        """
+        return None
 
     def _serialize_item(self, item: BaseTask) -> dict:
         """Serialize a single task item to a dictionary."""

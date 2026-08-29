@@ -5,7 +5,13 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, RootModel, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    RootModel,
+    field_validator,
+    model_validator,
+)
 
 from video_grouper.pipeline.config import PipelineConfig
 
@@ -74,6 +80,111 @@ class StorageConfig(BaseModel):
     min_free_gb: float = 2.0
 
 
+class ArchiveConfig(BaseModel):
+    """What happens to a game's local files once it is safely on YouTube.
+
+    Two independent questions, not one: keep a second copy somewhere, and
+    reclaim the working drive. Copying to a second location is one answer,
+    not the shape of the feature — plenty of installs have a single drive
+    and no archive volume, and those are exactly the ones that fill up.
+
+        after_upload   second copy at `path`?   local files reclaimed?
+        ------------   ----------------------   ----------------------
+        keep           no                       no   (default)
+        copy           yes                      no
+        move           yes                      yes
+        discard        no                       yes
+
+    Verification is never a choice. Nothing is removed until the archive
+    copy's SHA-256 matches file-by-file (``copy``/``move``), or until the
+    group carries a recorded YouTube video id (``discard``). ``keep`` is the
+    default because deleting footage must be asked for, never assumed.
+
+    Archives are per-team, and a team's root is NOT derivable from its name.
+    A team recorded in match_info as "Guzzetta" archives to ``Heat_2012s``,
+    and one account can carry several age groups (``Heat_2012s`` and
+    ``Heat_2013s``) that must never be mixed. So the mapping is supplied,
+    not guessed::
+
+        [ARCHIVE.PER_TEAM]
+        Guzzetta = F:\\Heat_2012s
+        Flash = F:\\Flash_2013s
+
+    ``path`` is the fallback for teams with no entry, and is enough on its
+    own for a single-team install. Per-game subdirectories are named from
+    match_info: ``<root>/<date> - vs <opponent> (home|away)``.
+    """
+
+    after_upload: Literal["keep", "copy", "move", "discard"] = "keep"
+    # Fallback destination root for `copy`/`move`, used for teams with no
+    # PER_TEAM entry. Unused by `keep` and `discard`.
+    path: str = ""
+    # my_team_name -> archive root. Wins over `path`.
+    per_team: dict[str, str] = Field(default_factory=dict, alias="PER_TEAM")
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _second_copy_needs_somewhere_to_go(self) -> ArchiveConfig:
+        # Hard-fail rather than silently degrading to a no-op: an operator who
+        # asked for a second copy and got none would find out only when the
+        # working drive was already gone.
+        if self.after_upload in ("copy", "move") and not (
+            self.path.strip() or self.per_team
+        ):
+            raise ValueError(
+                f"[ARCHIVE] after_upload = {self.after_upload} needs somewhere "
+                "to put games: set `path`, or map teams to roots under "
+                "[ARCHIVE.PER_TEAM]. Use `discard` to reclaim local space "
+                "without a second copy, or `keep` to do nothing."
+            )
+        return self
+
+    def root_for_team(self, team_name: str) -> str:
+        """Archive root for *team_name*, or "" when it has nowhere to go.
+
+        *team_name* is a game's ``my_team_name`` from match_info.ini, and that
+        is the full registered name — on the live install, ``BU14 - Guzzetta``,
+        not ``Guzzetta``. An exact match therefore misses: an operator writes
+        the short handle they think of the team by, and archiving would refuse
+        every game with "no archive root for team".
+
+        So match exactly first, then by substring, which is the same rule
+        ``[YOUTUBE.PLAYLIST_MAP]`` has always used and the only reason a key
+        like ``guzzetta`` resolves ``BU14 - Guzzetta`` there. Longest key wins
+        among substring matches, so with two teams sharing a word ("Flash" and
+        "WNY Flash Rochester") the more specific root is chosen rather than
+        whichever happens to be first — filing a game under another team's
+        archive and then deleting the original is not recoverable.
+
+        Case-insensitive and whitespace-tolerant throughout: configparser
+        lowercases option keys, and match_info is hand-edited.
+        """
+        wanted = (team_name or "").strip().casefold()
+        if not wanted:
+            return self.path.strip()
+
+        for name, root in self.per_team.items():
+            if name.strip().casefold() == wanted:
+                return root.strip()
+
+        best_root = ""
+        best_len = 0
+        for name, root in self.per_team.items():
+            folded = name.strip().casefold()
+            if folded and folded in wanted and len(folded) > best_len:
+                best_root, best_len = root.strip(), len(folded)
+        return best_root or self.path.strip()
+
+    @property
+    def makes_second_copy(self) -> bool:
+        return self.after_upload in ("copy", "move")
+
+    @property
+    def reclaims_local_space(self) -> bool:
+        return self.after_upload in ("move", "discard")
+
+
 class RecordingConfig(BaseModel):
     min_duration: int = 60
     max_duration: int = 3600
@@ -111,17 +222,15 @@ class AppConfig(BaseModel):
     timezone: str = "America/New_York"
     github_repo: str = "mblakley/soccer-cam"
     storage_path: str | None = None
-    max_lookback_hours: int = 48
     max_files_per_poll: int = 50
     recording_end_date: str | None = None
-    # Reconciliation pass lookback. The incremental sync only queries a
-    # forward-moving window (max_lookback_hours back from now), so a game
-    # that ages past that window before it was fully captured is never
-    # re-queried and is lost. When the download queue is idle, the poller
-    # runs a full reconcile over this much larger window and re-queues any
-    # camera file that is missing/short/incomplete on disk — regardless of
-    # the high-water mark. 14 days covers a typical multi-week gap between
-    # plugging the camera in.
+    # Reconciliation pass lookback. When the download queue is idle, the
+    # poller re-scans this window and re-queues any camera file that is
+    # missing/short/incomplete on disk, healing downloads that died partway.
+    # Bounded below by the watermark, so it only ever asks that question about
+    # recordings we still owe work on — behind the watermark a game is
+    # *supposed* to be missing locally once it has been archived.
+    # 14 days covers a typical multi-week gap between plugging the camera in.
     reconcile_lookback_days: int = 14
     # Auto-upgrade settings. auto_update=true (Chrome-style) silently installs
     # detected updates once the pipeline is quiescent; =false stops after
@@ -400,6 +509,7 @@ class SetupConfig(BaseModel):
 class Config(BaseModel):
     cameras: list[CameraConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(alias="STORAGE")
+    archive: ArchiveConfig = Field(alias="ARCHIVE", default_factory=ArchiveConfig)
     recording: RecordingConfig = Field(alias="RECORDING")
     processing: ProcessingConfig = Field(alias="PROCESSING")
     logging: LoggingConfig = Field(alias="LOGGING")
@@ -464,6 +574,14 @@ def load_config(config_path: Path) -> Config:
     if "YOUTUBE.PLAYLIST_MAP" in config_dict:
         config_dict.setdefault("YOUTUBE", {})["playlist_map"] = (
             YouTubePlaylistMapConfig(config_dict.pop("YOUTUBE.PLAYLIST_MAP"))
+        )
+
+    # `[ARCHIVE.PER_TEAM]` -> dict of my_team_name -> archive root. Archives
+    # are per-team and the root is not derivable from the name (match_info
+    # "Guzzetta" -> Heat_2012s), so the mapping has to come from config.
+    if "ARCHIVE.PER_TEAM" in config_dict:
+        config_dict.setdefault("ARCHIVE", {})["PER_TEAM"] = config_dict.pop(
+            "ARCHIVE.PER_TEAM"
         )
 
     # Handle BALL_TRACKING sub-sections (provider configs + per-team overrides).

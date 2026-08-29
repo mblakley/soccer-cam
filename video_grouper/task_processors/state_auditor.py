@@ -41,6 +41,9 @@ _DOWNLOAD_DONE_STATUSES = frozenset(
         "pipeline_complete",
         "complete",
         "not_a_game",
+        # Uploaded and moved off local disk. Its files are *supposed* to be
+        # missing locally; re-fetching them would undo the archive.
+        "archived",
     }
 )
 
@@ -90,6 +93,10 @@ class StateAuditor(PollingProcessor):
             self._download_processors = {}
         self.video_processor = video_processor
         self.ntfy_processor = ntfy_processor
+        # Attribute-injected by VideoGrouperApp after construction, mirroring
+        # how ttt_reporter is wired onto the pollers. None in the tray and in
+        # tests, where nothing archives.
+        self.archive_processor = None
 
         # Initialize API services using mock service factory functions
         self.teamsnap_service = create_teamsnap_service(config.teamsnap)
@@ -377,6 +384,20 @@ class StateAuditor(PollingProcessor):
             # this branch is a harmless no-op (the upload queue dedupes).
             elif dir_state.status in ("ball_tracking_complete", "pipeline_complete"):
                 await self._queue_upload(group_dir)
+
+            # Uploaded, but still occupying the working drive. The upload task
+            # hands finished groups straight to the archive queue, so this only
+            # fires when that was missed — a crash between upload and enqueue,
+            # or a group completed by a build that predates archiving. The
+            # archive step re-checks everything itself, and the queue dedupes,
+            # so a redundant enqueue costs nothing.
+            elif dir_state.status == "complete":
+                if self.archive_processor is not None:
+                    from .tasks.archive import ArchiveTask
+
+                    await self.archive_processor.add_work(
+                        ArchiveTask(group_dir=group_dir)
+                    )
 
             # Check for not_a_game status (user confirmed there was no match)
             elif dir_state.status == "not_a_game":

@@ -1880,6 +1880,91 @@ and cannot be derived in-detector). **Fast-follow:** replace the NTFY 5-min walk
 single detector-seeded "is this the kickoff?" confirmation (the S3 verify, moved ahead of the trim).
 **Files:** `video_grouper/task_processors/phase_game_start.py`, `tests/test_phase_game_start.py`
 
+## 2026-08-06: One completion watermark decides downloads; archiving becomes a pipeline step
+
+**Context:** Archiving five published July games from `D:` to `F:` made the camera poller
+re-download all of them. Every "do we already have this?" test soccer-cam had asks the local disk —
+the incremental pass reads the group's `state.json` via `is_file_in_state`, and the reconcile pass
+stats the `.mp4` — and archiving deletes both on purpose. A finished, published game therefore
+answers "never seen it". Mark's framing was that the record of what we've handled was stored next to
+the bulk data we intend to delete; that is exactly right for `state.json` (per-group), though the
+high-water mark itself was already central (`camera_state.json` at the storage root) and did survive.
+
+The mark could not settle it anyway, because it advanced at **discovery**: `camera_poller.py`
+recorded it immediately after files were queued, before a byte was downloaded, so a download that
+never completed was never queried again. That is the 2026-06-15 loss, and it is why
+`max_lookback_hours` and the reconcile pass existed at all — both were patches over a mark that did
+not mean what its name said.
+
+**Decision:** Make it mean it. The watermark is the newest recording end time `T` such that *every*
+recording at or before `T` is settled, and it only ever moves forward. "At or before the watermark"
+therefore means finished, so the poller stops asking the disk anything. Enforced directly in the
+discovery loop, not merely via the query range — cameras return recordings that overlap the window,
+so a game straddling the boundary comes back regardless. Reconcile is bounded below by it: on-disk
+completeness is the right question only for work we still owe. `max_lookback_hours` is removed (it
+only ever skipped a stale watermark forward, silently dropping what it skipped); first run scans a
+year, since neither camera backend can list "everything" and both return `[]` if handed `None`.
+Retries that exhaust now mark the file `abandoned` via a new `on_item_permanently_failed` hook, so
+one recording the camera has deleted cannot pin the watermark and every later game behind it.
+
+Archiving becomes a real pipeline step (`ArchiveProcessor`, post-`complete`, `[ARCHIVE]`) rather
+than an ad-hoc script: copy → verify SHA-256 → record `archived` → delete, in that order, with
+`state.json` deleted last.
+
+The setting is a **disposition**, `after_upload = keep | copy | move | discard`, not a
+copy-to-a-second-location flag with a delete toggle. Mark's correction: "archiving to a separate
+location should be a configurable option, not a requirement for everyone." The first design forced a
+two-location model, so a single-drive install — the one most likely to fill up — could not use the
+feature at all. The two real questions are independent: keep a second copy (`path`), and reclaim the
+working drive. `discard` answers the single-drive case (YouTube is the archive) and refuses unless
+the group carries a recorded YouTube video id, since those files are then the only copy. `copy`/`move`
+with nowhere to put games is a config-load hard failure rather than a silent no-op.
+
+Archive roots are matched against a game's `my_team_name` **by substring, not exactly** — the
+same rule `[YOUTUBE.PLAYLIST_MAP]` has always used. The live value is the full registered name
+(`BU14 - Guzzetta`), while an operator writes the short handle (`guzzetta`); an exact match misses
+and archiving refuses every game. Longest configured key wins, so two teams sharing a word do not
+get filed into each other's archive — which, followed by deleting the original, is unrecoverable.
+
+Archive roots are **per-team** and configured, never derived: `[ARCHIVE.PER_TEAM]` maps
+`my_team_name` to a root. Verified against the live layout 2026-08-07 — `F:\Heat_2012s`,
+`F:\Heat_2013s`, `F:\Flash_2013s`, holding `2026.07.12 - vs Niagara Falls Soccer Club (away)`.
+The root is not derivable from the team name (match_info says "Guzzetta", the root is `Heat_2012s`),
+and one account carries two Heat age groups that must not be mixed, so a game whose team has no root
+(and no `path` fallback) is refused rather than filed under another team's archive. Lookup is
+case-insensitive because configparser lowercases option keys. The earlier name
+`delete_after_verify` was rejected for encoding an invariant as an option — we never delete without
+verifying, so the name implied a `delete_before_verify` mode that must not exist. The ordering is the point. The ad-hoc version deleted first and
+recorded nothing; interrupted by a dropped remote session it left a group whose `state.json` still
+said `combined`, which the pipeline read as mid-processing — it blanked `match_info.ini` to a stub
+and would have re-rendered and re-uploaded an already-published game. The step also **hard-refuses**
+to archive a group the watermark has not passed, since doing so is precisely what lets the poller
+rediscover it.
+
+**Trade-off:** the watermark is a single scalar, not a per-file ledger, so it cannot express
+out-of-order completion — a stuck recording holds the line until it settles or is abandoned. That is
+deliberate: it is strictly less state, and the contiguous-prefix rule is what makes archiving
+structurally unobservable to the poller. A per-file central ledger was considered and rejected as a
+new store to migrate and maintain that also reintroduces the "known ≠ downloaded" ambiguity PR #89
+was written to kill.
+
+**Not done here:** TTT's `/api/internal/device-link/high-water-mark` returns
+`max(recording_start)` over *all registered* recordings, and registration happens at discovery — the
+same flaw. TTT does hold a full per-recording record (`pipeline_steps[]` with per-step status), but
+soccer-cam has no endpoint to read it back as a set, only that scalar. Making TTT's watermark
+completion-aware is a cross-repo change, deliberately deferred; the local watermark is the same value
+and the same semantics either way. Note this would reverse `ttt_reporter.get_high_water_mark`'s
+stated intent ("Supplementary — used for remote visibility, not for local decisions").
+
+**Files:** `video_grouper/task_processors/camera_poller.py`,
+`video_grouper/task_processors/archive_processor.py`,
+`video_grouper/task_processors/tasks/archive/archive_task.py`,
+`video_grouper/task_processors/base_queue_processor.py`,
+`video_grouper/task_processors/download_processor.py`,
+`video_grouper/task_processors/state_auditor.py`, `video_grouper/utils/config.py`,
+`tests/test_camera_poller.py`, `tests/test_archive_processor.py`,
+`tests/test_download_processor.py`
+
 ---
 
 ## Decision: ship the seam auto-measure as a refusing instrument, not a number generator (2026-08-19)

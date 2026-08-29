@@ -323,5 +323,34 @@ class DownloadProcessor(QueueProcessor):
                 self.error_tracker.record("download", str(e), {"file": file_name})
             raise
 
+    async def on_item_permanently_failed(self, item: RecordingFile) -> None:
+        """Record a download we are never going to complete as terminal.
+
+        The base class drops the item from the queue after its retries are
+        exhausted, but the file stays at ``download_failed`` — a non-terminal
+        status. That is enough to pin the camera poller's watermark forever:
+        the watermark may only advance over settled recordings, so a single
+        recording the camera has since deleted (404-gone), or that is corrupt
+        on the card, would hold the line and every later game with it.
+
+        Marking it ``abandoned`` settles it, so the watermark moves past and
+        the reconcile pass stops re-queuing it. Logged at ERROR because
+        abandoning footage is a real loss, not routine cleanup — the file is
+        named so it can be recovered by hand if it still matters.
+        """
+        file_path = getattr(item, "file_path", None)
+        if not file_path:
+            return
+        logger.error(
+            "DOWNLOAD: Abandoning %s after %d failed attempts — marking it "
+            "terminal so it stops blocking the camera watermark. If this "
+            "recording matters, fetch it from the camera by hand.",
+            os.path.basename(file_path),
+            self._max_retries,
+        )
+        group_dir = os.path.dirname(file_path)
+        dir_state = DirectoryState(group_dir)
+        await dir_state.update_file_state(file_path, status="abandoned")
+
     def get_item_key(self, item: RecordingFile) -> str:
         return f"recording:{item.file_path}"

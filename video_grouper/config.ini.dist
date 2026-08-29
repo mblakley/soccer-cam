@@ -47,6 +47,42 @@ backup_count = 30
 check_interval_seconds = 60
 timezone = America/New_York
 
+[ARCHIVE]
+# What happens to a game's local files once it is safely on YouTube.
+#
+#   keep     leave them alone (default)
+#   copy     copy to `path`, keep the local files too
+#   move     copy to `path`, then reclaim the local files
+#   discard  reclaim the local files; YouTube holds the only copy
+#
+# A second location is one answer, not a requirement — a single-drive
+# install uses `discard` and still gets its space back.
+#
+# Verification is never optional. `copy`/`move` compare SHA-256 file by file
+# before anything is removed, and `discard` refuses unless the group has a
+# recorded YouTube video id. The group is marked archived BEFORE any delete,
+# so an interrupted run leaves a game that plainly reads as finished instead
+# of one that looks half-processed and gets reprocessed.
+#
+# Nothing is reclaimed before the camera poller has finished with the game's
+# recordings, or the poller would rediscover it as new and download it again.
+after_upload = keep
+# Fallback archive root for `copy`/`move`, used for teams with no
+# [ARCHIVE.PER_TEAM] entry. Enough on its own for a single-team install.
+# Unused by `keep`/`discard`.
+path =
+
+# Archives are per-team. A team's root cannot be derived from its name — a
+# team recorded in match_info as "Guzzetta" archives to Heat_2012s, and one
+# account can carry several age groups that must not be mixed — so map them
+# explicitly. Games land directly in their team's root:
+#   <root>/2026.07.12 - vs Niagara Falls Soccer Club (away)/
+# A game whose team has no root here (and no `path` fallback) is refused
+# rather than filed under some other team.
+[ARCHIVE.PER_TEAM]
+# Guzzetta = F:\Heat_2012s
+# Flash = F:\Flash_2013s
+
 [TEAMSNAP]
 # Set to true to enable TeamSnap integration
 enabled = false

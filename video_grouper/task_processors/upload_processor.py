@@ -25,6 +25,7 @@ class UploadProcessor(QueueProcessor):
         storage_path: str,
         config: Config,
         ntfy_service: Any | None = None,
+        archive_processor: Any | None = None,
     ):
         """Initialize the upload processor.
 
@@ -32,10 +33,14 @@ class UploadProcessor(QueueProcessor):
             storage_path: Base storage path
             config: Application configuration
             ntfy_service: Optional NtfyService for playlist requests and auth notifications
+            archive_processor: Optional ArchiveProcessor. A group is handed to
+                it the moment its upload completes — pushed downstream inline
+                rather than waiting for a sweep to notice.
         """
         super().__init__(storage_path, config)
         self.config = config
         self.ntfy_service = ntfy_service
+        self.archive_processor = archive_processor
         self.ttt_reporter = None
 
     @property
@@ -171,6 +176,26 @@ class UploadProcessor(QueueProcessor):
                                 )
                         except Exception:
                             pass  # Never block upload on TTT
+
+                # Hand the finished group straight to the archive queue.
+                # Pushed inline here rather than left for a periodic sweep to
+                # discover, so reclaiming disk follows publication directly.
+                # The archive step re-checks everything that matters
+                # (verification, the watermark guard), so a duplicate or
+                # premature enqueue is harmless.
+                if self.archive_processor is not None:
+                    try:
+                        from .tasks.archive import ArchiveTask
+
+                        await self.archive_processor.add_work(
+                            ArchiveTask(group_dir=item.get_item_path())
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "UPLOAD: could not queue archive for %s: %s",
+                            item.get_item_path(),
+                            e,
+                        )
             else:
                 logger.error(f"UPLOAD: Task execution failed: {item}")
                 # Report upload failure to TTT (best-effort)
