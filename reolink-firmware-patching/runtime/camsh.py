@@ -29,6 +29,7 @@ Usage as a CLI:
 
 from __future__ import annotations
 
+import hashlib
 import re
 import socket
 import sys
@@ -184,6 +185,62 @@ def sh_bytes(
     return _send_bytes(cmd, host, port, timeout)
 
 
+def put_file(
+    path: str,
+    data: str | bytes,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+) -> None:
+    """Write `data` to `path` on the camera, then verify it by md5.
+
+    Why this is not just `sh("cat > path <<EOF ...")`: `check()` scans the whole
+    command string, and a command that carries a file body contains that file's
+    words. Pushing a copy of S99_NetState this way trips the reboot refusal on
+    the word "reboot" in one of its comments. That refusal is not wrong -- it
+    cannot tell code from data -- so the answer is a separate operation whose
+    risk profile is actually different, not a reworded payload. Rewording the
+    firmware to slip past a guard is how guards stop meaning anything.
+
+    So the refusals here apply to the *destination*, which is the part that can
+    do damage: nothing may be written inside a PROTECTED path, and the netstate
+    override is reserved to hold_recording_override(). The body is never parsed
+    as a command -- it goes through a quoted heredoc, so the remote shell does
+    no expansion on it either.
+
+    Raises CameraCommandRefused for a forbidden destination, and RuntimeError if
+    the md5 read back does not match what was sent.
+    """
+    if isinstance(data, str):
+        data = data.encode()
+    for protected in PROTECTED:
+        if path.startswith(protected):
+            raise CameraCommandRefused(
+                f"refusing to write inside {protected}\n  path: {path}"
+            )
+    if path.rstrip("/") == OVERRIDE_FLAG:
+        raise CameraCommandRefused(
+            "refusing to write the netstate override; use hold_recording_override()"
+        )
+
+    digest = hashlib.md5(data).hexdigest()
+    delim = "EOF_CAMSH_PUT"
+    while delim.encode() in data:
+        delim += "_"
+    body = data.decode(errors="strict")
+    cmd = (
+        f"cat > {path} <<'{delim}'\n"
+        f"{body.rstrip(chr(10))}\n"
+        f"{delim}\n"
+        f"sync; md5sum {path}"
+    )
+    out = _send(cmd, host, port, timeout=90)
+    if digest not in out:
+        raise RuntimeError(
+            f"put_file({path}) verification failed: expected md5 {digest}\n"
+            f"  camera said: {out.strip()[:300]}"
+        )
+
+
 def hold_recording_override(
     on: bool, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
 ) -> str:
@@ -256,6 +313,54 @@ def recording_override_held(
                 f"be recording at home. Remove {OVERRIDE_FLAG} by hand.\n"
                 f"  camera said: {out.strip()[:200]}"
             )
+
+
+class SysrqUnavailable(RuntimeError):
+    """The kernel will not accept a sysrq reset, so the cut cannot be simulated."""
+
+
+def simulate_power_cut(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> str:
+    """Reset the camera immediately via sysrq, with no sync and no unmount.
+
+    This exists to TEST power-cut resilience, which is the one thing that cannot
+    be argued into evidence: the segment-rollover work in S99_NetState v3 is
+    only worth anything if an abrupt loss of power costs a bounded amount of
+    footage, and the only way to know is to take the power away.
+
+    `check()` refuses reboot/halt/poweroff/shutdown in a free-form command, and
+    must keep doing so -- the point of that refusal is that a reboot should
+    never be a side effect of a command batch, because the camera boots
+    recording-enabled and writes a stub before the daemon disables it. Testing a
+    power cut is the opposite of a side effect, so it lives here for the same
+    reason hold_recording_override() does: a named function, one fixed command,
+    no free-form input, obvious in a transcript. Wording your way around the
+    regex in an ad-hoc `sh()` call would get the same bytes onto the wire while
+    hiding the intent, and then the refusal protects nothing.
+
+    How close this is to the real thing: `sysrq-b` resets the SoC immediately
+    without syncing buffers or unmounting /mnt/sda, so unflushed FAT directory
+    entries and an unfinalised moov are lost exactly as they would be on a yank.
+    It is NOT identical -- the SD card keeps its own power and finishes any
+    in-flight block write, where a real cut can tear a sector. For the failure
+    being defended against (metadata that never reached the card) they are
+    equivalent; for media-level corruption they are not. Say which one you did.
+
+    Raises SysrqUnavailable if the kernel's sysrq is disabled, rather than
+    returning as though it had worked -- a reset that silently does not happen
+    would be read as "the camera survived".
+    """
+    enabled = _send("cat /proc/sys/kernel/sysrq 2>/dev/null", host, port).strip()
+    value = enabled.splitlines()[-1].strip() if enabled else ""
+    if value in ("", "0"):
+        raise SysrqUnavailable(
+            "kernel sysrq is disabled (/proc/sys/kernel/sysrq="
+            f"{value or 'unreadable'}); cannot simulate a power cut this way"
+        )
+    # No response is expected: the box is gone mid-sentence. That is the point.
+    try:
+        return _send("echo b > /proc/sysrq-trigger", host, port, timeout=5)
+    except OSError as exc:
+        return f"connection dropped as expected: {exc}"
 
 
 def _selftest() -> int:
@@ -337,6 +442,49 @@ def _selftest() -> int:
         else:
             print(f"  [FAIL] {name}: release_attempted={released} raised={stuck}")
             fails += 1
+
+    # put_file() gates on its DESTINATION, since its payload is data and will
+    # routinely contain words the command refusals look for.
+    for path, should_refuse in (
+        ("/mnt/sda/Mp4Record/2026-08-22/x.mp4", True),
+        ("/mnt/para/anything", True),
+        (OVERRIDE_FLAG, True),
+        ("/tmp/S99_v3", False),
+        ("/mnt/sda/netstate/rollover_secs", False),
+    ):
+        total += 1
+        real_send = _send
+        _send = lambda *a, **k: "d41d8cd98f00b204e9800998ecf8427e  x"  # noqa: E731
+        try:
+            put_file(path, b"")
+            refused = False
+        except CameraCommandRefused:
+            refused = True
+        except RuntimeError:
+            refused = False  # got past the destination check; md5 is not the gate here
+        finally:
+            _send = real_send  # type: ignore[assignment]
+        if refused is should_refuse:
+            print(f"  [ok]   put_file {'refused' if refused else 'allowed'}: {path}")
+        else:
+            print(f"  [FAIL] put_file {path}: refused={refused} want={should_refuse}")
+            fails += 1
+
+    # A payload containing a forbidden word must still go through, because it is
+    # data. This is the case that forced put_file() to exist.
+    total += 1
+    real_send = _send
+    _send = lambda *a, **k: "d41d8cd98f00b204e9800998ecf8427e  x"  # noqa: E731
+    try:
+        put_file("/tmp/script.sh", b"# retune with a file drop and no reboot\n")
+        print("  [ok]   put_file allows a payload containing 'reboot'")
+    except CameraCommandRefused:
+        print("  [FAIL] put_file refused a payload containing 'reboot'")
+        fails += 1
+    except RuntimeError:
+        print("  [ok]   put_file allows a payload containing 'reboot'")
+    finally:
+        _send = real_send  # type: ignore[assignment]
 
     print(f"\n{total - fails}/{total} gates passed")
     return 1 if fails else 0

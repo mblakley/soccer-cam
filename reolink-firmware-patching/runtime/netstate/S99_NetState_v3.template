@@ -1,0 +1,393 @@
+#!/bin/sh
+# /etc/init.d/S99_NetState  (v3: + periodic segment rollover, + API session release)
+# Toggles scheduled recording based on the default-gateway MAC address.
+# Idle on home networks (the HOME_MACS_DEFAULT list below, set at build time);
+# record continuously everywhere else.
+#
+# v2 change: when we are HOME (recording disabled), automatically delete any
+# recording files created during THIS boot (the boot-window "stub" the camera
+# writes before the daemon flips enable=0). Files from previous boots (real
+# field game footage already on the card) are never touched, because we only
+# delete files whose mtime is at/after this boot's start time.
+#
+# v3 change: SEGMENT ROLLOVER. The camera writes one MP4 per recording session
+# and only finalises it -- fills the pre-allocated moov at the front of the
+# file, renames to the full start_end_hash form -- when recording STOPS. Cut
+# power mid-session and the whole session is lost, not truncated: on 2026-08-22
+# a ~435 MB main stream was absent from the card entirely, with df confirming
+# the space was never consumed. Toggling recording off is what makes a file
+# durable, so while we are AWAY we do that on a timer: off -> sync -> on, every
+# ROLLOVER_SECS. A power cut then costs at most one interval instead of
+# everything.
+#
+# Measured on hardware (build 4920, 2026-08-22, 10 consecutive rollovers): the
+# toggle takes ~0.6 s end to end, and the camera's pre-record buffer backfills
+# it, so consecutive segments OVERLAP by ~0.5 s (~10 frames at 20 fps) rather
+# than dropping frames. Segment start times advanced 208 s while 212.98 s of
+# content was recorded. Nothing is lost per rollover; ~0.5 s is duplicated. If
+# the pre-record buffer ever fails to cover the toggle (it is a fixed-size ring,
+# so a much higher bitrate could shorten it), the worst case degrades to a gap
+# equal to the toggle time, ~0.6 s -- still bounded and sub-second.
+#
+# v3 also makes set_record_state() LOG OUT. The camera allows a maximum of 5
+# concurrent API sessions ("max session", rspCode -5) and a token's lease is
+# 3600 s, so every login that is never released holds a slot for an hour. v2
+# logged in per call and never logged out, which was harmless when calls were
+# rare (one per home/away transition) and is fatal at one rollover a minute:
+# the pool is exhausted within minutes, SetRecV20 starts failing "please login
+# first", and the camera silently stops recording at a game. Verified on
+# hardware: 5 leaked logins exhaust the pool; with Logout, 12/12 succeed.
+#
+# Runtime overrides (on the writable SD card):
+#   /mnt/sda/netstate/home_macs.txt  - one MAC per line, replaces baked-in list
+#   /mnt/sda/netstate/override       - presence => daemon yields, you control rec
+#   /mnt/sda/netstate/no_stub_clean  - presence => disable home-stub cleanup
+#   /mnt/sda/netstate/rollover_secs  - segment length in seconds; 0 disables
+#   /mnt/sda/netstate/log            - decision log (auto-rotates at 256 KB)
+
+HOME_MACS_DEFAULT="%%HOME_MACS%%"
+USER="%%CAMERA_USER%%"
+PASS="%%CAMERA_PASS%%"
+ROLLOVER_SECS_DEFAULT="%%ROLLOVER_SECS%%"
+
+CONFIG_DIR=/mnt/sda/netstate
+HOME_MACS_FILE=$CONFIG_DIR/home_macs.txt
+OVERRIDE_FILE=$CONFIG_DIR/override
+NOCLEAN_FILE=$CONFIG_DIR/no_stub_clean
+ROLLOVER_FILE=$CONFIG_DIR/rollover_secs
+LOG=$CONFIG_DIR/log
+REC_DIR=/mnt/sda/Mp4Record
+
+POLL_INTERVAL=30
+# Head-start before the first home/away check. Kept short: wait_for_api (below)
+# already polls until the camera API is reachable, so a long pre-sleep only
+# delays the home-disable and lets the camera record a longer boot "stub" at
+# home. Fail-enabled is preserved regardless -- the camera boots recording and
+# we only ever DISABLE on a confirmed home MAC.
+INIT_GRACE=5
+LOG_MAX_BYTES=262144
+# Refuse a rollover interval shorter than this. Each rollover is two API round
+# trips plus a sync; below ~15 s the daemon would spend a visible fraction of
+# its life toggling, and the duplicated pre-record overlap stops being a
+# rounding error. A bad value falls back to the built-in default rather than
+# being silently clamped, so the operator finds out from the log.
+ROLLOVER_MIN=15
+
+# This boot's start time (epoch). Anything in Mp4Record with mtime >= this was
+# written during the current power-on; if we're home, it's a stub to remove.
+BOOT_EPOCH=$(( $(date +%s) - $(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0) ))
+
+ALL_ON='111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111'
+
+mkdir -p "$CONFIG_DIR" 2>/dev/null
+
+# Surface the firmware build manifest to the SD card so it is readable over the
+# HTTP unlock at /downloadfile/soccercam/build.txt -- identifies which build is
+# running (every pak reports the same stock version string otherwise).
+if [ -f /etc/soccercam_build ]; then
+    mkdir -p /mnt/sda/soccercam 2>/dev/null
+    cp -f /etc/soccercam_build /mnt/sda/soccercam/build.txt 2>/dev/null
+fi
+
+log() {
+    local MSG="[$(date '+%F %T')] $*"
+    echo "$MSG"
+    if [ -w "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR" 2>/dev/null; then
+        if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt $LOG_MAX_BYTES ]; then
+            mv "$LOG" "$LOG.old" 2>/dev/null
+        fi
+        echo "$MSG" >>"$LOG"
+    fi
+}
+
+# Delete recordings created during THIS boot (mtime >= BOOT_EPOCH). Only called
+# while home.
+#
+# We deliberately do NOT compute "today's" directory from `date`: the shell's
+# clock is UTC, but the camera names its Mp4Record/<YYYY-MM-DD> subdirs in LOCAL
+# time, so after dark the two land on different calendar days and a date-derived
+# path misses the stub entirely (this is exactly why the home boot-stub was not
+# being cleaned). Instead we scan EVERY date subdir and let the epoch-based
+# mtime test -- which is timezone-independent -- decide what belongs to this
+# boot. Verbose logging records the boot epoch, what was scanned, and whether
+# each rm actually removed the file (re-stat after deleting).
+clean_home_stubs() {
+    [ -f "$NOCLEAN_FILE" ] && return
+    local D F MT N=0 CAND=0 SCANNED=0 FIRST=0
+    [ -z "$CLEAN_RAN" ] && { FIRST=1; CLEAN_RAN=1; }
+    [ -d "$REC_DIR" ] || { [ "$FIRST" = 1 ] && log "  clean: $REC_DIR missing -- nothing to clean"; return; }
+    # First pass: count candidates (mtime >= this boot) WITHOUT deleting, so the
+    # verbose per-file log only fires when there is actually a stub to remove.
+    for D in "$REC_DIR"/*; do
+        [ -d "$D" ] || continue
+        for F in "$D"/*.mp4; do
+            [ -f "$F" ] || continue
+            SCANNED=$((SCANNED+1))
+            MT=$(stat -c %Y "$F" 2>/dev/null) || continue
+            [ "$MT" -ge "$BOOT_EPOCH" ] && CAND=$((CAND+1))
+        done
+    done
+    if [ "$CAND" = 0 ]; then
+        [ "$FIRST" = 1 ] && log "  clean: boot_epoch=$BOOT_EPOCH date_utc='$(date '+%F %T')' scanned=$SCANNED candidates=0 (nothing newer than this boot)"
+        return
+    fi
+    log "  clean: boot_epoch=$BOOT_EPOCH now=$(date +%s) date_utc='$(date '+%F %T')' scanned=$SCANNED candidates=$CAND -- deleting stub(s)"
+    for D in "$REC_DIR"/*; do
+        [ -d "$D" ] || continue
+        for F in "$D"/*.mp4; do
+            [ -f "$F" ] || continue
+            MT=$(stat -c %Y "$F" 2>/dev/null) || continue
+            [ "$MT" -ge "$BOOT_EPOCH" ] || continue
+            log "    rm $F  (mtime=$MT, +$((MT-BOOT_EPOCH))s into boot)"
+            rm -f "$F"
+            if [ -f "$F" ]; then
+                log "    FAILED -- still present after rm: $F"
+            else
+                log "    removed -- gone after rm: $F"
+                N=$((N+1))
+            fi
+        done
+        rmdir "$D" 2>/dev/null && log "    rmdir emptied dir $D"
+    done
+    log "  clean: deleted $N of $CAND candidate stub(s) (boot_epoch $BOOT_EPOCH)"
+}
+
+home_macs() {
+    if [ -r "$HOME_MACS_FILE" ]; then
+        sed 's/#.*//; s/[[:space:]]//g' "$HOME_MACS_FILE" | grep -v '^$'
+    else
+        echo "$HOME_MACS_DEFAULT" | tr ' ' '\n'
+    fi
+}
+
+is_home_mac() {
+    local M CANDIDATE
+    CANDIDATE=$(echo "$1" | tr 'A-Z' 'a-z')
+    for M in $(home_macs | tr 'A-Z' 'a-z'); do
+        [ "$M" = "$CANDIDATE" ] && return 0
+    done
+    return 1
+}
+
+# Segment length in seconds, re-read every cycle so it can be retuned with a
+# file drop and no reboot. 0 disables rollover entirely. Anything unparseable,
+# negative, or below ROLLOVER_MIN falls back to the built-in default.
+rollover_secs() {
+    local V
+    V=$(sed 's/#.*//; s/[[:space:]]//g' "$ROLLOVER_FILE" 2>/dev/null | grep -v '^$' | head -1)
+    [ -z "$V" ] && { echo "$ROLLOVER_SECS_DEFAULT"; return; }
+    case "$V" in
+        ''|*[!0-9]*) echo "$ROLLOVER_SECS_DEFAULT"; return ;;
+    esac
+    [ "$V" = 0 ] && { echo 0; return; }
+    if [ "$V" -lt "$ROLLOVER_MIN" ]; then echo "$ROLLOVER_SECS_DEFAULT"; return; fi
+    echo "$V"
+}
+
+get_gateway_ip() {
+    local HEX
+    HEX=$(awk '$2 == "00000000" { print $3; exit }' /proc/net/route)
+    [ -z "$HEX" ] && return 1
+    printf '%d.%d.%d.%d\n' 0x${HEX:6:2} 0x${HEX:4:2} 0x${HEX:2:2} 0x${HEX:0:2}
+}
+
+resolve_arp_mac() {
+    local IP=$1 MAC
+    MAC=$(awk -v ip="$IP" '$1 == ip { print $4; exit }' /proc/net/arp 2>/dev/null)
+    if [ -z "$MAC" ] || [ "$MAC" = "00:00:00:00:00:00" ]; then
+        ping -c 1 -W 1 "$IP" >/dev/null 2>&1
+        MAC=$(awk -v ip="$IP" '$1 == ip { print $4; exit }' /proc/net/arp 2>/dev/null)
+    fi
+    [ -z "$MAC" ] || [ "$MAC" = "00:00:00:00:00:00" ] && return 1
+    echo "$MAC"
+}
+
+api_login() {
+    local BODY="[{\"cmd\":\"Login\",\"action\":0,\"param\":{\"User\":{\"userName\":\"$USER\",\"password\":\"$PASS\"}}}]"
+    local URL="http://127.0.0.1/api.cgi?cmd=Login&token=null"
+    local TMP=/tmp/netstate_resp.$$ TMPE=/tmp/netstate_err.$$
+    wget -q -O "$TMP" --header='Content-Type: application/json' --post-data="$BODY" "$URL" 2>"$TMPE"
+    local TOK=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP" 2>/dev/null | head -1)
+    if [ -z "$TOK" ]; then
+        wget -q -O "$TMP" --post-data="$BODY" "$URL" 2>"$TMPE"
+        TOK=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$TMP" 2>/dev/null | head -1)
+    fi
+    rm -f "$TMP" "$TMPE"
+    [ -n "$TOK" ] && echo "$TOK"
+}
+
+# Release an API session. The camera caps concurrent sessions at 5 and a lease
+# lasts an hour, so a token that is not returned is a slot burned until it
+# expires. Called unconditionally after every SetRecV20, success or failure --
+# a failed set still consumed the login.
+api_logout() {
+    [ -n "$1" ] || return 0
+    wget -q -O /dev/null --header='Content-Type: application/json' \
+        --post-data='[{"cmd":"Logout","action":0,"param":{}}]' \
+        "http://127.0.0.1/api.cgi?cmd=Logout&token=$1" 2>/dev/null
+}
+
+set_record_state() {
+    local TOK BODY RESP ENABLE RC
+    TOK=$(api_login)
+    if [ -z "$TOK" ]; then log "  api_login failed"; return 1; fi
+    if [ "$1" = "on" ]; then ENABLE=1; else ENABLE=0; fi
+    BODY="[{\"cmd\":\"SetRecV20\",\"action\":0,\"param\":{\"Rec\":{\"enable\":$ENABLE,\"overwrite\":1,\"postRec\":\"15 Seconds\",\"preRec\":1,\"saveDay\":7,\"schedule\":{\"channel\":0,\"table\":{\"TIMING\":\"$ALL_ON\"}}}}}]"
+    RESP=$(wget -q -O- --header='Content-Type: application/json' --post-data="$BODY" \
+        "http://127.0.0.1/api.cgi?cmd=SetRecV20&token=$TOK" 2>/dev/null)
+    case "$RESP" in
+        *'"rspCode"'*200*) RC=0 ;;
+        *) log "  set_record_state rsp: $RESP"; RC=1 ;;
+    esac
+    api_logout "$TOK"
+    return $RC
+}
+
+# Close the current recording and immediately open a new one, so an abrupt power
+# cut costs at most one interval. `sync` sits between the two so the just-closed
+# file's data AND its FAT directory entry are on the card before we start
+# writing again -- the failure being defended against is metadata that never
+# reached the card, not a torn frame.
+do_rollover() {
+    # The away-state guard lives here, not only at the call site. Recording is
+    # enabled only while away; a rollover in any other state would end with
+    # set_record_state on and leave the camera recording at home -- the exact
+    # 2026-08-16 failure, reached by a new road. The call site checks too.
+    [ "$LAST_STATE" = "away" ] || { log "  roll: refusing, state is '$LAST_STATE' not away"; return 1; }
+    if ! set_record_state off; then
+        log "  roll: OFF failed -- segment left open, still recording (safe), retry next cycle"
+        return 1
+    fi
+    sync
+    local i=0
+    while [ $i -lt 5 ]; do
+        if set_record_state on; then
+            [ $i -gt 0 ] && log "  roll: ON recovered after $i retr(y/ies)"
+            return 0
+        fi
+        i=$((i+1))
+        log "  roll: ON attempt $i failed -- retrying"
+        sleep 2
+    done
+    # Recording is OFF and we could not turn it back on. This is the one
+    # genuinely dangerous outcome, so say so loudly and let the caller force a
+    # full state re-assert on the next poll rather than latching away.
+    log "  roll: ON FAILED 5x -- CAMERA IS NOT RECORDING, forcing state re-assert"
+    return 1
+}
+
+wait_for_api() {
+    local i=0
+    while [ $i -lt 60 ]; do
+        if wget -q -O- --timeout=2 "http://127.0.0.1/api.cgi?cmd=GetTime&token=null" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2; i=$((i+1))
+    done
+    return 1
+}
+
+# One home/away decision. Sets LAST_STATE, which is the single source of truth
+# for whether recording is currently meant to be on -- and therefore for whether
+# do_rollover may run.
+check_state() {
+    if [ -f "$OVERRIDE_FILE" ]; then
+        [ "$LAST_STATE" != "override" ] && { log "override present -- daemon yields"; LAST_STATE="override"; }
+        return
+    fi
+    local GW MAC NEW_STATE
+    GW=$(get_gateway_ip)
+    if [ -z "$GW" ]; then NEW_STATE="away"; MAC=""; else
+        MAC=$(resolve_arp_mac "$GW")
+        if [ -z "$MAC" ]; then NEW_STATE="away"
+        elif is_home_mac "$MAC"; then NEW_STATE="home"
+        else NEW_STATE="away"; fi
+    fi
+    # FAIL-ENABLED: only ever DISABLE on a confirmed home MAC, and latch
+    # LAST_STATE only once the camera CONFIRMS the change. A failed
+    # SetRecV20 is retried on the next poll instead of being latched, so a
+    # powered-on field camera can never silently sit not-recording because
+    # of one API hiccup.
+    case "$NEW_STATE" in
+        home)
+            if [ "$LAST_STATE" != "home" ]; then
+                if set_record_state off; then
+                    log "state -> home: recording DISABLED  (gw=${GW:-none} mac=${MAC:-none})"
+                    LAST_STATE="home"
+                else
+                    log "home detected, disable failed; still recording (safe) -- retry next poll"
+                fi
+            fi
+            clean_home_stubs   # also catch stragglers while we remain home
+            ;;
+        *)  # away / no-network / ambiguous -> ensure recording is ON
+            if [ "$LAST_STATE" != "away" ]; then
+                if set_record_state on; then
+                    log "state -> away: recording ENABLED (TIMING all-on)  (gw=${GW:-none} mac=${MAC:-none})"
+                    LAST_STATE="away"
+                else
+                    log "away, enable FAILED -- retry next poll (must not sit idle at a game)"
+                fi
+            fi
+            ;;
+    esac
+}
+
+main_loop() {
+    log "===== netstate daemon (v3 +stub-clean +rollover) starting ====="
+    log "  HOME_MACS_DEFAULT=$HOME_MACS_DEFAULT boot_epoch=$BOOT_EPOCH rollover_default=${ROLLOVER_SECS_DEFAULT}s"
+    sleep $INIT_GRACE
+    wait_for_api && log "  api ready" || log "  api wait timed out, proceeding anyway"
+
+    # Surface the build manifest now that the API/SD card are up. The early
+    # top-level copy can run before /mnt/sda is writable, so do it here too --
+    # this is the point we know writes succeed (the log above just wrote).
+    if [ -f /etc/soccercam_build ]; then
+        mkdir -p /mnt/sda/soccercam 2>/dev/null
+        cp -f /etc/soccercam_build /mnt/sda/soccercam/build.txt 2>/dev/null
+        log "  build manifest -> /mnt/sda/soccercam/build.txt"
+    fi
+
+    local LAST_STATE="" NOW SLEEP R ROLLS=0
+    local NEXT_POLL=0 LAST_ROLL NEXT_ROLL
+    LAST_ROLL=$(date +%s)
+    while true; do
+        NOW=$(date +%s)
+        if [ "$NOW" -ge "$NEXT_POLL" ]; then
+            check_state
+            NEXT_POLL=$(( $(date +%s) + POLL_INTERVAL ))
+        fi
+
+        R=$(rollover_secs)
+        NOW=$(date +%s)
+        if [ "$LAST_STATE" = "away" ] && [ "$R" -gt 0 ]; then
+            if [ $((NOW - LAST_ROLL)) -ge "$R" ]; then
+                if do_rollover; then
+                    ROLLS=$((ROLLS+1))
+                    log "  roll #$ROLLS: segment closed and reopened (every ${R}s)"
+                else
+                    # Re-assert home/away immediately; the away branch re-issues
+                    # the enable that do_rollover could not.
+                    NEXT_POLL=0
+                fi
+                LAST_ROLL=$(date +%s)
+            fi
+            NEXT_ROLL=$((LAST_ROLL + R))
+        else
+            # Not recording: keep the rollover clock fresh so that entering away
+            # starts a full interval rather than firing immediately.
+            LAST_ROLL=$NOW
+            NEXT_ROLL=$((NOW + 3600))
+        fi
+
+        NOW=$(date +%s)
+        SLEEP=$((NEXT_POLL - NOW))
+        [ $((NEXT_ROLL - NOW)) -lt "$SLEEP" ] && SLEEP=$((NEXT_ROLL - NOW))
+        [ "$SLEEP" -lt 1 ] && SLEEP=1
+        sleep "$SLEEP"
+    done
+}
+
+( main_loop ) &
+disown 2>/dev/null
+exit 0
