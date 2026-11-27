@@ -33,6 +33,26 @@ Contents (layered on stock 4867):
 
 Build: `builds/build_soccercam_v2.sh` (driven by `/tmp` wrapper that carries creds/MAC from 4896).
 
+## "ROI/QP" test firmware — BUILT, NOT FLASHED
+
+Build: `builds/build_roi_qp.sh <4921 pak> <out>`. Layers on the current camera
+build and touches `rootfs` only.
+
+| File | Notes |
+|---|---|
+| **`IPC_…4922…_roiqp.pak`** (`057957af…`, CRC `0x978c75ce`) | **Staged 2026-11-27, never flashed.** 4921 + the 26-byte `setroi` format-string fix in `kflow_videoenc.ko` + `/etc/init.d/S37_RoiQp` + a **disabled** `/etc/soccercam_roi.conf.default`. With no `roi.conf` on the card the daemon writes nothing to `/proc`, so the only live change is the patched module. commit `9b94af3`. |
+
+Checked after the build by unpacking both root filesystems and diffing them:
+exactly four differences from 4921 — `S37_RoiQp` added, the default config
+added, `/etc/soccercam_build` updated (`pak=`, `roiqp=` lines), and
+`kflow_videoenc.ko` differing in 18 bytes, all inside the format string, at an
+unchanged size of 573152. `loader`, `fdt`, `atf`, `uboot`, `kernel`, `ai` and
+`app` are byte-identical to 4921. The home-recording gate passes.
+
+To confirm a flash took: `curl http://<cam>/downloadfile/soccercam/build.txt`
+must name the 4922 pak. Reflash 4921 to remove. Test order:
+`docs/FAR_FIELD_BITS.md`.
+
 ## "Stitchcal" firmware — comprehensive + the seam-calibration boot hook
 
 Build: `builds/build_stitchcal.sh`. Everything the comprehensive pak carries,
