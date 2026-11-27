@@ -9,10 +9,9 @@ from datetime import datetime
 from typing import Any
 
 from video_grouper.models import DirectoryState, MatchInfo
+from video_grouper.schedule import IScheduleSource, ScheduledGame, pick_game
 
 from .ntfy_service import NtfyService
-from .playmetrics_service import PlayMetricsService
-from .teamsnap_service import TeamSnapService
 
 logger = logging.getLogger(__name__)
 
@@ -32,24 +31,25 @@ class MatchInfoService:
 
     def __init__(
         self,
-        teamsnap_service: TeamSnapService,
-        playmetrics_service: PlayMetricsService,
+        sources: list[IScheduleSource],
         ntfy_service: NtfyService,
-        schedule_service=None,
     ):
         """
-        Initialize match info service.
-
         Args:
-            teamsnap_service: TeamSnap service instance
-            playmetrics_service: PlayMetrics service instance
-            ntfy_service: NTFY service instance
-            schedule_service: Optional ScheduleService for TTT-authoritative schedule
+            sources: Every schedule source to consult (see
+                ``video_grouper.schedule.build_schedule_sources``). Any
+                ``IScheduleSource`` works; this service knows none by name.
+            ntfy_service: NTFY service (asks the user when no source matches).
         """
-        self.teamsnap_service = teamsnap_service
-        self.playmetrics_service = playmetrics_service
+        self.sources: list[IScheduleSource] = sorted(sources, key=lambda s: s.priority)
         self.ntfy_service = ntfy_service
-        self.schedule_service = schedule_service
+
+    def add_source(self, source: IScheduleSource) -> None:
+        """Add a source that starts later (the TTT schedule, after sign-in)."""
+        self.sources = sorted(
+            [s for s in self.sources if s.name != source.name] + [source],
+            key=lambda s: s.priority,
+        )
 
     def _get_recording_timespan(
         self, group_dir: str
@@ -151,185 +151,37 @@ class MatchInfoService:
         )
         return recording_start, recording_end
 
-    def _collect_games_from_apis(
+    def find_game(
         self, recording_start: datetime, recording_end: datetime
-    ) -> list[dict[str, Any]]:
-        """
-        Collect games from all available APIs.
+    ) -> ScheduledGame | None:
+        """The scheduled game this recording is, from every enabled source.
 
-        Args:
-            recording_start: Start time of recording
-            recording_end: End time of recording
-
-        Returns:
-            List of game dictionaries from all sources
+        An authoritative source's match ends the search (the TTT schedule);
+        otherwise the lowest-priority match wins. A failing source is logged
+        and skipped.
         """
         logger.info(
-            f"Collecting games from APIs for timespan: {recording_start} to {recording_end}"
+            f"Looking up the scheduled game for {recording_start} to {recording_end}"
         )
-        games = []
-
-        # TTT schedule is authoritative — if it returns a match, skip TeamSnap/PlayMetrics
-        if self.schedule_service is not None:
+        found: list[tuple[IScheduleSource, ScheduledGame]] = []
+        for source in self.sources:
+            if not source.enabled:
+                continue
             try:
-                logger.info("Querying TTT schedule for games...")
-                ttt_game = self.schedule_service.find_game_for_recording(
-                    recording_start, recording_end
-                )
-                if ttt_game:
-                    logger.info(
-                        f"Found TTT game: {ttt_game.get('team_name', 'Unknown')} vs "
-                        f"{ttt_game.get('opponent_name', 'Unknown')} at "
-                        f"{ttt_game.get('location', 'Unknown')}"
-                    )
-                    return [ttt_game]
-                else:
-                    logger.info(
-                        "No TTT game found for the recording timespan, falling back to APIs"
-                    )
+                game = source.find_game(recording_start, recording_end)
             except Exception as e:
-                logger.error(f"Error getting game from TTT schedule: {e}")
-
-        # Try TeamSnap
-        logger.info(f"TeamSnap service enabled: {self.teamsnap_service.enabled}")
-        if self.teamsnap_service.enabled:
-            try:
-                logger.info("Querying TeamSnap for games...")
-                teamsnap_game = self.teamsnap_service.find_game_for_recording(
-                    recording_start, recording_end
-                )
-                if teamsnap_game:
-                    logger.info(
-                        f"Found TeamSnap game: {teamsnap_game.get('team_name', 'Unknown')} vs {teamsnap_game.get('opponent_name', 'Unknown')} at {teamsnap_game.get('location_name', 'Unknown')}"
-                    )
-                    games.append(teamsnap_game)
-                else:
-                    logger.info("No TeamSnap game found for the recording timespan")
-            except Exception as e:
-                logger.error(f"Error getting game from TeamSnap: {e}")
-
-        # Try PlayMetrics
-        logger.info(f"PlayMetrics service enabled: {self.playmetrics_service.enabled}")
-        if self.playmetrics_service.enabled:
-            try:
-                logger.info("Querying PlayMetrics for games...")
-                playmetrics_game = self.playmetrics_service.find_game_for_recording(
-                    recording_start, recording_end
-                )
-                if playmetrics_game:
-                    logger.info(
-                        f"Found PlayMetrics game: {playmetrics_game.get('team_name', 'Unknown')} vs {playmetrics_game.get('opponent', 'Unknown')} at {playmetrics_game.get('location', 'Unknown')}"
-                    )
-                    games.append(playmetrics_game)
-                else:
-                    logger.info("No PlayMetrics game found for the recording timespan")
-            except Exception as e:
-                logger.error(f"Error getting game from PlayMetrics: {e}")
-
-        logger.info(f"Total games found from APIs: {len(games)}")
-        for i, game in enumerate(games):
-            logger.info(f"Game {i + 1}: {game}")
-
-        return games
-
-    def _select_best_game(self, games: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """
-        Select the best game from multiple options.
-
-        Args:
-            games: List of game dictionaries
-
-        Returns:
-            Best game dictionary or None
-        """
-        if not games:
-            return None
-
-        if len(games) == 1:
-            return games[0]
-
-        # Prefer TTT (authoritative) over all other sources
-        for game in games:
-            if game.get("source") == "TTT":
-                logger.info(f"Selected TTT game over {len(games) - 1} other options")
+                logger.error(f"Error getting game from {source.name}: {e}")
+                continue
+            if game is None:
+                logger.info(f"No {source.name} game for the recording timespan")
+                continue
+            logger.info(
+                f"Found {source.name} game: {game.team_name} vs {game.opponent}"
+            )
+            if source.authoritative:
                 return game
-
-        # For now, prefer TeamSnap over PlayMetrics
-        # TODO: Implement more sophisticated selection logic
-        for game in games:
-            if game.get("source") == "TeamSnap":
-                logger.info(
-                    f"Selected TeamSnap game over {len(games) - 1} other options"
-                )
-                return game
-
-        # Fall back to first game
-        logger.info(f"Selected first game from {len(games)} options")
-        return games[0]
-
-    def _convert_game_to_match_info(self, game: dict[str, Any]) -> dict[str, str]:
-        """
-        Convert a game dictionary to match info format.
-
-        Args:
-            game: Game dictionary from API
-
-        Returns:
-            Match info dictionary
-        """
-        logger.info(f"Converting game to match info: {game}")
-        source = game.get("source", "Unknown")
-        logger.info(f"Game source: {source}")
-
-        if source == "TTT":
-            match_info = {
-                "my_team_name": game.get("team_name", ""),
-                "opponent_team_name": game.get("opponent_name", ""),
-                "location": game.get("location", ""),
-            }
-            logger.info(f"TTT conversion result: {match_info}")
-            return match_info
-        elif source == "TeamSnap":
-            # Prefer the team_name field that TeamSnapService added
-            my_team = game.get("team_name", "")
-
-            match_info = {
-                "my_team_name": my_team,
-                "opponent_team_name": game.get("opponent_name", ""),
-                "location": game.get("location_name", ""),
-            }
-            logger.info(f"TeamSnap conversion result: {match_info}")
-            return match_info
-        elif source == "PlayMetrics":
-            # Use is_home flag from API to set "Home"/"Away" as location
-            if "is_home" in game:
-                location = "Home" if game["is_home"] else "Away"
-            else:
-                location = game.get("location", "")
-
-            match_info = {
-                "my_team_name": game.get("team_name", ""),
-                "opponent_team_name": game.get("opponent", ""),
-                "location": location,
-            }
-
-            # Add date/time if available
-            if "start_time" in game and game["start_time"]:
-                try:
-                    start_time = game["start_time"]
-                    match_info["date"] = start_time.strftime("%Y-%m-%d")
-                    match_info["time"] = start_time.strftime("%H:%M")
-                    logger.info(
-                        f"Added date/time from PlayMetrics: {match_info['date']} {match_info['time']}"
-                    )
-                except Exception as e:
-                    logger.warning(f"Error adding date/time from PlayMetrics: {e}")
-
-            logger.info(f"PlayMetrics conversion result: {match_info}")
-            return match_info
-
-        logger.warning(f"Unknown game source: {source}")
-        return {}
+            found.append((source, game))
+        return pick_game(found)
 
     async def ensure_match_info_exists(self, group_dir: str) -> bool:
         """
@@ -389,33 +241,19 @@ class MatchInfoService:
             f"Recording timespan determined: {recording_start} to {recording_end}"
         )
 
-        # Collect games from APIs
-        logger.info("Collecting games from APIs...")
-        games = self._collect_games_from_apis(recording_start, recording_end)
-
-        if not games:
-            logger.info(f"No games found from APIs for {group_dir}")
+        selected_game = self.find_game(recording_start, recording_end)
+        if selected_game is None:
+            logger.info(f"No scheduled game found for {group_dir}")
             return False
 
-        # Select best game
-        logger.info("Selecting best game from available options...")
-        selected_game = self._select_best_game(games)
-        if not selected_game:
-            logger.warning("No game selected from available options")
-            return False
-
-        logger.info(f"Selected game: {selected_game}")
-
-        # Convert to match info format
-        logger.info("Converting game data to match info format...")
-        team_info = self._convert_game_to_match_info(selected_game)
-        logger.info(f"Converted team info: {team_info}")
+        team_info = selected_game.to_match_info()
+        logger.info(f"Match info from {selected_game.source}: {team_info}")
 
         # Update match info file
         try:
             logger.info("Updating match_info.ini file...")
             MatchInfo.update_team_info(group_dir, team_info)
-            source = selected_game.get("source", "Unknown")
+            source = selected_game.source
             logger.info(
                 f"Successfully updated match_info.ini with {source} data for {group_dir}: "
                 f"{team_info.get('my_team_name', 'Unknown')} vs {team_info.get('opponent_team_name', 'Unknown')}"
@@ -515,8 +353,11 @@ class MatchInfoService:
 
     async def shutdown(self) -> None:
         """Shutdown all services."""
-        if self.playmetrics_service:
-            self.playmetrics_service.close()
+        for source in self.sources:
+            try:
+                source.close()
+            except Exception as e:
+                logger.error(f"Error closing schedule source {source.name}: {e}")
 
         if self.ntfy_service:
             await self.ntfy_service.shutdown()

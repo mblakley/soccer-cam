@@ -1,6 +1,8 @@
 import logging
 import os
 
+from video_grouper.schedule import build_schedule_sources
+
 from ..models import DirectoryState, RecordingFile
 from ..models.match_info import MatchInfo
 from ..task_processors.tasks.video import CombineTask, TrimTask
@@ -97,7 +99,12 @@ class StateAuditor(PollingProcessor):
         # Create NTFY service for the match info service and general use
         self.ntfy_service = NtfyService(config.ntfy, storage_path)
         self.match_info_service = MatchInfoService(
-            self.teamsnap_service, self.playmetrics_service, self.ntfy_service
+            build_schedule_sources(
+                config,
+                teamsnap=self.teamsnap_service,
+                playmetrics=self.playmetrics_service,
+            ),
+            self.ntfy_service,
         )
 
         # Initialize cleanup service
