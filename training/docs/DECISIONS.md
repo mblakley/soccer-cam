@@ -2214,3 +2214,22 @@ iCal). A club member's Byga feed mixes every group they belong to (Hilton Heat's
 team events titled `<Type>: <team> (<location>)`, practices only during the indoor offseason); a
 team's games are the events whose team label its `name`/`aliases` match. Game-title parsing
 (`Game: <team> vs|@ <opponent>`) must be re-checked once Byga posts real games.
+
+## Decision: hold only uploads over 15 minutes on an unverified YouTube channel (2026-11-27)
+
+**Context.** #145 first held *every* upload while the channel's `longUploadsStatus` was not
+`allowed`. The clip-request, clip and highlight-reel callers treat that as an ordinary failure, so
+on an unverified channel parents' clips and reels were dropped, not held -- and they had uploaded
+fine before. Mark asked for the boundary to be measured rather than assumed.
+
+**Measured 2026-11-27** on a fresh, unverified channel (`eligible`), production upload path
+(resumable `MediaFileUpload`, unlisted): 15 s, 30 s, 60 s, 2:00, 10:00, 14:30 and 15:30 all reached
+`uploadStatus=processed` and were still present at +5 min (15:30 and 14:30 also at +38 min; the
+short clips at +63 min). 20:00 and 60:00 were accepted (`200` + id, `uploaded`) and **gone within
+15 s**. 2026-08-23 had 16:00 destroyed the same way. YouTube applies the limit after accepting the
+upload and leaves nothing to read.
+
+**Decided.** `upload_video` holds an upload only when it is longer than 15:00 (or its length can't
+be read -- treated as long) and the channel isn't verified. Clips and reels upload normally. Long
+uploads park and re-probe as before and resume once the owner verifies at youtube.com/verify. The
+setup wizard still requires verification, because full games need it.
