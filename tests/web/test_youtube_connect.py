@@ -80,6 +80,9 @@ class _FakeFlow:
 
     ALL = (
         "openid https://www.googleapis.com/auth/userinfo.email "
+        "https://www.googleapis.com/auth/youtube.upload "
+        "https://www.googleapis.com/auth/youtube.readonly "
+        "https://www.googleapis.com/auth/youtube "
         "https://www.googleapis.com/auth/cloudplatformprojects "
         "https://www.googleapis.com/auth/service.management"
     )
@@ -376,3 +379,55 @@ def test_quota_callback_requires_both_cloud_permissions(
     assert resp.status_code == 400
     assert "tick" in resp.text and "both" in resp.text
     assert youtube_connect._job["provisioner"] is None
+
+
+def test_connect_requires_the_youtube_upload_permission(
+    client, publisher, tmp_path, monkeypatch
+):
+    """Granular consent on the YouTube screen too: without upload, every
+    upload would 403 later while the dashboard said 'connected'."""
+    resp = client.get("/auth/youtube/connect", follow_redirects=False)
+    state = parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
+    readonly_only = "openid https://www.googleapis.com/auth/youtube.readonly"
+    monkeypatch.setattr(
+        youtube_upload,
+        "make_publisher_flow",
+        lambda *a, **k: _FakeFlow("a@x.com", scope=readonly_only),
+    )
+    resp = client.get(f"/auth/youtube/connect/callback?code=the-code&state={state}")
+    assert resp.status_code == 400 and "every" in resp.text
+    assert not (tmp_path / "youtube" / "token.json").exists()
+
+
+def test_quota_start_with_revoked_token_asks_to_reconnect(
+    client, publisher, tmp_path, monkeypatch
+):
+    _write_publisher_token(tmp_path)
+
+    def _revoked(token_file):
+        raise RuntimeError("invalid_grant: Token has been expired or revoked.")
+
+    monkeypatch.setattr(youtube_connect, "_raw_youtube_credentials", _revoked)
+    resp = client.get("/auth/youtube/quota/start", follow_redirects=False)
+    assert resp.status_code == 400
+    assert "/auth/youtube/connect" in resp.text
+
+
+def test_reconnecting_forgets_a_finished_provisioning_run(
+    client, publisher, tmp_path, monkeypatch
+):
+    done = type(
+        "P", (), {"status": {"phase": "ready", "done": True, "message": "ok"}}
+    )()
+    youtube_connect._job["provisioner"] = done
+    resp = client.get("/auth/youtube/connect", follow_redirects=False)
+    state = parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
+    monkeypatch.setattr(
+        youtube_upload, "make_publisher_flow", lambda *a, **k: _FakeFlow("b@x.com")
+    )
+    client.get(
+        f"/auth/youtube/connect/callback?code=the-code&state={state}",
+        follow_redirects=False,
+    )
+    assert youtube_connect._job["provisioner"] is None
+    assert client.get("/auth/youtube/quota/status").json()["phase"] == "idle"

@@ -421,10 +421,42 @@ def test_publisher_token_gets_quota_header(tmp_path, publisher):
     assert ok
 
 
+def _secret(youtube_dir, client_id):
+    (youtube_dir / "client_secret.json").write_text(
+        json.dumps({"installed": {"client_id": client_id, "client_secret": "s"}})
+    )
+
+
 def test_byo_token_unaffected(tmp_path, publisher):
     token = _token(tmp_path / "youtube" / "token.json", "someone-elses-client")
+    _secret(tmp_path / "youtube", "someone-elses-client")
     creds = youtube_upload.load_youtube_credentials(str(token))
     assert creds.quota_project_id is None
+
+
+def test_publisher_token_fails_closed_even_when_build_lacks_the_client_id(
+    tmp_path, monkeypatch
+):
+    """Review finding: a source run doesn't know the publisher id. The token
+    must still refuse rather than load as BYO and bill the shared project."""
+    installed = youtube_upload.EMBEDDED_CLIENT_CONFIG["installed"]
+    monkeypatch.setitem(installed, "client_id", "")
+    token = _token(tmp_path / "youtube" / "token.json", PUBLISHER_ID)
+    with pytest.raises(youtube_upload.YouTubeQuotaProjectMissing):
+        youtube_upload.load_youtube_credentials(str(token))
+    write_quota_project(tmp_path / "youtube", "soccer-cam-abc12345", None)
+    creds = youtube_upload.load_youtube_credentials(str(token))
+    assert creds.quota_project_id == "soccer-cam-abc12345"
+
+
+def test_byo_token_without_its_client_secret_is_flagged(tmp_path, publisher):
+    """BYO token whose client_secret.json is gone: fail validation so the
+    re-auth banner/notification fires (review finding)."""
+    token = _token(tmp_path / "youtube" / "token.json", "someone-elses-client")
+    ok, _ = youtube_upload.ensure_valid_token(
+        str(tmp_path / "youtube" / "client_secret.json"), str(token)
+    )
+    assert not ok
 
 
 def test_no_publisher_in_build_means_no_token_is_publisher(tmp_path, monkeypatch):
@@ -459,3 +491,45 @@ def test_publisher_project_missing_apis_is_reported_not_retried():
     assert status["fail_kind"] == FailKind.PUBLISHER_SETUP
     assert "isn't something you can fix" in status["message"]
     assert ready == []
+
+
+def test_verify_survives_a_transient_youtube_error():
+    """One 503 during verification must not fail the whole run (review finding)."""
+    setup = ScriptedSession(
+        {
+            ("GET", "projects:search"): [EMPTY_SEARCH],
+            ("POST", "/v3/projects"): [
+                (200, {"name": "operations/cp.1", "done": True})
+            ],
+            ("POST", ":enable"): [(200, {"name": "operations/x", "done": True})],
+        }
+    )
+    ok = (200, {"items": [{"id": "UC"}]})
+    yt = ScriptedSession(
+        {("GET", "/channels"): [(503, {"error": {"message": "backendError"}}), ok, ok]}
+    )
+    status, _, _ = _run(setup, yt)
+    assert status["phase"] == Phase.READY
+
+
+def test_rate_limited_project_creation_retries_instead_of_out_of_projects():
+    throttled = {
+        "error": {
+            "code": 429,
+            "status": "RESOURCE_EXHAUSTED",
+            "message": "Quota exceeded for quota metric Project create requests",
+        }
+    }
+    setup = ScriptedSession(
+        {
+            ("GET", "projects:search"): [EMPTY_SEARCH],
+            ("POST", "/v3/projects"): [
+                (429, throttled),
+                (200, {"name": "operations/cp.1", "done": True}),
+            ],
+            ("POST", ":enable"): [(200, {"name": "operations/x", "done": True})],
+        }
+    )
+    yt = ScriptedSession({("GET", "/channels"): [(200, {"items": [{"id": "UC"}]})]})
+    status, _, _ = _run(setup, yt)
+    assert status["phase"] == Phase.READY

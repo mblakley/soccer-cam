@@ -451,6 +451,15 @@ class QuotaProjectProvisioner:
                 )
                 self._sleep(self.poll_seconds * 2)
                 continue
+            if resp.status_code == 429:
+                if self._clock() > deadline:
+                    raise ProvisionError(
+                        FailKind.API_ERROR,
+                        "Google Cloud is rate-limiting project creation. Try again "
+                        "in a few minutes.",
+                    )
+                self._sleep(self.poll_seconds * 6)
+                continue
             if resp.status_code == 409:
                 project_id = new_project_id()  # id taken; ids are global
                 self._set(
@@ -531,7 +540,11 @@ class QuotaProjectProvisioner:
         last: ProbeState | None = None
         streak = 0
         while True:
-            state, status, body = probe(self.yt, project_id)
+            try:
+                state, status, body = probe(self.yt, project_id)
+            except Exception as exc:  # noqa: BLE001 -- network blip; retry
+                logger.info("YOUTUBE_QUOTA: probe failed, retrying: %s", exc)
+                state, status, body = ProbeState.OTHER, 0, {}
             streak = streak + 1 if state == last else 1
             last = state
             if (
@@ -542,12 +555,15 @@ class QuotaProjectProvisioner:
             if state == ProbeState.QUOTA:
                 # Quota trouble on a project we can reach still proves billing works.
                 return True
-            if state == ProbeState.OTHER:
-                raise ProvisionError(
-                    FailKind.API_ERROR,
-                    f"YouTube returned an unexpected answer ({_err_text(status, body)}).",
-                )
+            # A single odd answer (5xx, refresh race) never decides, per the
+            # E1.6 rule; only a sustained one fails, at the deadline below.
             if self._clock() > deadline:
+                if state == ProbeState.OTHER:
+                    raise ProvisionError(
+                        FailKind.API_ERROR,
+                        "YouTube kept returning an unexpected answer "
+                        f"({_err_text(status, body)}).",
+                    )
                 raise ProvisionError(
                     FailKind.NOT_VISIBLE,
                     f"YouTube still can't use project {project_id} (last answer: "

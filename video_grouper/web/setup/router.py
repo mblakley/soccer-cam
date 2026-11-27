@@ -1343,10 +1343,8 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
         from video_grouper.web.youtube_connect import youtube_connection
 
         conn = youtube_connection(Path(state.storage_path or ""))
-        if conn["available"]:
-            byo = _render_youtube_body(
-                has_secret, has_token and not conn["connected"], nav=False
-            )
+        if conn["available"] and not (has_token and not conn["connected"]):
+            byo = _render_youtube_body(has_secret, False, nav=False)
             body = _render_publisher_youtube_body(conn, byo)
         else:
             body = _render_youtube_body(has_secret, has_token)

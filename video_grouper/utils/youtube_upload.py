@@ -107,6 +107,26 @@ def is_publisher_token(token_data: dict) -> bool:
     return bool(cid) and token_data.get("client_id") == cid
 
 
+def is_byo_token(token_file: str) -> bool:
+    """True only when the token's client is the ``client_secret.json`` beside it.
+
+    Decided from the files, never from whether *this* process happens to know
+    the publisher client id: a source run or a build without the injected id
+    would otherwise treat a publisher token as BYO and bill the publisher's
+    shared project (fail closed).
+    """
+    try:
+        with open(token_file) as f:
+            token_client = json.load(f).get("client_id")
+        secret_file = os.path.join(os.path.dirname(token_file), CREDENTIALS_FILENAME)
+        with open(secret_file) as f:
+            blob = json.load(f)
+    except (OSError, ValueError):
+        return False
+    cfg = blob.get("installed") or blob.get("web") or {}
+    return bool(token_client) and cfg.get("client_id") == token_client
+
+
 def make_publisher_flow(redirect_uri: str, scopes: list[str]) -> InstalledAppFlow:
     """Flow against the build-injected publisher client (no client_secret.json)."""
     flow = InstalledAppFlow.from_client_config(EMBEDDED_CLIENT_CONFIG, scopes)
@@ -117,23 +137,26 @@ def make_publisher_flow(redirect_uri: str, scopes: list[str]) -> InstalledAppFlo
 def load_youtube_credentials(token_file: str):
     """Load ``token.json``, attaching the user's quota project when required.
 
-    BYO tokens load as before. Publisher tokens get
-    ``with_quota_project(<id>)``, which sends ``x-goog-user-project`` on every
-    call; with no project saved this raises :class:`YouTubeQuotaProjectMissing`.
+    BYO tokens (see :func:`is_byo_token`) load as before. Every other token
+    gets ``with_quota_project(<id>)``, which sends ``x-goog-user-project`` on
+    every call; with no project saved this raises
+    :class:`YouTubeQuotaProjectMissing` rather than falling back.
     """
     from video_grouper.utils.youtube_quota_project import read_quota_project
 
     with open(token_file) as f:
         data = json.load(f)
-    if not is_publisher_token(data):
+    if is_byo_token(token_file):
         return google.oauth2.credentials.Credentials.from_authorized_user_info(
             data, SCOPES
         )
     saved = read_quota_project(os.path.dirname(token_file))
     if not saved:
         raise YouTubeQuotaProjectMissing(
-            "YouTube is connected but no Google Cloud quota project is set up. "
-            "Finish 'Set up YouTube quota' on the dashboard."
+            "YouTube uploads are paused: no Google Cloud quota project is set "
+            "up for this YouTube connection (or its client_secret.json is "
+            "missing). Use 'Set up YouTube quota' or reconnect YouTube on the "
+            "dashboard."
         )
     creds = google.oauth2.credentials.Credentials.from_authorized_user_info(data)
     return creds.with_quota_project(saved["project_id"])
@@ -476,8 +499,9 @@ class YouTubeUploader:
 
     def _is_publisher_token(self) -> bool:
         try:
-            with open(self.token_file) as f:
-                return is_publisher_token(json.load(f))
+            if not os.path.exists(self.token_file):
+                return False
+            return not is_byo_token(self.token_file)
         except (OSError, ValueError):
             return False
 
