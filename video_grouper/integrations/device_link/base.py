@@ -83,6 +83,11 @@ class IDeviceLink(Provider, ABC):
         """Check in ("online"); the reply carries camera state and commands."""
 
     @abstractmethod
+    async def stitch_profiles(self) -> dict[str, dict[str, Any]]:
+        """Stitch profiles saved for this install's cameras elsewhere (e.g. a
+        web calibration tool), by camera name; cameras without one are absent."""
+
+    @abstractmethod
     async def acknowledge_command(self, command_id: str) -> None:
         """Tell the other end a command was received (before it runs)."""
 

@@ -413,3 +413,65 @@ def test_add_output_stream_applies_spec_to_a_real_container(tmp_path: Path) -> N
         assert out_stream.height == 48
     finally:
         container.close()
+
+
+# -- install_pulled_profile (profiles pulled from TTT's calibration tool) -----
+
+
+def _pulled(stamp=None, dx=-10):
+    profile = {
+        "source_width": 7680,
+        "source_height": 2160,
+        "seam_x": 3840,
+        "dx_anchors": [[0, dx], [2160, 0]],
+    }
+    if stamp:
+        profile["metadata"] = {"created_utc": stamp}
+    return profile
+
+
+def test_pulled_profile_is_installed_when_none_is_local(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    assert (
+        install_pulled_profile(target, _pulled("2026-11-27T10:00:00+00:00"))
+        == "written"
+    )
+    assert json.loads(target.read_text())["seam_x"] == 3840
+    assert (
+        install_pulled_profile(target, _pulled("2026-11-27T10:00:00+00:00"))
+        == "unchanged"
+    )
+
+
+def test_a_newer_local_calibration_is_never_clobbered(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    target.write_text(json.dumps(_pulled("2026-11-27T12:00:00+00:00", dx=-7)))
+    assert install_pulled_profile(target, _pulled("2026-11-27T10:00:00+00:00")) == (
+        "kept_local"
+    )
+    # no timestamp to compare: the local file stays
+    assert install_pulled_profile(target, _pulled(None)) == "kept_local"
+    assert json.loads(target.read_text())["dx_anchors"][0][1] == -7
+
+
+def test_a_newer_pulled_profile_replaces_the_local_one(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    target.write_text(json.dumps(_pulled("2026-11-27T10:00:00+00:00", dx=-7)))
+    assert install_pulled_profile(target, _pulled("2026-11-28T10:00:00+00:00")) == (
+        "written"
+    )
+    assert json.loads(target.read_text())["dx_anchors"][0][1] == -10
+
+
+def test_an_invalid_pulled_profile_is_ignored(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    assert install_pulled_profile(target, {"seam_x": 1}) == "invalid"
+    assert not target.exists()

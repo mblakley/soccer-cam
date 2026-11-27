@@ -35,6 +35,7 @@ class FakeDeviceLink(IDeviceLink):
         self.health_reports: list[DeviceHealth | None] = []
         self.registered_cameras: list[list[DeviceCamera]] = []
         self.camera_ids: dict[str, str] = {}
+        self.profiles: dict[str, dict[str, Any]] = {}
         self.heartbeats = 0
         # ("ack", id) / ("complete", id, result), in call order
         self.command_calls: list[tuple[Any, ...]] = []
@@ -75,6 +76,9 @@ class FakeDeviceLink(IDeviceLink):
         if not self.replies:
             return HeartbeatReply()
         return self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+
+    async def stitch_profiles(self) -> dict[str, dict[str, Any]]:
+        return dict(self.profiles)
 
     async def acknowledge_command(self, command_id: str) -> None:
         self.command_calls.append(("ack", command_id))

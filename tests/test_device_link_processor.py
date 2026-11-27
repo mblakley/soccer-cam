@@ -310,3 +310,35 @@ async def test_cameras_are_re_announced_hourly(tmp_path, monkeypatch):
     clock[0] += 2
     await processor.discover_work()
     assert len(link.registered_cameras) == 2
+
+
+_PROFILE = {
+    "source_width": 7680,
+    "source_height": 2160,
+    "seam_x": 3840,
+    "dx_anchors": [[0, -10], [2160, 0]],
+    "metadata": {"created_utc": "2026-11-27T10:00:00+00:00"},
+}
+
+
+@pytest.mark.asyncio
+async def test_a_profile_from_the_link_is_installed_where_the_pipeline_reads(tmp_path):
+    import json
+
+    link = FakeDeviceLink()
+    link.profiles = {"front": _PROFILE}
+    processor = _processor(tmp_path, link)
+    processor.config.processing.seam_realign_profile_path = None
+    await processor.discover_work()
+    assert json.loads((tmp_path / "stitch_profile.json").read_text()) == _PROFILE
+
+
+@pytest.mark.asyncio
+async def test_different_profiles_for_two_cameras_install_neither(tmp_path):
+    link = FakeDeviceLink()
+    other = dict(_PROFILE, seam_x=3000)
+    link.profiles = {"front": _PROFILE, "back": other}
+    processor = _processor(tmp_path, link)
+    processor.config.processing.seam_realign_profile_path = None
+    await processor.discover_work()
+    assert not (tmp_path / "stitch_profile.json").exists()

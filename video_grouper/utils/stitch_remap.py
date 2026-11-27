@@ -9,8 +9,11 @@ the duplicate without needing to stitch from raw lens streams.
 This module is consumed by in-house downstream code (ball detection, tracking,
 broadcast-perspective render). It is deliberately NOT called during combine or
 trim — both remain stream-copy. The profile is stored **per-camera** at
-`config.processing.seam_realign_profile_path` (nothing in soccer-cam fetches
-it from TTT's calibration tool today; the file is placed there by hand).
+`config.processing.seam_realign_profile_path` (default
+``<storage>/stitch_profile.json``), written by the local calibration page or
+pulled hourly from a web calibration tool by the device link
+(:func:`install_pulled_profile`: the newer calibration wins; a local one is
+never deleted).
 Readers call `load_profile` on that path — there is no per-recording sidecar.
 """
 
@@ -439,3 +442,41 @@ def apply_shift_to_frame_rgb(
         dx = int(dx_lookup[y])
         out[y, seam_x:] = shift_no_wrap(out[y, seam_x:], dx)
     return out
+
+
+def install_pulled_profile(path: str | Path, profile: dict) -> str:
+    """Install a stitch profile pulled from elsewhere (TTT's calibration tool)
+    at ``path`` without clobbering a newer local calibration.
+
+    Returns ``"written"``, ``"unchanged"``, ``"kept_local"`` (the file on disk
+    is newer, or the pulled one carries no ``metadata.created_utc`` to compare)
+    or ``"invalid"``. Never deletes a local profile.
+    """
+    try:
+        StitchProfile.from_dict(profile)
+    except (KeyError, TypeError, ValueError) as e:
+        logger.warning("pulled stitch profile is invalid, ignored: %s", e)
+        return "invalid"
+    p = Path(path)
+    existing: dict | None = None
+    if p.exists():
+        try:
+            existing = json.loads(p.read_text())
+        except (OSError, json.JSONDecodeError):
+            existing = None  # unreadable local file: replace it
+    if existing == profile:
+        return "unchanged"
+
+    def _stamp(d: dict | None) -> str | None:
+        meta = (d or {}).get("metadata") or {}
+        return meta.get("created_utc") if isinstance(meta, dict) else None
+
+    incoming, local = _stamp(profile), _stamp(existing)
+    if existing is not None and (incoming is None or (local and local >= incoming)):
+        return "kept_local"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(profile, indent=2))
+    tmp.replace(p)
+    logger.info("installed pulled stitch profile at %s", p)
+    return "written"

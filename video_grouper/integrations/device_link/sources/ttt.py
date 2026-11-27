@@ -260,6 +260,25 @@ class TTTDeviceLink(IDeviceLink):
     # commands
     # ------------------------------------------------------------------
 
+    async def stitch_profiles(self) -> dict[str, dict[str, Any]]:
+        """GET /device-link/camera-config per registered camera ->
+        ``stitch_profile`` (set in TTT's calibration tool)."""
+        if not self._client.is_authenticated():
+            return {}
+        profiles: dict[str, dict[str, Any]] = {}
+        for name, camera_id in self._cameras.all_ids().items():
+            try:
+                config = await asyncio.to_thread(
+                    self._client.get_camera_config, camera_id
+                )
+            except Exception as e:
+                logger.warning("TTT: camera config for %s failed: %s", camera_id, e)
+                continue
+            profile = (config or {}).get("stitch_profile")
+            if isinstance(profile, dict):
+                profiles[name] = profile
+        return profiles
+
     async def acknowledge_command(self, command_id: str) -> None:
         try:
             await asyncio.to_thread(self._client.acknowledge_command, command_id)

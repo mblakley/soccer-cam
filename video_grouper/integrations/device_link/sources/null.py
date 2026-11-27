@@ -28,6 +28,9 @@ class NullDeviceLink(IDeviceLink):
     async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
         return HeartbeatReply()
 
+    async def stitch_profiles(self) -> dict[str, dict[str, Any]]:
+        return {}
+
     async def acknowledge_command(self, command_id: str) -> None:
         return None
 

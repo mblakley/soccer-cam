@@ -29,8 +29,8 @@ retry_delay = 60
 
 # Per-row stitch correction (dual-lens panoramic cameras only). The profile
 # is per-camera and lives at seam_realign_profile_path (written by the local
-# stitch calibration; profiles saved in TTT's calibration tool are not pulled
-# down yet). Downstream readers (ball detection,
+# stitch calibration, or pulled hourly from TTT's calibration tool when signed
+# in -- the newer calibration wins). Downstream readers (ball detection,
 # tracking, broadcast-perspective render) apply the per-row dx shift to the
 # right half on decode. No recording is ever re-encoded — combine/trim stay
 # stream-copy, and the profile is read fresh each time frames are consumed.

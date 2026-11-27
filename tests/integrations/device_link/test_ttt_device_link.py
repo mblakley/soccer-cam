@@ -395,3 +395,27 @@ async def test_command_reports_never_raise(caplog):
         await link.complete_command("c1", {"success": False, "message": "x"})
     assert "Failed to acknowledge command" in caplog.text
     assert "Failed to complete command" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stitch_profiles_come_from_each_cameras_config():
+    client = _client()
+    client.register_device.return_value = {
+        "cameras": [{"name": "front", "camera_id": "c-1"}]
+    }
+    client.get_camera_config.return_value = {"stitch_profile": {"seam_x": 1}}
+    link, _ = _link(client, machine_id="me")
+    await link.register_cameras(CAMS)
+    assert await link.stitch_profiles() == {"front": {"seam_x": 1}}
+    client.get_camera_config.assert_called_with("c-1")
+
+
+@pytest.mark.asyncio
+async def test_no_stitch_profiles_while_signed_out_or_on_error():
+    link, client = _link(_client(signed_in=False))
+    assert await link.stitch_profiles() == {}
+    client.get_camera_config.assert_not_called()
+    failing = _client()
+    failing.get_camera_config.side_effect = RuntimeError("down")
+    link, _ = _link(failing)
+    assert await link.stitch_profiles() == {}

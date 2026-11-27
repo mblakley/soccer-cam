@@ -14,9 +14,11 @@ every tick is a no-op that leaves every camera enabled.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ..integrations.device_link import (
@@ -64,6 +66,7 @@ class DeviceLinkProcessor(PollingProcessor):
         # This install's camera objects (None: don't register cameras).
         self.cameras = cameras
         self._cameras_registered_at: float | None = None
+        self._profiles_checked_at: float | None = None
         # camera name -> enabled here. Empty: nothing heard yet, all enabled.
         self._camera_enabled: dict[str, bool] = {}
 
@@ -103,6 +106,48 @@ class DeviceLinkProcessor(PollingProcessor):
         if ids:  # only a success counts; otherwise retry next tick
             self._cameras_registered_at = now
 
+    STITCH_PROFILE_INTERVAL = 3600
+
+    async def _maybe_pull_stitch_profile(self) -> None:
+        """Install a stitch profile saved in a web calibration tool at the file
+        the pipeline reads, unless a newer local calibration is there."""
+        now = time.monotonic()
+        if (
+            self._profiles_checked_at is not None
+            and now - self._profiles_checked_at < self.STITCH_PROFILE_INTERVAL
+        ):
+            return
+        self._profiles_checked_at = now
+        profiles = await self.link.stitch_profiles()
+        if not profiles:
+            return
+        distinct = {json.dumps(p, sort_keys=True) for p in profiles.values()}
+        if len(distinct) > 1:
+            # One profile file serves the install; two cameras with different
+            # profiles can't both be installed there.
+            logger.warning(
+                "DEVICE_LINK: cameras %s have different stitch profiles; "
+                "not installing either",
+                sorted(profiles),
+            )
+            return
+        from video_grouper.utils.stitch_remap import install_pulled_profile
+
+        outcome = await asyncio.to_thread(
+            install_pulled_profile,
+            self._stitch_profile_path(),
+            next(iter(profiles.values())),
+        )
+        logger.info("DEVICE_LINK: stitch profile from the link: %s", outcome)
+
+    def _stitch_profile_path(self) -> Path:
+        configured = getattr(
+            getattr(self.config, "processing", None), "seam_realign_profile_path", None
+        )
+        if isinstance(configured, str) and configured:
+            return Path(configured)
+        return Path(self.storage_path) / "stitch_profile.json"
+
     def is_camera_enabled(self, camera_name: str) -> bool:
         """False only when the link said this camera is not polled here."""
         return self._camera_enabled.get(camera_name, True)
@@ -112,6 +157,7 @@ class DeviceLinkProcessor(PollingProcessor):
         if self.capabilities is not None:
             await self.link.register(self.capabilities)
         await self._maybe_register_cameras()
+        await self._maybe_pull_stitch_profile()
         reply = await self.link.heartbeat(await asyncio.to_thread(self._health))
         self._apply_camera_state(reply)
         for command in reply.commands:
