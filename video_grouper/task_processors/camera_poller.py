@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import pytz
 
 from video_grouper.cameras.base import Camera
+from video_grouper.integrations.recordings import IRecordingSink
+from video_grouper.integrations.recordings.sources.null import NullRecordingSink
 from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
@@ -271,6 +273,8 @@ class CameraPoller(PollingProcessor):
         self._last_poll_found_files = True
         self._unplug_notified = False
         self.ntfy_service = None
+        # Where discovered recordings are reported; the app wires the real sink.
+        self.recordings: IRecordingSink = NullRecordingSink()
         self.ttt_reporter = None
         self._cleanup_state_path = get_home_cleanup_state_path(storage_path)
         # Reconciliation pass: re-scan the window between the watermark and
@@ -630,23 +634,10 @@ class CameraPoller(PollingProcessor):
                     f"CAMERA_POLLER: Error processing file info {file_info}: {e}"
                 )
 
-        # Register newly discovered files with TTT (best-effort, per group)
-        if self.ttt_reporter and new_files_by_group:
-            for group_dir, group_files in new_files_by_group.items():
-                try:
-                    registered = await self.ttt_reporter.register_recordings(
-                        group_files
-                    )
-                    if registered:
-                        # Use the first registration ID for the group
-                        ttt_id = registered[0].get("id") if registered else None
-                        if ttt_id:
-                            dir_state = DirectoryState(group_dir)
-                            await dir_state.set_ttt_recording_id(ttt_id)
-                except Exception as e:
-                    logger.warning(
-                        f"CAMERA_POLLER: TTT registration failed for {os.path.basename(group_dir)}: {e}"
-                    )
+        # Report newly discovered files, per group (best-effort; the sink
+        # keeps any ids of its own and never raises).
+        for group_dir, group_files in new_files_by_group.items():
+            await self.recordings.recording_found(group_dir, group_files)
 
         total_seen = sum(counts.values())
         logger.info(

@@ -7,6 +7,7 @@ import pytest
 
 from video_grouper.integrations import build_integrations, registry
 from video_grouper.integrations.entitlements import IEntitlements
+from video_grouper.integrations.recordings import IRecordingSink
 from video_grouper.integrations.registry import (
     NULL_PRIORITY,
     IntegrationContext,
@@ -90,12 +91,28 @@ def test_every_built_in_port_resolves_with_ttt_off():
     )
     assert isinstance(integrations.entitlements, IEntitlements)
     assert integrations.entitlements.available is False
+    assert isinstance(integrations.recordings, IRecordingSink)
+    assert integrations.recordings.name == "none"
 
 
 def test_ttt_on_shares_one_client_across_ports():
     client = SimpleNamespace(is_authenticated=lambda: False)
     integrations = build_integrations(
-        SimpleNamespace(ttt=SimpleNamespace(enabled=True)), ".", ttt=client
+        SimpleNamespace(ttt=SimpleNamespace(enabled=True, camera_id="")),
+        ".",
+        ttt=client,
     )
     assert integrations.shared_ttt_client() is client
     assert integrations.entitlements.name == "ttt"
+    assert integrations.recordings.name == "ttt"
+
+
+def test_active_defaults_to_the_null_set_and_activate_replaces_it(monkeypatch):
+    from video_grouper import integrations as integ
+
+    monkeypatch.setattr(integ, "_active", None)
+    assert integ.active().recordings.name == "none"
+    custom = build_integrations(
+        SimpleNamespace(ttt=SimpleNamespace(enabled=False)), "."
+    )
+    assert integ.activate(custom) is custom and integ.active() is custom

@@ -58,6 +58,33 @@ def pytest_configure(config):
         pass
 
 
+@pytest.fixture
+def fake_integrations():
+    """Activate fake ports (what ``integrations.active()`` returns) for one test.
+
+    For code that can't be handed a port -- tasks restored from a queue file,
+    helpers given only ``config`` -- assert on what reached the fakes.
+    """
+    from types import SimpleNamespace
+
+    from video_grouper import integrations
+    from video_grouper.integrations.entitlements.fake import FakeEntitlements
+    from video_grouper.integrations.recordings.fake import FakeRecordingSink
+    from video_grouper.integrations.registry import IntegrationContext
+
+    previous = integrations._active
+    fake = integrations.Integrations(
+        entitlements=FakeEntitlements(),
+        recordings=FakeRecordingSink(),
+        context=IntegrationContext(
+            SimpleNamespace(ttt=SimpleNamespace(enabled=False)), "."
+        ),
+    )
+    integrations.activate(fake)
+    yield fake
+    integrations._active = previous
+
+
 def pytest_collection_finish(session):
     """Freeze everything alive once collection is done.
 

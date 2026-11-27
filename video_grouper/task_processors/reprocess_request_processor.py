@@ -267,24 +267,10 @@ class ReprocessRequestProcessor(QueueProcessor):
         logger.info("%s applied to %s", kind, group_dir.name)
 
     async def _repush_phases(self, group_dir: Path, payload: dict) -> None:
-        """Re-confirm the (now source=human) phases to the TTT game session."""
-        from video_grouper.task_processors.phase_ttt_push import (
-            phases_to_session_fields,
-        )
+        """Re-report the (now source=human) phases. Best-effort; never raises."""
+        from video_grouper.integrations import active
 
-        fields = phases_to_session_fields(payload)
-        if not fields:
-            return
-        try:
-            session = await asyncio.to_thread(
-                self.ttt_client.get_game_session_by_dir, group_dir.name
-            )
-            if session and session.get("id"):
-                await asyncio.to_thread(
-                    self.ttt_client.update_game_session_phases, session["id"], **fields
-                )
-        except Exception as exc:  # noqa: BLE001 — re-push is best-effort
-            logger.warning("phase_correction: TTT re-push failed (%s)", exc)
+        await active().recordings.phases(str(group_dir), payload)
 
     # ------------------------------------------------------------------
     # S3: verify-phases trigger

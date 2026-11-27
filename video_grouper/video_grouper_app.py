@@ -145,9 +145,11 @@ class VideoGrouperApp:
         )
         # The one composition point for outside services (TTT today). Every
         # port, and every processor not yet on a port, shares its TTT session.
-        from video_grouper.integrations import build_integrations
+        from video_grouper.integrations import activate, build_integrations
 
-        self.integrations = build_integrations(self.config, self.storage_path)
+        # activate(): code that can't be handed a port (tasks restored from a
+        # queue file) reaches the same integrations through active().
+        self.integrations = activate(build_integrations(self.config, self.storage_path))
         if self.config.pipeline.is_active():
             # Side-effect import: registers the built-in pipeline steps.
             import video_grouper.pipeline.register_steps  # noqa: F401
@@ -665,16 +667,17 @@ class VideoGrouperApp:
             machine_id=machine_id,
         )
 
-        # Wire ttt_reporter into all processors for best-effort pipeline reporting
+        # Recording reports go to the recordings port; the camera poller still
+        # asks the reporter whether a camera is enabled (device-link port, later).
+        recordings = self.integrations.recordings
         for poller in self.camera_pollers.values():
             poller.ttt_reporter = self.ttt_reporter
+            poller.recordings = recordings
         for dl_proc in self.download_processors.values():
-            dl_proc.ttt_reporter = self.ttt_reporter
+            dl_proc.recordings = recordings
             dl_proc.error_tracker = self.error_tracker
-        self.video_processor.ttt_reporter = self.ttt_reporter
-        self.upload_processor.ttt_reporter = self.ttt_reporter
-        if getattr(self, "pipeline_processor", None) is not None:
-            self.pipeline_processor.ttt_reporter = self.ttt_reporter
+        self.video_processor.recordings = recordings
+        self.upload_processor.recordings = recordings
 
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,

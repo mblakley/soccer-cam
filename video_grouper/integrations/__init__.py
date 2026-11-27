@@ -5,21 +5,30 @@ such as Team Tech Tools.
 the implementation that serves this install (TTT when enabled, otherwise the
 Null implementation) and owns the single shared TTT session. Consumers receive
 ports from here; they never construct a TTT client or read ``[TTT]`` config.
+
+Prefer having the ports handed in (constructor / ``StepContext``). Code that
+cannot be -- a task restored from a queue file, a helper given only ``config``
+-- uses :func:`active`, which the app sets once at startup and which defaults
+to the Null implementations.
+
 Plan: ``.claude/plans/ttt-integration-ports/PLAN.md``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from .entitlements import IEntitlements
+from .recordings import IRecordingSink
 from .registry import IntegrationContext, build_port
 
 
 @dataclass
 class Integrations:
     entitlements: IEntitlements
+    recordings: IRecordingSink
     context: IntegrationContext
 
     def shared_ttt_client(self) -> Any:
@@ -36,8 +45,36 @@ def build_integrations(config: Any, storage_path: str, **services: Any) -> Integ
     """
     context = IntegrationContext(config, str(storage_path), dict(services))
     return Integrations(
-        entitlements=build_port(IEntitlements, context), context=context
+        entitlements=build_port(IEntitlements, context),
+        recordings=build_port(IRecordingSink, context),
+        context=context,
     )
 
 
-__all__ = ["IntegrationContext", "Integrations", "build_integrations"]
+_active: Integrations | None = None
+
+
+def activate(integrations: Integrations) -> Integrations:
+    """Make ``integrations`` the process-wide set returned by :func:`active`."""
+    global _active
+    _active = integrations
+    return integrations
+
+
+def active() -> Integrations:
+    """The app's integrations; the Null set until the app activates its own."""
+    global _active
+    if _active is None:
+        _active = build_integrations(
+            SimpleNamespace(ttt=SimpleNamespace(enabled=False)), "."
+        )
+    return _active
+
+
+__all__ = [
+    "IntegrationContext",
+    "Integrations",
+    "activate",
+    "active",
+    "build_integrations",
+]

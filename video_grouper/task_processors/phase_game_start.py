@@ -332,23 +332,13 @@ def _phase_payload(result: dict) -> dict:
 
 async def _persist_and_push(config, group_dir, storage_path, result) -> None:
     """Persist the fused phases to group state and best-effort push them to TTT."""
-    import asyncio
 
     _persist_phases(group_dir, storage_path, result)
     try:
-        from video_grouper.task_processors.phase_ttt_push import push_phases_to_ttt
+        from video_grouper.integrations import active
 
-        ttt = getattr(config, "ttt", None)
-        _dump = getattr(ttt, "model_dump", None)
-        ttt_config = _dump() if callable(_dump) else ttt
-        await asyncio.to_thread(
-            push_phases_to_ttt,
-            ttt_config,
-            os.path.basename(group_dir.rstrip("/\\")),
-            _phase_payload(result),
-            str(storage_path or ""),
-        )
-    except Exception as e:  # noqa: BLE001 — the TTT push is best-effort
+        await active().recordings.phases(group_dir, _phase_payload(result))
+    except Exception as e:  # noqa: BLE001 — the report is best-effort
         logger.warning(
             "phase game-start: truncated TTT push failed for %s: %s", group_dir, e
         )

@@ -36,12 +36,13 @@ class StepContext:
         team_name: Team identifier (e.g. ``"flash"``) or ``None`` if unknown.
         storage_path: Absolute path to soccer-cam's shared-data root.
         ttt_config: Dict-form ``TTTConfig`` without credentials (or ``None``
-            when TTT is disabled). Read by the phase push until it moves onto
-            the recording-sink port.
+            when TTT is disabled). Read only by the phase-hint lookup until it
+            moves onto its port.
         entitlements: The ``IEntitlements`` port (``None`` = nothing granted).
             Steps that run a licensed model get it from here.
         signing_public_keys: soccer-cam's trust anchors for licences and
             plugin bundles.
+        recordings: The ``IRecordingSink`` port (``None`` = report nowhere).
     """
 
     group_dir: Path
@@ -50,6 +51,7 @@ class StepContext:
     ttt_config: dict | None = None
     entitlements: Any = None
     signing_public_keys: list[str] = field(default_factory=list)
+    recordings: Any = None
 
 
 @dataclass(frozen=True)

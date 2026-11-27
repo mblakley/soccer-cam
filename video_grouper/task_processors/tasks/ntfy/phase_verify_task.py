@@ -11,7 +11,6 @@ carried here is sanitized (no email/password) — the write authenticates via th
 client's stored tokens (the running app logged in at startup).
 """
 
-import asyncio
 import logging
 import os
 from typing import Any
@@ -138,16 +137,10 @@ class PhaseVerifyTask(BaseNtfyTask):
                 success=False, should_continue=True, message=f"Unhandled: {response}"
             )
 
-        from video_grouper.task_processors.phase_ttt_push import push_phase_verified
+        # Restored from the queue file, so it can't be handed the port.
+        from video_grouper.integrations import active
 
-        await asyncio.to_thread(
-            push_phase_verified,
-            self.ttt_conn,
-            self.recording_group_dir,
-            key,
-            verdict,
-            self.storage_path,
-        )
+        await active().recordings.phase_verified(self.group_dir, key, verdict)
         logger.info("phase_verify: %s = %s for %s", key, verdict, self.group_dir)
 
         rest = self.remaining[1:]

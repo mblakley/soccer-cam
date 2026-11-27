@@ -67,7 +67,9 @@ def _claim(**over):
 
 
 @pytest.mark.asyncio
-async def test_phase_correction_applies_human_phases_and_repushes(tmp_path: Path):
+async def test_phase_correction_applies_human_phases_and_repushes(
+    tmp_path: Path, fake_integrations
+):
     group = _seed_group(tmp_path, "grp-1")
     ttt = _mk_ttt()
     ttt.claim_reprocess_request.return_value = _claim()
@@ -87,11 +89,11 @@ async def test_phase_correction_applies_human_phases_and_repushes(tmp_path: Path
     assert gp["times"]["end"] == 5640.0
     # NOT the stabilization path
     assert not (group / "reprocess_request.json").exists()
-    # re-push to TTT with the human offsets
-    args, kwargs = ttt.update_game_session_phases.call_args
-    assert args[0] == "sess-1"
-    assert kwargs["phase_kickoff_offset"] == 45.0
-    assert kwargs["phase_source"] == "human"
+    # re-reported with the human offsets
+    ((group_dir, payload),) = fake_integrations.recordings.phase_payloads
+    assert Path(group_dir).name == "grp-1"
+    assert payload["times"]["kickoff"] == 45.0
+    assert payload["source"] == "human"
     # completion reported
     sargs, _ = ttt.update_reprocess_status.call_args
     assert sargs[0] == "req-1"
@@ -209,7 +211,9 @@ async def test_stabilization_row_unchanged_by_dispatch(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_truncated_start_reruns_and_repushes(tmp_path: Path, monkeypatch):
+async def test_truncated_start_reruns_and_repushes(
+    tmp_path: Path, monkeypatch, fake_integrations
+):
     """kind=truncated_start -> re-run detector (truncated_start=True), trim 0,
     persist + re-push phases carrying phase_truncated_start, report completion."""
     group = _seed_group(tmp_path, "grp-1")
@@ -244,16 +248,18 @@ async def test_truncated_start_reruns_and_repushes(tmp_path: Path, monkeypatch):
     gp = json.loads((group / "state.json").read_text())["game_phases"]
     assert gp["truncated_start"] is True
     assert gp["times"]["kickoff"] == 0.0
-    _, kwargs = ttt.update_game_session_phases.call_args
-    assert kwargs["phase_truncated_start"] is True
-    assert kwargs["phase_kickoff_offset"] == 0.0
+    ((_, payload),) = fake_integrations.recordings.phase_payloads
+    assert payload["truncated_start"] is True
+    assert payload["times"]["kickoff"] == 0.0
     assert not (group / "reprocess_request.json").exists()  # not the stabilization path
     sargs, _ = ttt.update_reprocess_status.call_args
     assert sargs[1] == "completed"
 
 
 @pytest.mark.asyncio
-async def test_truncated_end_reruns_with_end_flag(tmp_path: Path, monkeypatch):
+async def test_truncated_end_reruns_with_end_flag(
+    tmp_path: Path, monkeypatch, fake_integrations
+):
     """kind=truncated_end -> re-run detector with truncated_end=True; re-push carries
     phase_truncated_end. The start trim is left alone."""
     group = _seed_group(tmp_path, "grp-1")
@@ -283,8 +289,8 @@ async def test_truncated_end_reruns_with_end_flag(tmp_path: Path, monkeypatch):
     )
 
     assert seen == {"ts": False, "te": True}
-    _, kwargs = ttt.update_game_session_phases.call_args
-    assert kwargs["phase_truncated_end"] is True
+    ((_, payload),) = fake_integrations.recordings.phase_payloads
+    assert payload["truncated_end"] is True
     sargs, _ = ttt.update_reprocess_status.call_args
     assert sargs[1] == "completed"
 

@@ -417,3 +417,36 @@ async def test_runner_without_manager_runs_resource_step(tmp_path):
         str(tmp_path / "in.mp4"), str(tmp_path / "out.mp4"), _ctx(tmp_path)
     )
     assert r.ok
+
+
+@pytest.mark.asyncio
+async def test_each_step_is_reported_to_the_recording_sink(tmp_path):
+    from video_grouper.integrations.recordings.fake import FakeRecordingSink
+
+    sink = FakeRecordingSink()
+    runner = PipelineRunner(
+        [_spec("a", "t_a"), _spec("b", "t_b")], recordings=sink, pipeline_preset="p"
+    )
+    result = await runner.run(
+        str(tmp_path / "game.mp4"), str(tmp_path / "out.mp4"), _ctx(tmp_path)
+    )
+    assert result.ok
+    assert sink.step_statuses(str(tmp_path)) == [
+        ("a", "running"),
+        ("a", "complete"),
+        ("b", "running"),
+        ("b", "complete"),
+    ]
+    assert all(r.pipeline_preset == "p" for _, r in sink.steps)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_step_is_reported_failed(tmp_path):
+    from video_grouper.integrations.recordings.fake import FakeRecordingSink
+
+    sink = FakeRecordingSink()
+    result = await PipelineRunner([_spec("x", "t_false")], recordings=sink).run(
+        str(tmp_path / "game.mp4"), str(tmp_path / "out.mp4"), _ctx(tmp_path)
+    )
+    assert not result.ok
+    assert sink.step_statuses()[-1] == ("x", "failed")

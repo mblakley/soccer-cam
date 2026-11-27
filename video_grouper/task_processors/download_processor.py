@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 
 from video_grouper.cameras.base import Camera, CameraUnreachableError
+from video_grouper.integrations.recordings import IRecordingSink, StepReport
+from video_grouper.integrations.recordings.sources.null import NullRecordingSink
 from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.video_processor import VideoProcessor
 from video_grouper.utils.config import Config
@@ -56,7 +58,8 @@ class DownloadProcessor(QueueProcessor):
         super().__init__(storage_path, config)
         self.camera = camera
         self.video_processor = video_processor
-        self.ttt_reporter = None
+        # Where step progress is reported; the app wires the real sink.
+        self.recordings: IRecordingSink = NullRecordingSink()
         self.error_tracker = None
 
     @property
@@ -176,14 +179,15 @@ class DownloadProcessor(QueueProcessor):
         try:
             logger.info(f"DOWNLOAD: Starting download of {os.path.basename(file_path)}")
             await dir_state.update_file_state(file_path, status="downloading")
-            if self.ttt_reporter:
-                await self.ttt_reporter.update_recording_step(
-                    dir_state.ttt_recording_id,
+            await self.recordings.progress(
+                dir_state.directory_path,
+                StepReport(
                     step_id="download",
                     step_type="download",
                     label="Download",
                     status="running",
-                )
+                ),
+            )
 
             # The camera implementation may expose either a synchronous or an
             # asynchronous `download_file` method depending on the concrete
@@ -228,14 +232,15 @@ class DownloadProcessor(QueueProcessor):
                     await self.add_work(item)
                     return
 
-                if self.ttt_reporter:
-                    await self.ttt_reporter.update_recording_step(
-                        dir_state.ttt_recording_id,
+                await self.recordings.progress(
+                    dir_state.directory_path,
+                    StepReport(
                         step_id="download",
                         step_type="download",
                         label="Download",
                         status="complete",
-                    )
+                    ),
+                )
                 logger.info(
                     f"DOWNLOAD: Successfully downloaded {os.path.basename(file_path)}"
                 )
@@ -291,14 +296,15 @@ class DownloadProcessor(QueueProcessor):
                         f"downloading {file_name}"
                     )
                 await dir_state.update_file_state(file_path, status="download_failed")
-                if self.ttt_reporter:
-                    await self.ttt_reporter.update_recording_step(
-                        dir_state.ttt_recording_id,
+                await self.recordings.progress(
+                    dir_state.directory_path,
+                    StepReport(
                         step_id="download",
                         step_type="download",
                         label="Download",
                         status="failed",
-                    )
+                    ),
+                )
                 raise RuntimeError(f"Download failed for {os.path.basename(file_path)}")
 
         except Exception as e:
@@ -311,15 +317,16 @@ class DownloadProcessor(QueueProcessor):
             # nothing to do here. StateAuditor mops up any orphans on the next
             # scan if the camera couldn't reach its own finally block.
             await dir_state.update_file_state(file_path, status="download_failed")
-            if self.ttt_reporter:
-                await self.ttt_reporter.update_recording_step(
-                    dir_state.ttt_recording_id,
+            await self.recordings.progress(
+                dir_state.directory_path,
+                StepReport(
                     step_id="download",
                     step_type="download",
                     label="Download",
                     status="failed",
                     error=str(e),
-                )
+                ),
+            )
             if self.error_tracker:
                 self.error_tracker.record("download", str(e), {"file": file_name})
             raise
