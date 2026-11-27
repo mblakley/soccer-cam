@@ -17,7 +17,9 @@
 #
 # Only ROI window 0 is reachable this way: the command's scanf targets are fixed
 # to window 0 and every call re-zeroes the whole 168-byte struct, so RoiIndex is
-# cosmetic and the other nine windows always read back disabled.
+# cosmetic and the other nine windows always read back disabled. (A pak built
+# with ROIQP_MULTIWIN=1 patches that too; this script still drives window 0
+# only, and its disable clears all ten so it is correct on either module.)
 #
 # Config (writable SD card, hot-reloaded):
 #   /mnt/sda/soccercam/roi.conf         - the active window; see roi.conf.example
@@ -168,6 +170,16 @@ write_roi() {
 }
 
 disable_roi() {
+    # A module built with ROIQP_MULTIWIN=1 keeps windows 1..9 from one call to
+    # the next, so a window someone set by hand on index 3 would outlive a
+    # "disable" that only cleared index 0. Clear them all. On the single-window
+    # module every one of these writes re-zeroes the whole set anyway, so the
+    # extra nine change nothing there.
+    I=1
+    while [ $I -le 9 ]; do
+        printf 'vdoenc setroi %s %s 0 0 0 0 0 1 1\n' "${1:-0}" "$I" >"$CMD" 2>/dev/null
+        I=$((I + 1))
+    done
     write_roi "${1:-0}" 0 0 0 0 0 1 1 && APPLIED=0
 }
 

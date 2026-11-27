@@ -119,6 +119,148 @@ open(KO, "wb").write(bytes(d))
 print(f"   {OLD.decode()} -> {NEW.decode()}  (26 bytes, in place)")
 PY
 
+if [[ "${ROIQP_MULTIWIN:-0}" == "1" ]]; then
+echo "==> 2b) ROIQP_MULTIWIN=1: make setroi honour RoiIndex (ten windows)"
+# The handler has two more defects beyond the format string (docs/ENCODER_ROI_QP.md
+# section 4b). It zeroes a 168-byte local struct, parses into window 0 of it, and
+# hands the whole struct to NMR_VdoEnc_SetROI -- so every call replaces all ten
+# windows with one, and RoiIndex only ever indexes the read-back print. That
+# index is not range-checked, so a large RoiIndex reads far off the stack.
+#
+# This rewrites the tail of the handler (the part after the print) so that it
+# copies the 16 parsed bytes into window RoiIndex of the LIVE per-path struct
+# and then calls NMR_VdoEnc_SetROI on that struct in place:
+#
+#       ldr  w3, [sp, #124]              ; RoiIndex
+#       cmp  w3, #9 ;  b.hi fail         ; refuse > 9, encoder untouched
+#       adrp x0, gNMRVdoEncObj ; ldr x0, [x0, :lo12:gNMRVdoEncObj]
+#       mov  w4, #0xbe8 ; umaddl x0, w2, w4, x0
+#       add  x1, x0, #0x388              ; live ROI struct for this path
+#       add  x4, x1, w3, uxtw #4         ; &win[RoiIndex]
+#       ldp  x5, x6, [x19] ; stp x5, x6, [x4]
+#       mov  w0, w2 ; bl NMR_VdoEnc_SetROI ; mov w0, #1 ; b epilogue
+#
+# and makes the print read the window that was parsed (mov x8, #0) instead of
+# indexing by the unchecked RoiIndex. Room comes from the handler's own
+# "invalid path" debug print, which is dropped. Same function size; nothing
+# outside 0x11bb4..0x11c6f of .text changes.
+#
+# Unlike the format string this is CODE, and it needs four relocation entries
+# moved or retargeted and five neutralised (R_AARCH64_NONE). A wrong relocation
+# is a module that fails to load, which is a camera with no encoder. Hence
+# opt-in, a separate build number, and every old word asserted before it is
+# replaced. NOT RUN ON HARDWARE.
+python3 - "$KO_REL" <<'PY'
+import struct, sys
+
+KO = "rootfs_unpacked/" + sys.argv[1]
+d = bytearray(open(KO, "rb").read())
+
+# --- ELF64 section headers, by name
+assert d[:4] == b"\x7fELF" and d[4] == 2 and d[5] == 1, "not a little-endian ELF64"
+shoff, = struct.unpack_from("<Q", d, 0x28)
+shentsize, shnum, shstrndx = struct.unpack_from("<HHH", d, 0x3A)
+def sh(i):
+    name, typ, flags, addr, off, size, link, info, align, entsize = struct.unpack_from("<IIQQQQIIQQ", d, shoff + i * shentsize)
+    return dict(name=name, off=off, size=size, link=link, info=info, entsize=entsize)
+strtab = sh(shstrndx)
+def sname(s):
+    a = strtab["off"] + s["name"]
+    return d[a:d.index(b"\0", a)].decode()
+secs = {sname(sh(i)): (i, sh(i)) for i in range(shnum)}
+text_i, text = secs[".text"]
+rela_i, rela = secs[".rela.text"]
+bss_i, _ = secs[".bss"]
+symtab_i, symtab = secs[".symtab"]
+assert rela["info"] == text_i and rela["link"] == symtab_i and rela["entsize"] == 24
+
+# --- the symbols the new relocations lean on
+def sym(i):
+    name, info, other, shndx, value, size = struct.unpack_from("<IBBHQQ", d, symtab["off"] + i * 24)
+    return dict(name=name, type=info & 15, shndx=shndx, value=value)
+symstr = sh(symtab["link"])
+def symname(s):
+    a = symstr["off"] + s["name"]
+    return d[a:d.index(b"\0", a)].decode()
+BSS_SECSYM = 6
+s = sym(BSS_SECSYM)
+assert s["type"] == 3 and s["shndx"] == bss_i, "symbol 6 is not the .bss section symbol"
+obj = next(sym(i) for i in range(symtab["size"] // 24) if symname(sym(i)) == "gNMRVdoEncObj")
+assert obj["shndx"] == bss_i and obj["value"] == 0x2C0, "gNMRVdoEncObj is not at .bss+0x2c0"
+assert symname(sym(0x289)) == "NMR_VdoEnc_SetROI" and sym(0x289)["value"] == 0x11A44
+assert symname(sym(0x1F5)) == "__stack_chk_fail"
+
+# --- instructions: .text offset -> (stock word, new word)
+WORDS = {
+    0x11BB4: (0xD37C7C48, 0xD2800008),  # ubfiz x8,x2,#4,#32      -> mov x8,#0
+    0x11BF4: (0x90000000, 0x52800000),  # adrp x0,<dbg flag>      -> mov w0,#0
+    0x11BF8: (0xB9400000, 0x14000002),  # ldr w0,[x0]             -> b epilogue
+    0x11BFC: (0x35000280, 0x94000000),  # cbnz w0,<dbg print>     -> bl __stack_chk_fail
+    0x11C14: (0x540001A1, 0x54FFFF41),  # b.ne 11c48              -> b.ne 11bfc
+    0x11C34: (0x2A0203E0, 0xB9407FE3),  # mov w0,w2               -> ldr w3,[sp,#124]
+    0x11C38: (0xAA1303E1, 0x7100247F),  # mov x1,x19              -> cmp w3,#9
+    0x11C3C: (0x94000000, 0x54FFFDC8),  # bl NMR_VdoEnc_SetROI    -> b.hi 11bf4
+    0x11C40: (0x52800020, 0x90000000),  # mov w0,#1               -> adrp x0,gNMRVdoEncObj
+    0x11C44: (0x17FFFFEF, 0xF9400000),  # b epilogue              -> ldr x0,[x0,:lo12:]
+    0x11C48: (0x94000000, 0x52817D04),  # bl __stack_chk_fail     -> mov w4,#0xbe8
+    0x11C4C: (0x90000001, 0x9BA40040),  # (dbg print) ...         -> umaddl x0,w2,w4,x0
+    0x11C50: (0x91000021, 0x910E2001),  #                         -> add x1,x0,#0x388
+    0x11C54: (0x9116C021, 0x8B235024),  #                         -> add x4,x1,w3,uxtw #4
+    0x11C58: (0x90000000, 0xA9401A65),  #                         -> ldp x5,x6,[x19]
+    0x11C5C: (0x91000000, 0xA9001885),  #                         -> stp x5,x6,[x4]
+    0x11C60: (0x94000000, 0x2A0203E0),  #                         -> mov w0,w2
+    0x11C64: (0x52800000, 0x94000000),  #                         -> bl NMR_VdoEnc_SetROI
+    0x11C68: (0x17FFFFE6, 0x52800020),  #                         -> mov w0,#1
+    0x11C6C: (0xD503201F, 0x17FFFFE5),  # nop                     -> b epilogue
+}
+for off, (old, new) in WORDS.items():
+    got, = struct.unpack_from("<I", d, text["off"] + off)
+    assert got == old, f".text+{off:#x}: {got:08x}, expected {old:08x}. Module differs; stop."
+for off, (old, new) in WORDS.items():
+    struct.pack_into("<I", d, text["off"] + off, new)
+
+# --- relocations: (stock offset, stock info, stock addend) -> (offset, info, addend)
+ADRP, LDST64, NONE = 0x113, 0x11E, 0
+RELAS = {
+    (0x11BF4, 0x0000000300000113, 0x2990): (0x11C40, (BSS_SECSYM << 32) | ADRP, 0x2C0),
+    (0x11BF8, 0x000000030000011D, 0x2990): (0x11C44, (BSS_SECSYM << 32) | LDST64, 0x2C0),
+    (0x11C3C, 0x000002890000011B, 0): (0x11C64, 0x000002890000011B, 0),   # bl NMR_VdoEnc_SetROI moves
+    (0x11C48, 0x000001F50000011B, 0): (0x11BFC, 0x000001F50000011B, 0),   # bl __stack_chk_fail moves
+    (0x11C4C, 0x0000000400000113, 0x4C8): (0x11C4C, NONE, 0),             # the dropped debug print
+    (0x11C50, 0x0000000400000115, 0x4C8): (0x11C50, NONE, 0),
+    (0x11C58, 0x0000000500000113, 0x2508): (0x11C58, NONE, 0),
+    (0x11C5C, 0x0000000500000115, 0x2508): (0x11C5C, NONE, 0),
+    (0x11C60, 0x000002E00000011B, 0): (0x11C60, NONE, 0),
+}
+found = {}
+n = rela["size"] // 24
+for i in range(n):
+    at = rela["off"] + i * 24
+    ent = struct.unpack_from("<QQq", d, at)
+    if 0x11BB4 <= ent[0] < 0x11C70:
+        found[ent] = at
+# Every relocation in the rewritten range must be one we account for: an
+# unlisted one would be applied on top of a new instruction.
+KEEP = {
+    (0x11BDC, 0x000002E00000011B, 0),   # bl printk -- the read-back line, kept
+    (0x11BE4, 0x0000040C00000113, 0),   # adrp g_vdoenc_path_max_count
+    (0x11BE8, 0x0000040C0000011D, 0),   # ldr  g_vdoenc_path_max_count
+}
+extra = set(found) - set(RELAS) - KEEP
+missing = set(RELAS) - set(found)
+assert not extra, f"unexpected relocations in the patched range: {[tuple(hex(v) for v in e) for e in extra]}"
+assert not missing, f"expected relocations not found: {[tuple(hex(v) for v in e) for e in missing]}"
+for old, new in RELAS.items():
+    struct.pack_into("<QQq", d, found[old], *new)
+
+open(KO, "wb").write(bytes(d))
+print(f"   {len(WORDS)} instructions rewritten, {len(RELAS)} relocations updated, size unchanged ({len(d)} bytes)")
+PY
+MULTIWIN_TAG="+multiwin"
+else
+MULTIWIN_TAG=""
+fi
+
 echo "==> 3) install S37_RoiQp + default config"
 install -m 0755 "$INIT_SRC" rootfs_unpacked/etc/init.d/S37_RoiQp
 install -m 0644 "$CONF_SRC" rootfs_unpacked/etc/soccercam_roi.conf.default
@@ -136,7 +278,7 @@ grep -vE '^(pak|roiqp|roiqp_default|roiqp_commit)=' "$MAN" > "$MAN.new" || true
 {
     cat "$MAN.new"
     echo "pak=$(basename "$OUT")"
-    echo "roiqp=S37+kflow_videoenc_setroi_fix"
+    echo "roiqp=S37+kflow_videoenc_setroi_fix${MULTIWIN_TAG}"
     echo "roiqp_default=$(grep -E '^enable=' "$CONF_SRC" | head -1 | tr -d '\r')"
     echo "roiqp_commit=$COMMIT"
 } > "$MAN"
