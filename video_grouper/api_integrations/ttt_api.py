@@ -638,14 +638,23 @@ class TTTApiClient:
         return self._request("GET", url, params=params)
 
     def auto_match_video(
-        self, team_id: str, video_url: str, recorded_at: str
+        self,
+        team_id: str,
+        video_url: str,
+        recorded_at: str,
+        game_id: str | None = None,
     ) -> dict[str, Any]:
-        """Auto-match a video to a game based on recording time.
+        """Attach a video to its TTT game.
+
+        ``game_id`` is the TTT game this recording was matched to from the TTT schedule, when
+        known; TTT attaches to it directly. Without it, TTT matches on ``recorded_at``.
 
         POST {api_base_url}/api/internal/device-link/auto-match-video
         """
         url = f"{self.api_base_url}/api/internal/device-link/auto-match-video"
         body = {"team_id": team_id, "video_url": video_url, "recorded_at": recorded_at}
+        if game_id:
+            body["game_id"] = game_id
         logger.debug("Auto-matching video for team %s at %s", team_id, recorded_at)
         return self._request("POST", url, json=body)
 

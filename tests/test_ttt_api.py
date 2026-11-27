@@ -259,6 +259,19 @@ class TestTTTApiClient(unittest.TestCase):
         body = call_args[1]["json"]
         self.assertEqual(body["team_id"], "team-1")
         self.assertEqual(body["video_url"], "https://youtube.com/watch?v=abc")
+        self.assertNotIn("game_id", body)
+
+    def test_auto_match_video_sends_the_matched_game(self):
+        self.client._http.request = Mock(
+            return_value=_mock_response(
+                200, {"matched": True, "game_id": "g1", "message": "ok"}
+            )
+        )
+        self.client.auto_match_video(
+            "team-1", "https://youtu.be/abc", "2026-03-08T15:00:00Z", game_id="g1"
+        )
+        body = self.client._http.request.call_args[1]["json"]
+        self.assertEqual(body["game_id"], "g1")
 
     def test_auto_match_video_no_match(self):
         data = {"matched": False, "game_id": None, "message": "No matching game found"}
@@ -609,3 +622,16 @@ class TestTTTApiClient(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_mock_auto_match_uses_the_reported_game_id():
+    from video_grouper.api_integrations.mock_ttt_api import MockTTTApiClient
+
+    client = MockTTTApiClient.__new__(MockTTTApiClient)
+    client._games = [
+        {"game_id": "g-1", "opponent_name": "A"},
+        {"game_id": "g-2", "opponent_name": "B"},
+    ]
+    assert client.auto_match_video("t", "u", "r", game_id="g-2")["game_id"] == "g-2"
+    assert client.auto_match_video("t", "u", "r")["game_id"] == "g-1"
+    assert client.auto_match_video("t", "u", "r", game_id="gone")["game_id"] == "g-1"

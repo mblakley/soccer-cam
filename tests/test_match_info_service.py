@@ -151,7 +151,19 @@ class TestScheduledGame:
             "location": "Away",
             "date": "2026-06-01",
             "time": "11:00",
+            "ttt_game_id": "",
         }
+
+    def test_a_known_ttt_game_id_is_written(self):
+        info = ScheduledGame(
+            source="X", team_name="A", opponent="B", ttt_game_id="g-42"
+        ).to_match_info()
+        assert info["ttt_game_id"] == "g-42"
+
+    def test_a_non_ttt_game_states_it_has_no_ttt_game(self):
+        # "" (not absent) so a re-match clears an id from an earlier TTT match.
+        info = ScheduledGame(source="X", team_name="A", opponent="B").to_match_info()
+        assert info["ttt_game_id"] == ""
 
     def test_no_kickoff_writes_no_date_or_time(self):
         info = ScheduledGame(source="X", team_name="A", opponent="B").to_match_info()

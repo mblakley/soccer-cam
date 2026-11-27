@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 
 from video_grouper.utils.error_tracker import ErrorTracker
@@ -553,7 +554,10 @@ class TTTReporter:
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.client.auto_match_video(
-                    team_id, video_url, recorded_at_str
+                    team_id,
+                    video_url,
+                    recorded_at_str,
+                    game_id=_matched_ttt_game_id(group_dir),
                 ),
             )
             if result:
@@ -571,3 +575,16 @@ class TTTReporter:
                 )
         except Exception as exc:
             logger.warning("TTT: auto_match_video failed for %s: %s", group_dir, exc)
+
+
+def _matched_ttt_game_id(group_dir: str) -> str | None:
+    """The TTT game this recording was matched to from the TTT schedule (match_info.ini
+    ``ttt_game_id``), or None when it came from another source or isn't known."""
+    try:
+        from video_grouper.models.match_info import MatchInfo
+
+        path = os.path.join(group_dir, "match_info.ini")
+        info = MatchInfo.from_file(path) if os.path.exists(path) else None
+        return (info.ttt_game_id or None) if info else None
+    except Exception:  # best-effort, like every TTT report
+        return None
