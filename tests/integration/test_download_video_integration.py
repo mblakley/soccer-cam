@@ -39,6 +39,10 @@ from video_grouper.utils.config import (
     YouTubeConfig,
 )
 
+# Real DownloadProcessor + VideoProcessor instances on a temp dir, synchronised
+# with wall-clock sleeps: an integration test, not a unit test.
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 def temp_storage():

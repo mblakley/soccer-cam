@@ -14,6 +14,9 @@ refuses the cases that would double-correct.
 
 from __future__ import annotations
 
+import copy
+import functools
+import hashlib
 import json
 import sys
 import types
@@ -65,6 +68,12 @@ _UPRIGHT = (300, 640)
 
 
 def _panorama(disparity: int = 6, upright: bool = False) -> np.ndarray:
+    """A fresh copy of the fixture panorama (callers may write into it)."""
+    return _build_panorama(disparity, upright).copy()
+
+
+@functools.cache
+def _build_panorama(disparity: int, upright: bool) -> np.ndarray:
     rng = np.random.default_rng(3)
     w = W + 512
     img = 110 + 6 * cv2.GaussianBlur(rng.normal(0.0, 1.0, (H, w)), (0, 0), 5.0)
@@ -94,7 +103,46 @@ def _panorama(disparity: int = 6, upright: bool = False) -> np.ndarray:
     alpha = np.linspace(0.0, 1.0, hi - lo)[None, :]
     out[:, hi:] = right[:, hi:]
     out[:, lo:hi] = left[:, lo:hi] * (1 - alpha) + right[:, lo:hi] * alpha
-    return np.dstack([np.clip(out, 0, 255).astype(np.uint8)] * 3)
+    frame = np.dstack([np.clip(out, 0, 255).astype(np.uint8)] * 3)
+    frame.flags.writeable = False  # the cached original; _panorama hands out copies
+    return frame
+
+
+class _MemoisedMetric(types.ModuleType):
+    """`seam_metric`, with `detect_shoulder_chains` memoised on the frame.
+
+    Detection is the whole cost of the metric (~2-3 s on the fixture frame) and
+    is a pure function of the pixels and its arguments, while nearly every
+    test here snapshots the *same* fixture frame. The real detector still runs
+    -- once per distinct frame -- and every other function is the real module's.
+    Each caller gets a deep copy, so no test can see another's mutations.
+    """
+
+    def __init__(self, real: types.ModuleType) -> None:
+        super().__init__(real.__name__)
+        self._real = real
+        self._chains: dict[tuple, object] = {}
+
+    def __getattr__(self, name: str):
+        return getattr(self._real, name)
+
+    def detect_shoulder_chains(self, image, *args, **kwargs):
+        img = np.ascontiguousarray(image)
+        key = (
+            img.shape,
+            img.dtype.str,
+            hashlib.blake2b(img.tobytes(), digest_size=16).hexdigest(),
+            args,
+            tuple(sorted(kwargs.items())),
+        )
+        if key not in self._chains:
+            self._chains[key] = self._real.detect_shoulder_chains(
+                image, *args, **kwargs
+            )
+        return copy.deepcopy(self._chains[key])
+
+
+_metric = _MemoisedMetric(seam_metric)
 
 
 class _Scalars:
@@ -185,7 +233,7 @@ def client(tmp_path, calls, monkeypatch):
     sc._toolkit_cache.clear()
     sc._toolkit_cache.update(
         {
-            "metric": seam_metric,
+            "metric": _metric,
             "vertical": seam_vertical,
             "camera": _fake_camera(calls),
             "layers": seam_layers,
@@ -854,7 +902,7 @@ def test_a_non_reolink_camera_is_refused_with_a_reason(tmp_path, calls):
     sc._toolkit_cache.clear()
     sc._toolkit_cache.update(
         {
-            "metric": seam_metric,
+            "metric": _metric,
             "vertical": seam_vertical,
             "camera": _fake_camera(calls),
             "layers": seam_layers,

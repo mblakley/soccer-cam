@@ -65,6 +65,9 @@ class NtfyProcessor(QueueProcessor):
         self.video_processor = video_processor
         self._stopping = False
         self._response_events: dict[str, asyncio.Event] = {}
+        # How often process_item wakes while waiting for a response, to notice
+        # shutdown. An attribute (not a literal) so tests can shorten it.
+        self._response_poll_timeout = 30.0
 
     @property
     def queue_type(self) -> QueueType:
@@ -123,7 +126,9 @@ class NtfyProcessor(QueueProcessor):
                         )
                         return
                     try:
-                        await asyncio.wait_for(event.wait(), timeout=30.0)
+                        await asyncio.wait_for(
+                            event.wait(), timeout=self._response_poll_timeout
+                        )
                     except TimeoutError:
                         logger.debug(f"NTFY: Still waiting for response to {item}")
                         continue

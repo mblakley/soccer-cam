@@ -10,6 +10,7 @@ between the two sensors, and must refuse to bless a result it cannot support.
 
 from __future__ import annotations
 
+import functools
 import sys
 from pathlib import Path
 
@@ -52,6 +53,15 @@ def _texture(rng: np.random.Generator, w: int, h: int) -> np.ndarray:
     return np.clip(img, 0, 255)
 
 
+@functools.cache
+def _world(seed: int) -> np.ndarray:
+    """The scene both sensors see. It depends only on the seed, so it is built
+    once (~0.4 s) and shared read-only by every panorama cut from it."""
+    world = _texture(np.random.default_rng(seed), W + 512, H)
+    world.flags.writeable = False
+    return world
+
+
 def build_panorama(
     disparity: int = 0,
     photometric_step: float = 0.0,
@@ -66,8 +76,7 @@ def build_panorama(
     window; `hard_step` is one applied abruptly at the seam column, which is
     the case detrending exists to survive.
     """
-    rng = np.random.default_rng(seed)
-    world = _texture(rng, W + 512, H)
+    world = _world(seed)
     left = world[:, 256 : 256 + W]
     right = np.roll(world, -disparity, axis=1)[:, 256 : 256 + W] + photometric_step
 
