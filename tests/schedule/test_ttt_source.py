@@ -33,6 +33,7 @@ class TestTTTSource:
             "my_team_name": "Flash",
             "opponent_team_name": "Rivals",
             "location": "Home",
+            "ttt_game_id": "",
         }
 
     def test_missing_fields_become_empty(self):
@@ -42,6 +43,7 @@ class TestTTTSource:
             "my_team_name": "",
             "opponent_team_name": "",
             "location": "",
+            "ttt_game_id": "",
         }
 
     def test_keeps_the_matched_ttt_game_id(self):

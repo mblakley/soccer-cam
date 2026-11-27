@@ -52,8 +52,9 @@ class ScheduledGame:
         if self.kickoff is not None:
             info["date"] = self.kickoff.strftime("%Y-%m-%d")
             info["time"] = self.kickoff.strftime("%H:%M")
-        if self.ttt_game_id:
-            info["ttt_game_id"] = self.ttt_game_id
+        # Always present: "" means "not a TTT game", which clears an id left by
+        # an earlier match of the same recording.
+        info["ttt_game_id"] = self.ttt_game_id
         return info
 
 

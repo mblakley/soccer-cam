@@ -622,3 +622,16 @@ class TestTTTApiClient(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_mock_auto_match_uses_the_reported_game_id():
+    from video_grouper.api_integrations.mock_ttt_api import MockTTTApiClient
+
+    client = MockTTTApiClient.__new__(MockTTTApiClient)
+    client._games = [
+        {"game_id": "g-1", "opponent_name": "A"},
+        {"game_id": "g-2", "opponent_name": "B"},
+    ]
+    assert client.auto_match_video("t", "u", "r", game_id="g-2")["game_id"] == "g-2"
+    assert client.auto_match_video("t", "u", "r")["game_id"] == "g-1"
+    assert client.auto_match_video("t", "u", "r", game_id="gone")["game_id"] == "g-1"

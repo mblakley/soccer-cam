@@ -551,11 +551,13 @@ class TTTReporter:
                 return
             video_url = f"https://youtu.be/{youtube_video_id}"
             recorded_at_str = recorded_at.isoformat()
-            game_id = _matched_ttt_game_id(group_dir)
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: self.client.auto_match_video(
-                    team_id, video_url, recorded_at_str, game_id=game_id
+                    team_id,
+                    video_url,
+                    recorded_at_str,
+                    game_id=_matched_ttt_game_id(group_dir),
                 ),
             )
             if result:
@@ -580,11 +582,8 @@ def _matched_ttt_game_id(group_dir: str) -> str | None:
     ``ttt_game_id``), or None when it came from another source or isn't known."""
     try:
         from video_grouper.models.match_info import MatchInfo
-        from video_grouper.utils.paths import get_match_info_path
 
-        path = get_match_info_path(
-            group_dir, os.path.dirname(os.path.abspath(group_dir))
-        )
+        path = os.path.join(group_dir, "match_info.ini")
         info = MatchInfo.from_file(path) if os.path.exists(path) else None
         return (info.ttt_game_id or None) if info else None
     except Exception:  # best-effort, like every TTT report

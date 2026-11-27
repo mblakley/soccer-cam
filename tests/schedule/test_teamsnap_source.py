@@ -38,6 +38,7 @@ class TestTeamSnapSource:
             "my_team_name": "Flash",
             "opponent_team_name": "Rivals",
             "location": "Field 3",
+            "ttt_game_id": "",
         }
 
     def test_follows_the_service_enabled_flag(self):
