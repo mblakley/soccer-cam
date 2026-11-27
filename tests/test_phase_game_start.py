@@ -437,3 +437,125 @@ async def test_game_start_zero_question_is_truncation_framed(tmp_path):
     q = await task.create_question()
     assert "already in progress" in q["message"].lower()
     assert "Already started" in [a["label"] for a in q["actions"]]
+
+
+# --------------------------------------------------------------------------
+# Single-flight + timeout: one decode per group, never two at once
+# --------------------------------------------------------------------------
+
+_OK_RESULT = {
+    "ok": True,
+    "ko_trustworthy": True,
+    "times": {
+        "kickoff": 600.0,
+        "halftime": 1500.0,
+        "second_half": 2100.0,
+        "end": 3600.0,
+    },
+    "reasons": [],
+    "used": "whistle+kick",
+}
+
+
+def _gated_detector(release: asyncio.Event, result=None):
+    """A fake _run_detector that counts calls and blocks until ``release`` is set
+    (standing in for the multi-minute decode running in a worker thread)."""
+    calls = {"n": 0}
+
+    async def _fake(*_a, **_k):
+        calls["n"] += 1
+        await release.wait()
+        return result
+
+    return _fake, calls
+
+
+@pytest.fixture
+def fresh_flight_state(monkeypatch):
+    monkeypatch.setattr(pgs, "_INFLIGHT", {})
+    monkeypatch.setattr(pgs, "_ORPHANED", set())
+
+
+@pytest.mark.asyncio
+async def test_duplicate_triggers_share_one_detector_run(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+
+    # Post-combine hook and StateAuditor fire for the same group together.
+    first = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    second = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    await asyncio.sleep(0.05)
+    assert calls["n"] == 1  # the duplicate is waiting on the first run
+    release.set()
+
+    assert await asyncio.gather(first, second) == [True, True]
+    assert calls["n"] == 1
+    assert pgs._INFLIGHT == {}  # entry cleared once the run finished
+
+
+@pytest.mark.asyncio
+async def test_cancelled_duplicate_does_not_cancel_shared_run(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+
+    first = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    dup = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    await asyncio.sleep(0.05)
+    dup.cancel()
+    release.set()
+
+    assert await first is True
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_timeout_falls_back_and_blocks_a_second_decode_until_the_first_ends(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+    monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0.05)
+
+    # The run exceeds the ceiling: fall back to the NTFY walk, write nothing.
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    assert calls["n"] == 1
+    assert not MatchInfo.get_or_create(group, str(tmp_path))[0].start_time_offset
+
+    # The abandoned decode is still running: a new trigger must not start another.
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    assert calls["n"] == 1
+
+    # Once the abandoned decode finishes, the group can be detected again.
+    release.set()
+    await asyncio.sleep(0.05)
+    assert pgs._ORPHANED == set()
+    monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0)  # 0 = no ceiling
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is True
+    )
+    assert calls["n"] == 2

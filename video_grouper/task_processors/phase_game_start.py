@@ -65,6 +65,18 @@ PHASE_DETECT_TIMEOUT_SECONDS = int(
 # another.
 _INFLIGHT: dict = {}
 
+# Groups whose detector run hit PHASE_DETECT_TIMEOUT_SECONDS but whose decode is
+# still running: asyncio cannot interrupt the worker thread that ``to_thread``
+# started, so the decode keeps going after the timeout. While a group is in
+# this set, a new trigger falls straight back to the NTFY walk instead of
+# starting a second decode next to the abandoned one; the entry clears itself
+# when that thread finally finishes.
+_ORPHANED: set = set()
+
+
+def _inflight_key(group_dir: str) -> str:
+    return os.path.normcase(os.path.abspath(group_dir))
+
 
 def _camera_is_reolink(config) -> bool:
     """True iff a configured camera is a Reolink.
@@ -385,14 +397,25 @@ async def maybe_resolve_phase_game_start(
     # One detector run per group at a time: duplicate triggers (post-combine
     # hook + StateAuditor firing together) share the first run's result instead
     # of decoding the same multi-GB video twice in parallel.
-    key = os.path.normcase(os.path.abspath(group_dir))
+    key = _inflight_key(group_dir)
+    if key in _ORPHANED:
+        logger.warning(
+            "phase game-start: a timed-out detector run is still decoding %s; "
+            "not starting another — falling back to the NTFY walk",
+            group_dir,
+        )
+        return False
     task = _INFLIGHT.get(key)
     if task is None:
         task = asyncio.create_task(
             _detect_and_resolve(group_dir, combined_video_path, config, storage_path)
         )
         _INFLIGHT[key] = task
-        task.add_done_callback(lambda _t, _k=key: _INFLIGHT.pop(_k, None))
+
+        def _clear_inflight(_t: asyncio.Task, _k: str = key) -> None:
+            _INFLIGHT.pop(_k, None)
+
+        task.add_done_callback(_clear_inflight)
     else:
         logger.info(
             "phase game-start: detection already in flight for %s; "
@@ -435,15 +458,30 @@ async def _detect_and_resolve(
         PHASE_DETECT_TIMEOUT_SECONDS or "disabled",
     )
     t0 = time.monotonic()
+    detector = asyncio.ensure_future(
+        _run_detector(group_dir, combined_video_path, anchors=anchors)
+    )
     try:
+        # shield: on timeout wait_for cancels only the wrapper, so ``detector``
+        # still completes and can clear the orphan marker below.
         result = await asyncio.wait_for(
-            _run_detector(group_dir, combined_video_path, anchors=anchors),
+            asyncio.shield(detector),
             timeout=PHASE_DETECT_TIMEOUT_SECONDS or None,
         )
     except TimeoutError:
+        key = _inflight_key(group_dir)
+        _ORPHANED.add(key)
+
+        def _release(t: asyncio.Future, _k: str = key) -> None:
+            _ORPHANED.discard(_k)
+            if not t.cancelled():
+                t.exception()  # retrieve it so asyncio doesn't log it as unhandled
+
+        detector.add_done_callback(_release)
         logger.error(
             "phase game-start: detector exceeded %ss for %s — abandoning phase "
-            "detection, falling back to the NTFY walk",
+            "detection, falling back to the NTFY walk (the decode thread cannot be "
+            "interrupted; new triggers for this group skip detection until it ends)",
             PHASE_DETECT_TIMEOUT_SECONDS,
             group_dir,
         )
@@ -478,7 +516,9 @@ async def _detect_and_resolve(
     # itself unsure (ko_trustworthy False -> the NTFY walk below).
     if not result or not result.get("ko_trustworthy"):
         logger.info(
-            "phase game-start: KO not trustworthy for %s (falling back to the NTFY walk)",
+            "phase game-start: detector finished in %.1fs; KO not trustworthy for %s "
+            "(falling back to the NTFY walk)",
+            elapsed,
             group_dir,
         )
         return False
@@ -498,11 +538,12 @@ async def _detect_and_resolve(
 
     logger.info(
         "phase game-start: set start_time_offset=%s for %s "
-        "(kickoff=%.1fs - %ds backup)",
+        "(kickoff=%.1fs - %ds backup; detector took %.1fs)",
         offset,
         group_dir,
         float(kickoff),
         PHASE_KO_TRIM_BACKUP_SECONDS,
+        elapsed,
     )
     return True
 
