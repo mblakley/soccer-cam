@@ -2431,3 +2431,22 @@ touching consumers.
 TTT's API, so the refactor can't silently break a route. Device sign-in (TTT-minted session over a
 PKCE loopback flow, no Supabase in soccer-cam) is built separately and becomes `IAccount`'s TTT
 implementation.
+
+## Decision: devices register themselves with TTT through one idempotent route; dormant TTT features revived (2026-11-27)
+
+**Context.** The phase-5 review (IDeviceLink) found: `[TTT] camera_id` is hand-typed and nothing writes
+it, so recording reports silently do nothing without it; TTT's camera create route inserts on every
+call (no dedupe; no serial on `CameraCreate`), machine/service upserts are select-then-insert, and
+multi-team users land on an arbitrary team. It also found two features that existed only on paper:
+the system-metrics heartbeat (read a nonexistent `config.ttt.service_id`, so it never ran) and
+pulling stitch profiles saved in TTT's calibration tool down to the device (never wired).
+
+**Decided (Mark).**
+- A **new idempotent TTT route** registers this machine and its cameras (keyed on team + camera
+  serial; unique index) plus the machine-camera link and returns the ids; soccer-cam calls it and
+  fills camera ids itself. Chosen over chaining existing routes (duplicates on retry, name
+  collisions on "default", no serial dedupe).
+- **Revive the metrics heartbeat** (done: `DeviceHealth` over `heartbeat-enhanced`).
+- **Build the stitch-profile pull.**
+- **Fix TTT's device-link authorization now** (separate TTT PR): camera status / command routes ran
+  with a service session and never checked that the caller manages the camera.

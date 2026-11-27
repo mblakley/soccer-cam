@@ -28,17 +28,27 @@ client is constructed. Tests: each port's behaviour tested against the interface
 
 ## Order — one branch (`feat/ttt-integration-ports`), one commit per phase
 
-1. **Composition point + `IEntitlements`.** Smallest real port; removes the
-   per-call client in `pipeline/steps/licensed_model.py`. Proves the layout.
-2. `IRecordingSink` — reporter recording methods + `phase_ttt_push` (second per-call client).
-3. `IWorkSource` + one generic poller replacing `TTTPoller`'s four queues; `MomentApiClient` folds in or goes.
-4. `IPhaseHintSource`.
-5. `IDeviceLink` + automatic registration on sign-in (fixes hand-typed `camera_id`).
-6. `IAccount` over the device-sign-in client (after that PR merges); delete dead
-   client methods (31), `ttt_sync_enabled`, pipeline-questions; contract test shrinks with them.
+Status 2026-11-27:
 
-Gates: each phase keeps the unit suite and `tests/contracts/` green; dead code
-is deleted only when its port replaces it.
+1. [x] **Composition point + `IEntitlements`** (registry, one shared TTT client, licensed models, plugins).
+2. [x] `IRecordingSink` — recording found / step progress / published / phases / verdicts.
+3. [x] `IWorkSource` — clip, highlight reel, processing job, reprocess queues; one generic poller.
+4. [x] `IPhaseHintSource` — parent event taps; `phase_ttt_push.py` removed.
+5. [x] `IDeviceLink` — register / heartbeat (now with `DeviceHealth` via heartbeat-enhanced) /
+   commands; `TTTReporter` deleted (dead parts removed with evidence); unregistered machines no
+   longer switch off same-named cameras.
+   - [ ] **Automatic registration** (decided 2026-11-27): a new idempotent TTT route registers this
+     machine and its cameras keyed on (team, serial) and returns ids; soccer-cam calls it and fills
+     camera ids itself (no hand-typed `camera_id`).
+   - [ ] **Stitch-profile pull** (decided 2026-11-27): profiles saved in TTT's calibration tool are
+     pulled down to the device (documented before but never wired).
+6. [ ] `IAccount` over the device-sign-in client (#156, on hold for TTT device-auth in production);
+   delete remaining dead client methods; contract test shrinks with them.
+
+Gates every phase: unit suite, `tests/contracts`, and the offline `tests/integration/ttt` tests.
+
+Related TTT fix (separate PR, 2026-11-27): device-link camera status / command routes didn't check
+that the caller manages the camera.
 
 ## Not in scope here
 
