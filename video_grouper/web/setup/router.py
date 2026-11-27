@@ -486,13 +486,44 @@ def _list_subdirs(path: str) -> list[str]:
     return subdirs
 
 
-def _render_youtube_body(has_secret: bool, has_token: bool, nav: bool = True) -> str:
+def _youtube_long_uploads_status(storage_path: str | None) -> str | None:
+    """Channel upload capability, or None if it cannot be determined.
+
+    Never raises: a status probe must not be able to break the wizard.
+    """
+    if not storage_path:
+        return None
+    try:
+        from video_grouper.utils.youtube_upload import (
+            YouTubeUploader,
+            get_youtube_paths,
+        )
+
+        credentials_file, token_file = get_youtube_paths(storage_path)
+        return YouTubeUploader(
+            credentials_file=credentials_file, token_file=token_file
+        ).get_long_uploads_status()
+    except Exception:
+        return None
+
+
+def _render_youtube_body(
+    has_secret: bool,
+    has_token: bool,
+    long_uploads_status: str | None = None,
+    nav: bool = True,
+) -> str:
     """Render the wizard body for the YouTube step.
 
-    Three states:
+    Four states:
       - No client_secret yet: show GCP setup instructions + file upload
       - client_secret uploaded, not authorized yet: show "Authorize" button
-      - Both done: show "Authorized" status + "Continue" button
+      - Authorized but the channel is capped at 15 minutes: block Continue and
+        send them to youtube.com/verify. A game is 60-90 minutes and YouTube
+        does not refuse an over-length upload -- it accepts it and then deletes
+        the video -- so finishing setup here would mean every game silently
+        disappears.
+      - Authorized and verified: "Continue"
 
     Skip is always available — YouTube is optional.
     """
@@ -524,10 +555,12 @@ def _render_youtube_body(has_secret: bool, has_token: bool, nav: bool = True) ->
     )
     why_byo = (
         '<p class="muted">Why your own GCP project? '
-        "YouTube limits API uploads to ~3 games/day per OAuth client. "
-        "If every soccer-cam install shared one client they'd fight "
-        "over a single quota; with your own client you get your own "
-        "limit (and can request more from Google later if you need to).</p>"
+        "YouTube counts API usage per project, so if every soccer-cam install "
+        "shared one client they would all draw on the same daily allowance. "
+        "With your own project that allowance is yours alone, and normal use "
+        "stays well inside it. (Separately, YouTube caps how many videos an "
+        "account may upload in a day. That limit follows your channel rather "
+        "than the project, so no project setup changes it.)</p>"
     )
     upload_form = (
         '<form method="post" action="/setup/youtube/upload" '
@@ -587,9 +620,43 @@ def _render_youtube_body(has_secret: bool, has_token: bool, nav: bool = True) ->
             f"{nav_row}"
         )
         return body
+    if long_uploads_status is not None and long_uploads_status != "allowed":
+        # Do not let them finish. Every game would be accepted and then
+        # silently deleted by YouTube.
+        return (
+            "<p><span style='color:var(--signal-on);'>&#10003;</span> "
+            "Authorized &mdash; but this channel is not ready yet.</p>"
+            '<p class="warn"><strong>YouTube will not accept videos longer '
+            "than 15 minutes on an unverified channel.</strong> Verify this "
+            "channel to lift the limit. It takes a minute and needs a phone "
+            "that can receive a text or call.</p>"
+            '<ol class="muted" style="line-height:1.7;">'
+            '<li>Open <a href="https://www.youtube.com/verify" target="_blank" '
+            'rel="noopener">youtube.com/verify</a>, signed in as the same '
+            "Google account you just authorized.</li>"
+            "<li>Choose text message or voice call and enter the code.</li>"
+            "<li>Come back here and re-check.</li>"
+            "</ol>"
+            '<div class="row">'
+            '<a class="btn" href="/setup/youtube">I&rsquo;ve verified &mdash; '
+            "re-check</a>"
+            '<a class="btn-ghost btn" href="/auth/youtube/start?return_to=/setup/youtube">'
+            "Use a different account</a>"
+            "</div>"
+            '<div class="row" style="margin-top:18px;">'
+            f"{skip_form}"
+            "</div>"
+        )
+    verified_note = (
+        '<p class="muted"><span style="color:var(--signal-on);">&#10003;</span> '
+        "Channel verified &mdash; full-length games can be uploaded.</p>"
+        if long_uploads_status == "allowed"
+        else ""
+    )
     body = (
         "<p><span style='color:var(--signal-on);'>&#10003;</span> "
         "Authorized &mdash; soccer-cam can upload to this YouTube channel.</p>"
+        f"{verified_note}"
         '<div class="row">'
         '<a class="btn-ghost btn" href="/auth/youtube/start?return_to=/setup/youtube">'
         "Re-authorize a different account</a>"
@@ -1347,7 +1414,10 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
             byo = _render_youtube_body(has_secret, False, nav=False)
             body = _render_publisher_youtube_body(conn, byo)
         else:
-            body = _render_youtube_body(has_secret, has_token)
+            long_uploads = (
+                _youtube_long_uploads_status(state.storage_path) if has_token else None
+            )
+            body = _render_youtube_body(has_secret, has_token, long_uploads)
         resp = HTMLResponse(
             _page(
                 "youtube",

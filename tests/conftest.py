@@ -39,6 +39,25 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
+def pytest_configure(config):
+    """Generate comtypes' UIAutomation wrappers once, before xdist workers start.
+
+    Importing pywinauto makes comtypes generate Python wrappers for
+    UIAutomationCore.dll into the venv's ``comtypes/gen`` on first use. In a
+    fresh venv, ``-n auto`` workers all import it at once and one imports a
+    module another is still writing -> "ERROR collecting" + "Different tests
+    were collected" (reproduced 2026-11-27: 1 in 3 fresh venvs). Workers carry
+    ``workerinput``; the controller runs this before spawning them, so the
+    cache already exists when they import.
+    """
+    if sys.platform != "win32" or hasattr(config, "workerinput"):
+        return
+    try:
+        import pywinauto  # noqa: F401
+    except Exception:  # optional / not importable here: nothing to warm
+        pass
+
+
 def pytest_collection_finish(session):
     """Freeze everything alive once collection is done.
 
