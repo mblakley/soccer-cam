@@ -302,7 +302,7 @@ grass-coloured (87 to 93 % on real games, 0 % on grey or black).
 |---|---|
 | Time on the camera | 2.3 to 4.1 s single-threaded on a desktop x86. The camera's Cortex-A53 will be several times slower; qemu timing says nothing. Must be measured |
 | Memory on the camera | ~20 MB of working memory plus 45 MB of weights mapped read-only from the SD card. Free RAM while `device` runs has not been read |
-| Getting a frame | The tool reads a PPM. On the camera the source is the JPEG snapshot (`cmd=Snap`, measured ~2 s) or a raw frame pull; neither is wired up, and a full 7680x2160 JPEG decodes to 50 MB |
+| Getting a frame | The tool reads the camera's snapshot format: three archived `cmd=Snap` files are baseline 4:2:0 JPEG, 7680x2160, and it decodes them at one-eighth scale from the DC coefficients alone (under 1 MB instead of 50; mean error under 1.4 grey levels against a full decode). Across 27 games the 1/8-scale input moves the far row by a median of 1 (worst 95) and the near row by 15 (worst 141), nearly always outward. **Not wired up:** nothing on the camera fetches the snapshot yet, and whether `cmd=Snap` is safe to call while recording is unmeasured. busybox `wget` is on the camera and `S99_NetState` already uses it against the local API |
 | When to run | Not designed. Once at recording start is the obvious choice; the camera may still be being aimed then |
 | A window that works at all | Everything here is moot until the ROI window is proven on hardware (levers 2, steps 4 to 7 below) |
 

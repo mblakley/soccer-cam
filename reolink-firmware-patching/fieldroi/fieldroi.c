@@ -21,14 +21,18 @@
  *       /                 \
  *      0---1---2---3---4        near touchline (bottom of image)
  *
- * Input:  a binary PPM (P6, 8-bit RGB), any size; it is resized to 768x384
- *         with the same bilinear sampling cv2.resize uses in the PC pipeline.
+ * Input:  a baseline JPEG -- what the camera's own snapshot is -- or a binary
+ *         PPM (P6, 8-bit RGB), any size. It is resized to 768x384 with the
+ *         same bilinear sampling cv2.resize uses in the PC pipeline. A JPEG is
+ *         read at one-eighth scale from its DC coefficients, so a 7680x2160
+ *         snapshot costs under 1 MB instead of 50.
  * Output: the ten keypoints and scores on stderr, and on stdout a roi.conf
  *         for S37_RoiQp -- or nothing and a non-zero exit if the result does
  *         not look like a field. A window in the wrong place is worse than no
  *         window: it would take bits AWAY from the pitch.
  *
- * usage: fieldroi <weights.bin> <frame.ppm> [options]
+ * usage: fieldroi <weights.bin> <frame.jpg|frame.ppm> [options]
+ *   --dump-input F   write the 768x384 picture the network saw, as a PPM
  *   --frame WxH      size of the encoder's frame        (default 7680x2160)
  *   --pad-far N      rows added above the far line      (default 200)
  *   --pad-near N     rows added below the near line     (default 200)
@@ -306,11 +310,8 @@ static int ppm_int(FILE *f)
  * no antialiasing, i.e. what cv2.resize(..., INTER_LINEAR) does in the PC
  * pipeline the model was trained through. Reads the source one row pair at a
  * time, so a 7680x2160 frame never needs 50 MB of RAM. */
-static uint8_t *load_ppm_resized(const char *path)
+static uint8_t *resize_ppm(FILE *f)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f)
-        die("cannot open the frame");
     if (fgetc(f) != 'P' || fgetc(f) != '6')
         die("frame is not a binary PPM (P6)");
     int w = ppm_int(f), h = ppm_int(f), maxv = ppm_int(f);
@@ -350,6 +351,299 @@ static uint8_t *load_ppm_resized(const char *path)
     return out;
 }
 
+/* --- JPEG, DC coefficients only ---------------------------------------------
+ * The camera's snapshot (cmd=Snap) is a 7680x2160 baseline JPEG. Decoding it
+ * properly needs 50 MB for the pixels, on a camera whose whole Linux has about
+ * 256 MB and is busy recording. The network only wants 768x384, so this reads
+ * just the DC coefficient of every 8x8 block -- the block's mean -- which is
+ * the picture at one-eighth scale (960x270) for under 1 MB. The AC
+ * coefficients still have to be Huffman-decoded to find where each block ends,
+ * but they are thrown away. Measured across 27 games, feeding the network this
+ * instead of the full-resolution frame moves the far row by a median of 1 row
+ * (worst 95) and the near row by 15 (worst 141), almost always outward.
+ *
+ * Baseline / extended-sequential Huffman only, 8-bit, one interleaved scan --
+ * what the camera writes. Anything else is refused. */
+
+typedef struct {
+    const uint8_t *p, *end;
+    unsigned acc;
+    int nbits, marker, starved;
+} BitR;
+
+static int br_bit(BitR *b)
+{
+    if (b->nbits == 0) {
+        unsigned c = 0;
+        if (b->marker || b->p >= b->end)
+            b->starved = 1; /* asked for bits the file does not have */
+        if (!b->marker && b->p < b->end) {
+            c = *b->p++;
+            if (c == 0xFF) {
+                unsigned n = b->p < b->end ? *b->p : 0xD9;
+                if (n == 0) {
+                    b->p++; /* FF 00 is a stuffed FF */
+                } else {
+                    b->marker = (int)n; /* a real marker: leave it, feed zeros */
+                    b->p--;
+                    c = 0;
+                }
+            }
+        }
+        b->acc = c;
+        b->nbits = 8;
+    }
+    b->nbits--;
+    return (int)(b->acc >> b->nbits) & 1;
+}
+
+static int br_bits(BitR *b, int n)
+{
+    int v = 0;
+    while (n-- > 0)
+        v = (v << 1) | br_bit(b);
+    return v;
+}
+
+typedef struct {
+    int mincode[17], maxcode[17], valptr[17], set;
+    uint8_t vals[256];
+} Huff;
+
+static int huff_decode(BitR *b, const Huff *h)
+{
+    int code = 0;
+    for (int l = 1; l <= 16; l++) {
+        code = (code << 1) | br_bit(b);
+        if (h->maxcode[l] >= 0 && code >= h->mincode[l] && code <= h->maxcode[l])
+            return h->vals[h->valptr[l] + code - h->mincode[l]];
+    }
+    die("corrupt JPEG: bad Huffman code");
+    return 0;
+}
+
+static unsigned be16(const uint8_t *p)
+{
+    return ((unsigned)p[0] << 8) | p[1];
+}
+
+/* Returns a malloc'd binary PPM of the 1/8-scale picture; *out_len is its size. */
+static uint8_t *jpeg_dc_to_ppm(const uint8_t *d, size_t n, size_t *out_len)
+{
+    int qdc[4] = { 0, 0, 0, 0 }, w = 0, h = 0, ncomp = 0, ri = 0;
+    int cid[3], ch[3], cv[3], ctq[3], ctd[3] = { 0, 0, 0 }, cta[3] = { 0, 0, 0 };
+    static Huff dc_t[4], ac_t[4];
+    size_t i = 2, scan = 0;
+
+    while (!scan) {
+        if (i + 4 > n || d[i] != 0xFF)
+            die("corrupt JPEG: marker expected");
+        unsigned m = d[i + 1];
+        if (m == 0xFF) { /* fill byte */
+            i++;
+            continue;
+        }
+        size_t len = be16(d + i + 2);
+        if (len < 2 || i + 2 + len > n)
+            die("corrupt JPEG: segment runs past the end");
+        const uint8_t *s = d + i + 4, *e = d + i + 2 + len;
+        if (m == 0xDB) {
+            while (s < e) {
+                int pq = s[0] >> 4, tq = s[0] & 15;
+                size_t sz = pq ? 128 : 64;
+                if (tq > 3 || s + 1 + sz > e)
+                    die("corrupt JPEG: quantisation table");
+                qdc[tq] = pq ? (int)be16(s + 1) : s[1]; /* entry 0 is the DC step */
+                s += 1 + sz;
+            }
+        } else if (m == 0xC0 || m == 0xC1) {
+            if (e - s < 6 || s[0] != 8)
+                die("JPEG is not 8-bit");
+            h = (int)be16(s + 1);
+            w = (int)be16(s + 3);
+            ncomp = s[5];
+            if ((ncomp != 1 && ncomp != 3) || e - s < 6 + 3 * ncomp || w < 8 || h < 8)
+                die("JPEG has an unsupported layout");
+            for (int c = 0; c < ncomp; c++) {
+                cid[c] = s[6 + 3 * c];
+                ch[c] = s[7 + 3 * c] >> 4;
+                cv[c] = s[7 + 3 * c] & 15;
+                ctq[c] = s[8 + 3 * c] & 3;
+                if (ch[c] < 1 || ch[c] > 2 || cv[c] < 1 || cv[c] > 2)
+                    die("JPEG has unsupported chroma subsampling");
+            }
+        } else if (m == 0xC2 || (m >= 0xC5 && m <= 0xCF && m != 0xC8 && m != 0xCC)) {
+            die("JPEG is progressive or arithmetic-coded; only baseline is supported");
+        } else if (m == 0xC4) {
+            while (s < e) {
+                int tc = s[0] >> 4, th = s[0] & 15, total = 0;
+                if (tc > 1 || th > 3 || s + 17 > e)
+                    die("corrupt JPEG: Huffman table");
+                Huff *t = tc ? &ac_t[th] : &dc_t[th];
+                int code = 0;
+                for (int l = 1; l <= 16; l++) {
+                    int cnt = s[l];
+                    t->valptr[l] = total;
+                    t->mincode[l] = code;
+                    t->maxcode[l] = cnt ? code + cnt - 1 : -1;
+                    code = (code + cnt) << 1;
+                    total += cnt;
+                }
+                if (total > 256 || s + 17 + total > e)
+                    die("corrupt JPEG: Huffman table");
+                memcpy(t->vals, s + 17, (size_t)total);
+                t->set = 1;
+                s += 17 + total;
+            }
+        } else if (m == 0xDD) {
+            if (e - s < 2)
+                die("corrupt JPEG: restart interval");
+            ri = (int)be16(s);
+        } else if (m == 0xDA) {
+            if (!ncomp || e - s < 1 + 2 * ncomp + 3 || s[0] != ncomp)
+                die("JPEG is not a single interleaved scan");
+            for (int c = 0; c < ncomp; c++) {
+                if (s[1 + 2 * c] != cid[c])
+                    die("JPEG scan lists components out of order");
+                ctd[c] = s[2 + 2 * c] >> 4;
+                cta[c] = s[2 + 2 * c] & 15;
+                if (ctd[c] > 3 || cta[c] > 3 || !dc_t[ctd[c]].set || !ac_t[cta[c]].set || !qdc[ctq[c]])
+                    die("JPEG scan uses a table it never defined");
+            }
+            scan = i + 2 + len;
+        }
+        i += 2 + len;
+    }
+
+    int hmax = 1, vmax = 1;
+    for (int c = 0; c < ncomp; c++) {
+        if (ch[c] > hmax)
+            hmax = ch[c];
+        if (cv[c] > vmax)
+            vmax = cv[c];
+    }
+    int mcux = (w + 8 * hmax - 1) / (8 * hmax), mcuy = (h + 8 * vmax - 1) / (8 * vmax);
+    uint8_t *plane[3] = { 0, 0, 0 };
+    for (int c = 0; c < ncomp; c++) {
+        plane[c] = malloc((size_t)mcux * ch[c] * mcuy * cv[c]);
+        if (!plane[c])
+            die("out of memory");
+    }
+
+    BitR br = { d + scan, d + n, 0, 0, 0, 0 };
+    int pred[3] = { 0, 0, 0 };
+    long mcu = 0;
+    for (int my = 0; my < mcuy; my++)
+        for (int mx = 0; mx < mcux; mx++, mcu++) {
+            if (ri && mcu && mcu % ri == 0) {
+                /* Restart: drop the padding bits, step over the RSTn marker. */
+                br.nbits = 0;
+                if (br.p + 2 > br.end || br.p[0] != 0xFF || (br.p[1] & 0xF8) != 0xD0)
+                    die("corrupt JPEG: restart marker missing");
+                br.p += 2;
+                br.marker = 0;
+                pred[0] = pred[1] = pred[2] = 0;
+            }
+            for (int c = 0; c < ncomp; c++)
+                for (int by = 0; by < cv[c]; by++)
+                    for (int bx = 0; bx < ch[c]; bx++) {
+                        int s = huff_decode(&br, &dc_t[ctd[c]]);
+                        if (s > 11)
+                            die("corrupt JPEG: DC size");
+                        int diff = br_bits(&br, s);
+                        if (s && diff < (1 << (s - 1)))
+                            diff -= (1 << s) - 1;
+                        pred[c] += diff;
+                        for (int k = 1; k < 64;) { /* walk the AC run to find the block's end */
+                            int rs = huff_decode(&br, &ac_t[cta[c]]);
+                            int r = rs >> 4, sz = rs & 15;
+                            if (!sz) {
+                                if (r != 15)
+                                    break; /* end of block */
+                                k += 16;
+                            } else {
+                                k += r + 1;
+                                (void)br_bits(&br, sz);
+                            }
+                        }
+                        /* The DC term contributes coefficient/8 to every sample. */
+                        int v = (pred[c] * qdc[ctq[c]]) / 8 + 128;
+                        v = v < 0 ? 0 : v > 255 ? 255 : v;
+                        plane[c][(size_t)(my * cv[c] + by) * (mcux * ch[c]) + mx * ch[c] + bx] = (uint8_t)v;
+                    }
+        }
+
+    /* A snapshot cut short still Huffman-decodes: the reader feeds zeros past
+     * the end and the lower part of the picture comes out as flat garbage. The
+     * network would then be shown half a field and answer anyway. */
+    if (br.starved)
+        die("JPEG is truncated: the picture data ends before the last block");
+
+    int ow = (w + 7) / 8, oh = (h + 7) / 8;
+    char hdr[48];
+    int hl = snprintf(hdr, sizeof(hdr), "P6\n%d %d\n255\n", ow, oh);
+    uint8_t *out = malloc((size_t)hl + (size_t)ow * oh * 3);
+    if (!out)
+        die("out of memory");
+    memcpy(out, hdr, (size_t)hl);
+    uint8_t *px = out + hl;
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < ow; x++, px += 3) {
+            int Y = plane[0][(size_t)(y * cv[0] / vmax) * (mcux * ch[0]) + x * ch[0] / hmax];
+            if (ncomp == 1) {
+                px[0] = px[1] = px[2] = (uint8_t)Y;
+                continue;
+            }
+            int cb = plane[1][(size_t)(y * cv[1] / vmax) * (mcux * ch[1]) + x * ch[1] / hmax] - 128;
+            int cr = plane[2][(size_t)(y * cv[2] / vmax) * (mcux * ch[2]) + x * ch[2] / hmax] - 128;
+            int r = Y + (int)lround(1.402 * cr);
+            int g = Y - (int)lround(0.344136 * cb + 0.714136 * cr);
+            int b = Y + (int)lround(1.772 * cb);
+            px[0] = (uint8_t)(r < 0 ? 0 : r > 255 ? 255 : r);
+            px[1] = (uint8_t)(g < 0 ? 0 : g > 255 ? 255 : g);
+            px[2] = (uint8_t)(b < 0 ? 0 : b > 255 ? 255 : b);
+        }
+    for (int c = 0; c < ncomp; c++)
+        free(plane[c]);
+    *out_len = (size_t)hl + (size_t)ow * oh * 3;
+    return out;
+}
+
+/* A frame is a PPM (streamed from disk row by row) or a baseline JPEG (read
+ * whole, a few MB at most, and reduced to its DC picture). Told apart by the
+ * first two bytes, not the file name. */
+static uint8_t *load_frame(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        die("cannot open the frame");
+    int a = fgetc(f), b = fgetc(f);
+    rewind(f);
+    if (a == 'P' && b == '6')
+        return resize_ppm(f);
+    if (a != 0xFF || b != 0xD8)
+        die("frame is neither a binary PPM (P6) nor a JPEG");
+    if (fseek(f, 0, SEEK_END))
+        die("cannot read the frame");
+    long len = ftell(f);
+    rewind(f);
+    if (len < 16 || len > 64L * 1024 * 1024)
+        die("JPEG is empty or implausibly large");
+    uint8_t *raw = malloc((size_t)len);
+    if (!raw || fread(raw, 1, (size_t)len, f) != (size_t)len)
+        die("cannot read the frame");
+    fclose(f);
+    size_t ppm_len = 0;
+    uint8_t *ppm = jpeg_dc_to_ppm(raw, (size_t)len, &ppm_len);
+    free(raw);
+    FILE *m = fmemopen(ppm, ppm_len, "rb");
+    if (!m)
+        die("out of memory");
+    uint8_t *out = resize_ppm(m); /* closes m */
+    free(ppm);
+    return out;
+}
+
 /* --- main ------------------------------------------------------------------- */
 
 int main(int argc, char **argv)
@@ -362,6 +656,7 @@ int main(int argc, char **argv)
     }
     int fw = 7680, fh = 2160, pad_far = 200, pad_near = 200, qp = -6, only_kpts = 0;
     double min_score = 0.15, min_green = 0.6;
+    const char *dump_input = NULL;
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--keypoints"))
             only_kpts = 1;
@@ -380,6 +675,8 @@ int main(int argc, char **argv)
             min_score = atof(argv[++i]);
         else if (!strcmp(argv[i], "--min-green"))
             min_green = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--dump-input"))
+            dump_input = argv[++i];
         else
             die("unknown option");
     }
@@ -400,7 +697,14 @@ int main(int argc, char **argv)
     wp = base + 8;
     wend = base + st.st_size;
 
-    uint8_t *rgb = load_ppm_resized(argv[2]);
+    uint8_t *rgb = load_frame(argv[2]);
+    if (dump_input) {
+        /* What the network was actually shown, for "why did it say that". */
+        FILE *o = fopen(dump_input, "wb");
+        if (!o || fprintf(o, "P6\n%d %d\n255\n", IN_W, IN_H) < 0 ||
+            fwrite(rgb, 3, (size_t)IN_W * IN_H, o) != (size_t)IN_W * IN_H || fclose(o))
+            die("cannot write --dump-input");
+    }
     float kpts[NKPT][2], scores[NKPT];
     infer(rgb, kpts, scores);
 

@@ -16,12 +16,14 @@ Format: ``FRW1``, u32 tensor count, then per tensor u32 ndim, u32 dims[4]
         field_outline_v2.onnx field_outline_v2.frw
 
 Add ``--reference FRAME.ppm REF.txt`` to also run the ONNX model itself on a
-frame and write its keypoints, in the format fieldroi prints them. That file is
-what ``verify/test_fieldroi.sh`` compares the C build against.
+frame and write its keypoints, in the format fieldroi prints them, plus the
+same frame as ``REF.jpg``. Those are what ``verify/test_fieldroi.sh`` compares
+the C build against.
 """
 
 from __future__ import annotations
 
+import os
 import struct
 import sys
 
@@ -66,6 +68,12 @@ def write_reference(onnx_path: str, ppm_path: str, out_path: str) -> None:
                 f"kpt {k}  x {x:8.3f}  y {y:8.3f}  score {float(scores[0][k]):.4f}\n"
             )
     print(f"wrote {out_path}: reference keypoints for {ppm_path}")
+    # The same frame as a baseline 4:2:0 JPEG, the format the camera's snapshot
+    # uses, so the test can exercise fieldroi's own JPEG reader.
+    jpg_path = os.path.splitext(out_path)[0] + ".jpg"
+    if not cv2.imwrite(jpg_path, bgr, [cv2.IMWRITE_JPEG_QUALITY, 90]):
+        raise SystemExit(f"cannot write {jpg_path}")
+    print(f"wrote {jpg_path}")
 
 
 def main() -> int:
