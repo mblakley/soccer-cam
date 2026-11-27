@@ -361,6 +361,12 @@ Section "Install" SecInstall
     ; Add uninstall information to Add/Remove Programs
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${APPNAME}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+    ; The silent counterpart. winget, Chocolatey and MDM tooling look for
+    ; QuietUninstallString; with only UninstallString they fall back to
+    ; launching the interactive uninstaller, which never completes unattended.
+    ; _?= keeps NSIS from copying itself to %TEMP% and detaching, so the
+    ; caller's process actually waits for the uninstall to finish.
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S _?=$INSTDIR"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayIcon" "$INSTDIR\icon.ico"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayVersion" "${FULL_VERSION}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "Publisher" "${COMPANYNAME}"
@@ -371,6 +377,13 @@ Section "Install" SecInstall
     ; to %ProgramData%\VideoGrouper). The wizard can rewrite this
     ; later if the user picks a different storage path.
     WriteRegStr HKLM "Software\${APPNAME}" "StoragePath" "${STORAGE_PATH}"
+
+    ; Record where we installed, because InstallDirRegKey (top of this file)
+    ; reads it back to default $INSTDIR on the next run. Without it an
+    ; upgrade over a custom location silently retargets to $PROGRAMFILES64
+    ; and leaves the old directory behind -- and the auto-updater runs the
+    ; installer with no /D, so it is the upgrade path that hits this.
+    WriteRegStr HKLM "Software\${APPNAME}" "Install_Dir" "$INSTDIR"
 
     !insertmacro WritePhase "complete"
 SectionEnd

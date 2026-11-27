@@ -115,6 +115,7 @@ class UploadProcessor(QueueProcessor):
                 youtube_config=self.config.youtube,
                 ntfy_service=self.ntfy_service,
                 storage_path=self.storage_path,
+                teams=getattr(self.config, "teams", None),
             )
 
             if success:

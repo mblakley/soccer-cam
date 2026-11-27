@@ -368,36 +368,17 @@ class TestMatchInfoService:
         return (teamsnap_service, playmetrics_service, ntfy_service)
 
     def test_init(self, mock_services):
-        """Test service initialization."""
-        teamsnap, playmetrics, ntfy = mock_services
-        service = MatchInfoService(teamsnap, playmetrics, ntfy)
-        assert service.teamsnap_service is teamsnap
-        assert service.playmetrics_service is playmetrics
+        """Schedule-source behaviour is tested in test_match_info_service.py."""
+        _teamsnap, _playmetrics, ntfy = mock_services
+        service = MatchInfoService([], ntfy)
+        assert service.sources == []
         assert service.ntfy_service is ntfy
-
-    def test_select_best_game(self, mock_services):
-        """Test selecting best game."""
-        teamsnap, playmetrics, ntfy = mock_services
-        service = MatchInfoService(teamsnap, playmetrics, ntfy)
-
-        game_ts = {"source": "TeamSnap", "confidence": 100}
-        game_pm = {"source": "PlayMetrics", "confidence": 100}
-
-        # Test preference for TeamSnap (as per actual implementation)
-        assert service._select_best_game([game_ts, game_pm]) is game_ts
-        assert service._select_best_game([game_pm, game_ts]) is game_ts
-
-        # Test single game
-        assert service._select_best_game([game_pm]) is game_pm
-
-        # Test empty list
-        assert service._select_best_game([]) is None
 
     @patch("video_grouper.task_processors.services.match_info_service.DirectoryState")
     def test_get_recording_timespan(self, mock_dir_state, mock_services):
         """Test getting recording timespan."""
         teamsnap, playmetrics, ntfy = mock_services
-        service = MatchInfoService(teamsnap, playmetrics, ntfy)
+        service = MatchInfoService([], ntfy)
 
         # Create mock files with proper attributes
         mock_file1 = Mock()
@@ -424,7 +405,7 @@ class TestMatchInfoService:
         empty. The service should fall back to parsing Reolink clip filenames
         on disk so post-combine match_info re-queries still work."""
         teamsnap, playmetrics, ntfy = mock_services
-        service = MatchInfoService(teamsnap, playmetrics, ntfy)
+        service = MatchInfoService([], ntfy)
 
         # DirectoryState returns empty files (post-combine state)
         mock_state = Mock()
@@ -451,7 +432,7 @@ class TestMatchInfoService:
     ):
         """Empty state AND no recognizable clip filenames → None."""
         teamsnap, playmetrics, ntfy = mock_services
-        service = MatchInfoService(teamsnap, playmetrics, ntfy)
+        service = MatchInfoService([], ntfy)
 
         mock_state = Mock()
         mock_state.files = {}

@@ -55,6 +55,16 @@ _SENSITIVE_FIELDS = frozenset(
     }
 )
 
+# Sections the app owns and the operator must not hand-edit. They are still
+# loaded, saved and preserved — just never rendered as a form.
+#
+# [SCHEMA] records which config schema the file is written in. It is a plain
+# int, so without this it would render as an editable number field: setting it
+# ahead of what this build understands makes startup hard-fail by design (see
+# config_migrations.pending), and setting it back re-runs migrations. Neither
+# is something to offer behind a text box.
+_MACHINE_OWNED_SECTIONS = frozenset({"SCHEMA"})
+
 
 def _is_scalar_field(annotation: Any) -> bool:
     """Return True for scalar types (incl. Optional[scalar])."""
@@ -361,6 +371,8 @@ def _render_section(section_alias: str, model: BaseModel) -> str:
     with no round trip; and ``display: none`` inputs still post, so turning a
     section off never silently discards what was configured in it.
     """
+    if section_alias in _MACHINE_OWNED_SECTIONS:
+        return ""
     gate = ""
     rows: list[str] = []
     for field_name, field_info in type(model).model_fields.items():
