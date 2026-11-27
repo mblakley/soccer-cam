@@ -5,6 +5,15 @@
 #   - /usr/bin/lut2d_ioctl            (static aarch64; get / set / compose)   (rootfs)
 #   - /etc/init.d/S98_StitchCal       (re-apply the seam correction at boot)  (rootfs)
 #   - /etc/init.d/S36_RootShell       (tcp/2323 recovery channel)              (rootfs)
+#   - /etc/init.d/S99_NetState  v3    (periodic segment rollover while away)   (rootfs)
+#
+# WHY v3. The camera finalises an MP4 only when recording STOPS, so a power cut
+# mid-session loses the entire session -- not a truncated tail, the whole file
+# (2026-08-22: a ~435 MB main stream was absent from the card, df confirming the
+# space was never consumed). v3 turns recording off and straight back on every
+# ROLLOVER_SECS while away, bounding the loss to one interval. Measured on
+# hardware, the toggle costs ~0.5 s of DUPLICATED content and drops no frames,
+# because the pre-record buffer backfills it.
 #
 # WHY THIS NEEDS A FLASH AT ALL. /etc/init.d is squashfs and read-only, so the
 # hook itself cannot be dropped onto the SD card. It is baked ONCE; every
@@ -44,10 +53,25 @@ case "$(basename "$OUT")" in
      echo "         the camera's Local Upgrade will reject it." >&2 ;;
 esac
 
+# Segment rollover interval, in seconds, baked in as the default. Overridable at
+# runtime by dropping /mnt/sda/netstate/rollover_secs. 0 disables rollover.
+# 60 s is the shipped default: measured on hardware, one rollover costs ~0.5 s of
+# DUPLICATED content (the pre-record buffer backfills the toggle) and loses
+# nothing, so a tight loss bound is close to free. See the v3 template header.
+ROLLOVER_SECS="${ROLLOVER_SECS:-60}"
+case "$ROLLOVER_SECS" in
+  ''|*[!0-9]*) echo "ERROR: ROLLOVER_SECS must be a non-negative integer, got '$ROLLOVER_SECS'"; exit 1 ;;
+esac
+if [[ "$ROLLOVER_SECS" != 0 && "$ROLLOVER_SECS" -lt 15 ]]; then
+  echo "ERROR: ROLLOVER_SECS=$ROLLOVER_SECS is below the 15 s floor the daemon enforces;"
+  echo "       it would be silently ignored at runtime. Pick >=15, or 0 to disable."
+  exit 1
+fi
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 PAK_DIR="$ROOT/pak"
-NS_TPL="$ROOT/runtime/netstate/S99_NetState_v2.template"
+NS_TPL="$ROOT/runtime/netstate/S99_NetState_v3.template"
 REC_SH="$ROOT/runtime/recover/S35_RecRecover"
 REC_C="$ROOT/recover/recover_mp4.c"
 SC_SH="$ROOT/runtime/stitchcal/S98_StitchCal"
@@ -103,13 +127,37 @@ assert bytes(d[OFF:OFF+4])==CUR, "reserve site mismatch"
 d[OFF:OFF+4]=new; open(SO,"wb").write(bytes(d)); print(f"   reserve {$RES_GB}GiB ({new.hex()})")
 PY
 
-echo "==> 5) install S99_NetState v2"
+echo "==> 5) install S99_NetState v3 (rollover=${ROLLOVER_SECS}s)"
 python3 - <<PY
-t=open("$NS_TPL").read().replace("%%HOME_MACS%%","$HOME_MACS_LC").replace("%%CAMERA_USER%%","$USER").replace("%%CAMERA_PASS%%","$PASS")
+t=open("$NS_TPL").read().replace("%%HOME_MACS%%","$HOME_MACS_LC").replace("%%CAMERA_USER%%","$USER").replace("%%CAMERA_PASS%%","$PASS").replace("%%ROLLOVER_SECS%%","$ROLLOVER_SECS")
+assert "%%" not in t, "unsubstituted placeholder left in S99_NetState"
 import os; os.makedirs("rootfs_unpacked/etc/init.d",exist_ok=True)
 open("rootfs_unpacked/etc/init.d/S99_NetState","w",newline="\n").write(t); os.chmod("rootfs_unpacked/etc/init.d/S99_NetState",0o755)
 print(f"   S99_NetState ({len(t)}b)")
 PY
+# Gates on the daemon's actual code, comments stripped. Each of these encodes a
+# failure that is invisible once flashed: the camera keeps answering, the log
+# keeps looking healthy, and it simply is not recording.
+NS_CODE="$(sed 's/#.*//' rootfs_unpacked/etc/init.d/S99_NetState)"
+# The camera caps concurrent API sessions at 5 with a 3600 s lease. A rollover
+# every minute that never releases its token exhausts the pool within minutes,
+# after which SetRecV20 fails "please login first" and recording stops dead.
+grep -q 'cmd=Logout' <<<"$NS_CODE" \
+  || { echo "ERROR: S99_NetState never logs out -- the 5-session pool will be exhausted by rollovers"; exit 1; }
+grep -q 'api_logout' <<<"$NS_CODE" \
+  || { echo "ERROR: set_record_state does not release its session"; exit 1; }
+awk '/^set_record_state\(\)/,/^}/' <<<"$NS_CODE" | grep -q 'api_logout' \
+  || { echo "ERROR: set_record_state does not call api_logout -- sessions leak per call"; exit 1; }
+# A rollover ends with "recording on". Anywhere but the away state that means
+# recording at home, which is the standing thing this firmware must never do.
+awk '/^do_rollover\(\)/,/^}/' <<<"$NS_CODE" | grep -q 'LAST_STATE' \
+  || { echo "ERROR: do_rollover has no away-state guard -- it could enable recording at home"; exit 1; }
+# The whole point is that the close reaches the card, not the page cache.
+awk '/^do_rollover\(\)/,/^}/' <<<"$NS_CODE" | grep -qE '^[[:space:]]*sync([[:space:]]|$)' \
+  || { echo "ERROR: do_rollover does not sync -- the closed segment may never reach the card"; exit 1; }
+grep -q "ROLLOVER_SECS_DEFAULT=\"$ROLLOVER_SECS\"" <<<"$NS_CODE" \
+  || { echo "ERROR: rollover default did not bake in as $ROLLOVER_SECS"; exit 1; }
+echo "   S99_NetState v3 gates passed (logout, away-guard, sync, default=${ROLLOVER_SECS}s)"
 
 echo "==> 6) build + install recover_mp4 (static aarch64) + boot script"
 HELIX_SRC="$ROOT/recover/helix/ESP8266Audio/src/libhelix-aac"
@@ -203,7 +251,8 @@ pak=$(basename "$OUT")
 base=v3.0.0.4867_2505072124
 kbps=$KBPS
 reserve_gb=$RES_GB
-netstate=v2
+netstate=v3
+rollover_secs=$ROLLOVER_SECS
 recover=yes
 audio=$AUDIO
 stitchcal=S98+lut2d_ioctl
@@ -241,6 +290,11 @@ bash "$ROOT/verify/check_recording_default.sh" "$OUT"
 echo "==================================================================="
 echo " STITCHCAL: comprehensive + S98_StitchCal + /usr/bin/lut2d_ioctl"
 echo " Boot chain verified identical to stock; recording defaults to off at home."
+echo
+echo " S99_NetState v3: segments roll every ${ROLLOVER_SECS}s while AWAY, so an abrupt"
+echo " power cut costs one interval instead of the whole session. Retune with a"
+echo " file drop, no reflash:"
+echo "   /mnt/sda/netstate/rollover_secs   seconds per segment (0 disables, min 15)"
 echo
 echo " After flashing, a calibration is a FILE DROP, not a reflash:"
 echo "   /mnt/sda/stitchcal/anchors.txt   the correction"
