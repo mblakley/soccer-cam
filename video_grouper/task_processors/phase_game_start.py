@@ -49,6 +49,22 @@ logger = logging.getLogger(__name__)
 # caller still blocks the only late-KO source.
 PHASE_KO_TRIM_BACKUP_SECONDS = int(os.environ.get("PHASE_KO_TRIM_BACKUP_SECONDS", "60"))
 
+# Hard ceiling on one detector run. The detector is a legitimate multi-minute
+# compute (a 96-min 4K combined video measured 7m54s in production on
+# 2026-08-03), so this is a safety valve for a genuinely wedged run, not a
+# latency budget: on expiry we log an ERROR and fall back to the NTFY walk (the
+# documented degraded path — never worse than manual). 0 disables the ceiling.
+PHASE_DETECT_TIMEOUT_SECONDS = int(
+    os.environ.get("PHASE_DETECT_TIMEOUT_SECONDS", "3600")
+)
+
+# In-flight detector runs keyed by normalized group dir. The post-combine event
+# hook and the StateAuditor's audit can request the same group within the same
+# second (observed 2026-08-03 11:47:05/06: two concurrent ~8-min runs decoding
+# the same 15 GB video); duplicates await the first run instead of starting
+# another.
+_INFLIGHT: dict = {}
+
 
 def _camera_is_reolink(config) -> bool:
     """True iff a configured camera is a Reolink.
@@ -364,19 +380,83 @@ async def maybe_resolve_phase_game_start(
     if not combined_video_path or not os.path.exists(combined_video_path):
         return False
 
-    # Parent event-tap anchors (best-effort, off the loop). Only fetched when
-    # this install is a logged-in TTT user; {} otherwise -> detector-only.
     import asyncio
 
+    # One detector run per group at a time: duplicate triggers (post-combine
+    # hook + StateAuditor firing together) share the first run's result instead
+    # of decoding the same multi-GB video twice in parallel.
+    key = os.path.normcase(os.path.abspath(group_dir))
+    task = _INFLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(
+            _detect_and_resolve(group_dir, combined_video_path, config, storage_path)
+        )
+        _INFLIGHT[key] = task
+        task.add_done_callback(lambda _t, _k=key: _INFLIGHT.pop(_k, None))
+    else:
+        logger.info(
+            "phase game-start: detection already in flight for %s; "
+            "awaiting that run instead of starting another",
+            group_dir,
+        )
+    # shield: a cancelled duplicate caller must not cancel the shared run.
+    return await asyncio.shield(task)
+
+
+async def _detect_and_resolve(
+    group_dir: str,
+    combined_video_path: str,
+    config,
+    storage_path: str | None,
+) -> bool:
+    """One full detector run + offset write for a group (single-flight body).
+
+    Never raises: every failure path logs and returns False (the caller falls
+    back to the NTFY walk, which can never be worse than today)."""
+    import asyncio
+    import time
+
+    from video_grouper.models import MatchInfo
+
+    # Parent event-tap anchors (best-effort, off the loop). Only fetched when
+    # this install is a logged-in TTT user; {} otherwise -> detector-only.
     anchors = await asyncio.to_thread(
         _fetch_event_tap_anchors, config, group_dir, storage_path
     )
 
+    # The detector is a multi-minute compute on a full game (measured 7m54s for
+    # a 96-min combined video). Announce it so an operator watching the log can
+    # tell "running" from "lost" — before this line existed the run was
+    # invisible until it finished (2026-08-03 incident).
+    logger.info(
+        "phase game-start: running the phase detector on %s "
+        "(multi-minute compute on a full game; timeout %ss)",
+        combined_video_path,
+        PHASE_DETECT_TIMEOUT_SECONDS or "disabled",
+    )
+    t0 = time.monotonic()
     try:
-        result = await _run_detector(group_dir, combined_video_path, anchors=anchors)
-    except Exception as e:  # noqa: BLE001 — never let detection break the flow
-        logger.warning("phase game-start: detector failed for %s: %s", group_dir, e)
+        result = await asyncio.wait_for(
+            _run_detector(group_dir, combined_video_path, anchors=anchors),
+            timeout=PHASE_DETECT_TIMEOUT_SECONDS or None,
+        )
+    except TimeoutError:
+        logger.error(
+            "phase game-start: detector exceeded %ss for %s — abandoning phase "
+            "detection, falling back to the NTFY walk",
+            PHASE_DETECT_TIMEOUT_SECONDS,
+            group_dir,
+        )
         return False
+    except Exception as e:  # noqa: BLE001 — never let detection break the flow
+        logger.warning(
+            "phase game-start: detector failed for %s after %.1fs: %s",
+            group_dir,
+            time.monotonic() - t0,
+            e,
+        )
+        return False
+    elapsed = time.monotonic() - t0
 
     # Auto-trim gate = ``ko_trustworthy``, NOT ``ok`` (decision 2026-07-01). We only
     # trim on KO, so the KO-specific trust flag is the right gate: it accepts a game
