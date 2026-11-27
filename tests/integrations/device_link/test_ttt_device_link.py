@@ -170,7 +170,7 @@ async def test_camera_state_is_this_machines_enabled_flag_per_camera():
                 {"machine_id": "me", "enabled": True},
             ],
         },
-        {  # enabled elsewhere only
+        {  # this machine not listed (unregistered here): no say -> stays enabled
             "camera_name": "back",
             "machines": [{"machine_id": "other", "enabled": True}],
         },
@@ -183,12 +183,7 @@ async def test_camera_state_is_this_machines_enabled_flag_per_camera():
     ]
     link, _ = _link(client, machine_id="me")
     reply = await link.heartbeat()
-    assert reply.camera_enabled == {
-        "front": True,
-        "back": False,
-        "side": False,
-        "lonely": False,
-    }
+    assert reply.camera_enabled == {"front": True, "side": False}
 
 
 @pytest.mark.asyncio

@@ -148,15 +148,22 @@ class TTTDeviceLink(IDeviceLink):
         except Exception as e:
             logger.warning("TTT: Failed to sync camera enabled state: %s", e)
             return None
+        # Only an entry for THIS machine decides. TTT lists every registered
+        # machine under every team camera, so no entry for us means this
+        # machine isn't registered in TTT -- that must not switch off a local
+        # camera that merely shares a TTT camera's name (e.g. "default").
         state: dict[str, bool] = {}
         for entry in entries or []:
             camera_name = entry.get("camera_name", "")
             if not camera_name:
                 continue
-            state[camera_name] = any(
-                m.get("machine_id") == machine_id and m.get("enabled")
+            mine = [
+                m
                 for m in entry.get("machines", [])
-            )
+                if m.get("machine_id") == machine_id
+            ]
+            if mine:
+                state[camera_name] = any(bool(m.get("enabled")) for m in mine)
         return state
 
     async def _pending_commands(self) -> list[DeviceCommand]:
