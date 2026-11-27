@@ -131,6 +131,32 @@ async def test_service_heartbeat_only_once_registered_and_signed_in():
 
 
 @pytest.mark.asyncio
+async def test_health_goes_through_the_enhanced_heartbeat_instead():
+    from video_grouper.integrations.device_link import DeviceHealth
+
+    link, client = _link()
+    await link.register(CAPS)
+    await link.heartbeat(
+        DeviceHealth(cpu_usage_percent=12.5, version="1.2.3", error_count_24h=0)
+    )
+    client.enhanced_heartbeat.assert_called_once_with(
+        "svc-1", {"cpu_usage_percent": 12.5, "version": "1.2.3", "error_count_24h": 0}
+    )
+    client.send_heartbeat.assert_not_called()  # enhanced also marks it online
+
+
+@pytest.mark.asyncio
+async def test_empty_health_falls_back_to_the_plain_heartbeat():
+    from video_grouper.integrations.device_link import DeviceHealth
+
+    link, client = _link()
+    await link.register(CAPS)
+    await link.heartbeat(DeviceHealth())
+    client.enhanced_heartbeat.assert_not_called()
+    client.send_heartbeat.assert_called_once_with("svc-1", "online")
+
+
+@pytest.mark.asyncio
 async def test_camera_status_online_and_commands_for_the_camera_id():
     link, client = _link(camera_id="cam-9")
     await link.heartbeat()

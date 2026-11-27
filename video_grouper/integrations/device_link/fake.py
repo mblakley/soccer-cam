@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import DeviceCommand, HeartbeatReply, IDeviceLink
+from .base import DeviceCommand, DeviceHealth, HeartbeatReply, IDeviceLink
 
 
 class FakeDeviceLink(IDeviceLink):
@@ -26,6 +26,7 @@ class FakeDeviceLink(IDeviceLink):
         self.heartbeat_interval = heartbeat_interval
         self.errors = dict(errors or {})
         self.registered: list[dict[str, Any]] = []
+        self.health_reports: list[DeviceHealth | None] = []
         self.heartbeats = 0
         # ("ack", id) / ("complete", id, result), in call order
         self.command_calls: list[tuple[Any, ...]] = []
@@ -51,8 +52,9 @@ class FakeDeviceLink(IDeviceLink):
         self.registered.append(dict(capabilities))
         self._maybe_raise("register")
 
-    async def heartbeat(self) -> HeartbeatReply:
+    async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
         self.heartbeats += 1
+        self.health_reports.append(health)
         self._maybe_raise("heartbeat")
         if not self.replies:
             return HeartbeatReply()

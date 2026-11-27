@@ -37,6 +37,22 @@ class HeartbeatReply:
     commands: list[DeviceCommand] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class DeviceHealth:
+    """How this install is doing, sent with each heartbeat. Every field is
+    optional; a link sends what it knows how to store."""
+
+    cpu_usage_percent: float | None = None
+    memory_usage_percent: float | None = None
+    disk_free_gb: float | None = None
+    uptime_seconds: int | None = None
+    version: str | None = None
+    last_error: str | None = None
+    error_count_24h: int | None = None
+    active_job_count: int | None = None
+    queue_depth: int | None = None
+
+
 class IDeviceLink(Provider, ABC):
     # Seconds between heartbeats; the link decides how often it wants to hear.
     heartbeat_interval: int = 30
@@ -47,7 +63,7 @@ class IDeviceLink(Provider, ABC):
         succeeded, later calls do nothing; until then each call retries."""
 
     @abstractmethod
-    async def heartbeat(self) -> HeartbeatReply:
+    async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
         """Check in ("online"); the reply carries camera state and commands."""
 
     @abstractmethod

@@ -7,7 +7,7 @@ from typing import Any
 
 from video_grouper.integrations.registry import NULL_PRIORITY, provides
 
-from ..base import HeartbeatReply, IDeviceLink
+from ..base import DeviceHealth, HeartbeatReply, IDeviceLink
 
 
 @provides(IDeviceLink)
@@ -22,7 +22,7 @@ class NullDeviceLink(IDeviceLink):
     async def register(self, capabilities: dict[str, Any]) -> None:
         return None
 
-    async def heartbeat(self) -> HeartbeatReply:
+    async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
         return HeartbeatReply()
 
     async def acknowledge_command(self, command_id: str) -> None:

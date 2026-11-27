@@ -650,6 +650,7 @@ class VideoGrouperApp:
             config=self.config,
             link=self.integrations.device_link,
             command_executor=CommandExecutor(self),
+            error_tracker=self.error_tracker,
             capabilities=(
                 job_capabilities(self.config)
                 if self.ttt_job_processor is not None

@@ -230,3 +230,25 @@ async def test_loop_survives_a_raising_link(tmp_path):
         await asyncio.sleep(0)
     await processor.stop()
     assert link.heartbeats >= 2
+
+
+@pytest.mark.asyncio
+async def test_each_heartbeat_carries_this_installs_health(tmp_path):
+    from unittest.mock import patch
+
+    from video_grouper.version import __version__
+
+    tracker = MagicMock()
+    tracker.get_last_error.return_value = "disk full"
+    tracker.get_error_count_24h.return_value = 3
+    link = FakeDeviceLink()
+    processor = _processor(tmp_path, link, error_tracker=tracker)
+    with patch(
+        "video_grouper.utils.system_metrics.get_system_metrics",
+        return_value={"cpu_usage_percent": 7.0, "disk_free_gb": 120.5},
+    ):
+        await processor.discover_work()
+    (health,) = link.health_reports
+    assert health.cpu_usage_percent == 7.0 and health.disk_free_gb == 120.5
+    assert health.version == __version__
+    assert (health.last_error, health.error_count_24h) == ("disk full", 3)

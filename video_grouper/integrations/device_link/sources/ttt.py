@@ -5,8 +5,9 @@ port                   TTT client call(s)
 =====================  ===================================================
 register(capabilities) register_service(machine_name, capabilities), once
                        it returns an id; only while signed in
-heartbeat()            send_heartbeat(service_id, "online")   if registered
-                                                              + signed in
+heartbeat(health)      enhanced_heartbeat(service_id, health) if registered
+                       (send_heartbeat(service_id, "online")  + signed in;
+                        when there is no health to send)
                        update_camera_status(camera_id, "online")
                                                               if camera_id
                        list_machine_cameras() -> camera_enabled
@@ -29,11 +30,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
+from dataclasses import asdict
 from typing import Any
 
 from video_grouper.integrations.registry import provides
 
-from ..base import DeviceCommand, HeartbeatReply, IDeviceLink
+from ..base import DeviceCommand, DeviceHealth, HeartbeatReply, IDeviceLink
 
 logger = logging.getLogger(__name__)
 
@@ -107,20 +109,30 @@ class TTTDeviceLink(IDeviceLink):
     # heartbeat
     # ------------------------------------------------------------------
 
-    async def heartbeat(self) -> HeartbeatReply:
-        await self._service_heartbeat()
+    async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
+        await self._service_heartbeat(health)
         await self._camera_heartbeat()
         camera_enabled = await self._camera_enabled_state()
         commands = await self._pending_commands()
         return HeartbeatReply(camera_enabled=camera_enabled, commands=commands)
 
-    async def _service_heartbeat(self) -> None:
+    async def _service_heartbeat(self, health: DeviceHealth | None) -> None:
         if not self._service_id or not self._client.is_authenticated():
             return
+        metrics = (
+            {k: v for k, v in asdict(health).items() if v is not None} if health else {}
+        )
         try:
-            await asyncio.to_thread(
-                self._client.send_heartbeat, self._service_id, "online"
-            )
+            if metrics:
+                # heartbeat-enhanced also marks the service online, so it
+                # replaces the plain heartbeat rather than adding to it.
+                await asyncio.to_thread(
+                    self._client.enhanced_heartbeat, self._service_id, metrics
+                )
+            else:
+                await asyncio.to_thread(
+                    self._client.send_heartbeat, self._service_id, "online"
+                )
         except Exception as exc:
             logger.debug("TTT_JOBS: heartbeat failed: %s", exc)
 
