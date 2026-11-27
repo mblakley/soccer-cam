@@ -10,7 +10,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from video_grouper.api_integrations.ttt_api import TTTApiClient
-from video_grouper.integrations.device_link import DeviceCommand, HeartbeatReply
+from video_grouper.integrations.device_link import (
+    DeviceCamera,
+    DeviceCommand,
+    HeartbeatReply,
+)
 from video_grouper.integrations.device_link.sources.ttt import TTTDeviceLink
 from video_grouper.integrations.registry import IntegrationContext
 
@@ -175,14 +179,82 @@ async def test_no_camera_id_no_camera_calls():
 
 
 @pytest.mark.asyncio
-async def test_camera_id_is_read_on_each_call():
-    link, client = _link(camera_id="")
-    await link.heartbeat()
-    link._ttt_config.camera_id = "cam-new"
+async def test_configured_camera_id_is_the_fallback_until_registration():
+    link, client = _link(camera_id="cam-typed")
     await link.heartbeat()
     client.update_camera_status.assert_called_once_with(
-        camera_id="cam-new", status="online"
+        camera_id="cam-typed", status="online"
     )
+
+
+# ---------------------------------------------------------------------------
+# register_cameras
+# ---------------------------------------------------------------------------
+
+CAMS = [
+    DeviceCamera("front", "SER-1", "reolink", "RLC-81MA"),
+    DeviceCamera("no-serial", "", "dahua"),
+]
+
+
+@pytest.mark.asyncio
+async def test_registers_machine_and_cameras_and_heartbeats_each():
+    client = _client()
+    client.register_device.return_value = {
+        "machine_id": "me",
+        "cameras": [{"name": "front", "serial": "SER-1", "camera_id": "c-1"}],
+    }
+    link, _ = _link(client, machine_id="me", camera_id="cam-typed", machine_name="box")
+    assert await link.register_cameras(CAMS) == {"front": "c-1"}
+    machine_id, machine_name, cameras = client.register_device.call_args.args
+    assert (machine_id, machine_name) == ("me", "box")
+    assert cameras == [  # serial-less cameras are not sent
+        {
+            "name": "front",
+            "serial": "SER-1",
+            "camera_type": "reolink",
+            "model": "RLC-81MA",
+        }
+    ]
+    await link.heartbeat()
+    client.update_camera_status.assert_called_once_with(
+        camera_id="c-1", status="online"
+    )  # the registered id replaces the hand-typed one
+    client.get_pending_commands.assert_called_once_with("c-1")
+
+
+@pytest.mark.asyncio
+async def test_registration_needs_a_session_and_a_machine_id():
+    signed_out = _client(signed_in=False)
+    link, _ = _link(signed_out, machine_id="me")
+    assert await link.register_cameras(CAMS) == {}
+    no_machine, client = _link(machine_id=None)
+    assert await no_machine.register_cameras(CAMS) == {}
+    signed_out.register_device.assert_not_called()
+    client.register_device.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_registration_errors_are_swallowed():
+    client = _client()
+    client.register_device.side_effect = RuntimeError("404")
+    link, _ = _link(client, machine_id="me")
+    assert await link.register_cameras(CAMS) == {}
+
+
+@pytest.mark.asyncio
+async def test_commands_carry_the_camera_they_target():
+    client = _client()
+    client.register_device.return_value = {
+        "cameras": [{"name": "front", "camera_id": "c-1"}]
+    }
+    client.get_pending_commands.return_value = [
+        {"id": "k-1", "command_type": "restart", "parameters": {}}
+    ]
+    link, _ = _link(client, machine_id="me")
+    await link.register_cameras(CAMS)
+    (command,) = (await link.heartbeat()).commands
+    assert (command.id, command.camera) == ("k-1", "front")
 
 
 @pytest.mark.asyncio

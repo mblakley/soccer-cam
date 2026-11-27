@@ -5,7 +5,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import DeviceCommand, DeviceHealth, HeartbeatReply, IDeviceLink
+from .base import (
+    DeviceCamera,
+    DeviceCommand,
+    DeviceHealth,
+    HeartbeatReply,
+    IDeviceLink,
+)
 
 
 class FakeDeviceLink(IDeviceLink):
@@ -27,6 +33,8 @@ class FakeDeviceLink(IDeviceLink):
         self.errors = dict(errors or {})
         self.registered: list[dict[str, Any]] = []
         self.health_reports: list[DeviceHealth | None] = []
+        self.registered_cameras: list[list[DeviceCamera]] = []
+        self.camera_ids: dict[str, str] = {}
         self.heartbeats = 0
         # ("ack", id) / ("complete", id, result), in call order
         self.command_calls: list[tuple[Any, ...]] = []
@@ -51,6 +59,14 @@ class FakeDeviceLink(IDeviceLink):
     async def register(self, capabilities: dict[str, Any]) -> None:
         self.registered.append(dict(capabilities))
         self._maybe_raise("register")
+
+    async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
+        self.registered_cameras.append(list(cameras))
+        return {
+            c.name: self.camera_ids[c.name]
+            for c in cameras
+            if c.name in self.camera_ids
+        }
 
     async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
         self.heartbeats += 1

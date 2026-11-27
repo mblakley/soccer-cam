@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 from ..integrations.device_link import (
+    DeviceCamera,
     DeviceCommand,
     DeviceHealth,
     HeartbeatReply,
@@ -49,6 +52,7 @@ class DeviceLinkProcessor(PollingProcessor):
         command_executor: Any = None,
         capabilities: dict[str, Any] | None = None,
         error_tracker: Any = None,
+        cameras: Callable[[], list[Any]] | None = None,
     ):
         super().__init__(storage_path, config, link.heartbeat_interval)
         self.link = link
@@ -57,6 +61,9 @@ class DeviceLinkProcessor(PollingProcessor):
         self.capabilities = capabilities
         # Recent errors, reported with each heartbeat (None: none tracked).
         self.error_tracker = error_tracker
+        # This install's camera objects (None: don't register cameras).
+        self.cameras = cameras
+        self._cameras_registered_at: float | None = None
         # camera name -> enabled here. Empty: nothing heard yet, all enabled.
         self._camera_enabled: dict[str, bool] = {}
 
@@ -77,6 +84,25 @@ class DeviceLinkProcessor(PollingProcessor):
             error_count_24h=tracker.get_error_count_24h() if tracker else None,
         )
 
+    # Cameras rarely change; re-announce hourly so an added camera shows up.
+    CAMERA_REGISTRATION_INTERVAL = 3600
+
+    async def _maybe_register_cameras(self) -> None:
+        if self.cameras is None:
+            return
+        now = time.monotonic()
+        if (
+            self._cameras_registered_at is not None
+            and now - self._cameras_registered_at < self.CAMERA_REGISTRATION_INTERVAL
+        ):
+            return
+        described = [d for d in [await _describe(c) for c in self.cameras()] if d]
+        if not described:
+            return
+        ids = await self.link.register_cameras(described)
+        if ids:  # only a success counts; otherwise retry next tick
+            self._cameras_registered_at = now
+
     def is_camera_enabled(self, camera_name: str) -> bool:
         """False only when the link said this camera is not polled here."""
         return self._camera_enabled.get(camera_name, True)
@@ -85,6 +111,7 @@ class DeviceLinkProcessor(PollingProcessor):
         """One tick. Called again after ``poll_interval`` whatever happens."""
         if self.capabilities is not None:
             await self.link.register(self.capabilities)
+        await self._maybe_register_cameras()
         reply = await self.link.heartbeat(await asyncio.to_thread(self._health))
         self._apply_camera_state(reply)
         for command in reply.commands:
@@ -106,3 +133,22 @@ class DeviceLinkProcessor(PollingProcessor):
         else:
             result = {"success": False, "message": "Command executor not available"}
         await self.link.complete_command(command.id, result)
+
+
+async def _describe(camera: Any) -> DeviceCamera | None:
+    """How ``camera`` identifies itself (None when it can't say: offline, or
+    no serial number -- registration is keyed on the serial)."""
+    try:
+        info = await camera.get_device_info()
+    except Exception as e:
+        logger.debug("DEVICE_LINK: no device info for %s: %s", camera.name, e)
+        return None
+    serial = (info or {}).get("serial_number") or ""
+    if not serial:
+        return None
+    return DeviceCamera(
+        name=camera.name,
+        serial=str(serial),
+        camera_type=str(getattr(getattr(camera, "config", None), "type", "") or ""),
+        model=(info or {}).get("model") or None,
+    )

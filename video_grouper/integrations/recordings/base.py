@@ -35,8 +35,11 @@ class StepReport:
 
 class IRecordingSink(Provider, ABC):
     @abstractmethod
-    async def recording_found(self, group_dir: str, files: list[Any]) -> None:
-        """New camera files were discovered for ``group_dir``."""
+    async def recording_found(
+        self, group_dir: str, files: list[Any], camera: str | None = None
+    ) -> None:
+        """New camera files were discovered for ``group_dir`` (by ``camera``,
+        the camera's name, when known)."""
 
     @abstractmethod
     async def progress(self, group_dir: str, report: StepReport) -> None:

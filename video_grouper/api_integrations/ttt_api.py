@@ -1064,6 +1064,24 @@ class TTTApiClient:
     # Service registration & heartbeat
     # ------------------------------------------------------------------
 
+    def register_device(
+        self, machine_id: str, machine_name: str, cameras: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Register this machine and its cameras; idempotent.
+
+        POST {api_base_url}/api/internal/device-link/register
+        ``cameras``: ``[{name, serial, camera_type, model}]``. Returns
+        ``{machine_id, cameras: [{name, serial, camera_id, enabled}]}``.
+        """
+        url = f"{self.api_base_url}/api/internal/device-link/register"
+        body = {
+            "machine_id": machine_id,
+            "machine_name": machine_name,
+            "cameras": cameras,
+        }
+        logger.debug("Registering device '%s' (%d cameras)", machine_name, len(cameras))
+        return self._request("POST", url, json=body)
+
     def register_service(self, machine_name: str, capabilities: dict) -> Any:
         """Register this service instance with TTT.
 

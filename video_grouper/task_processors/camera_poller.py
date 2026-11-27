@@ -638,7 +638,9 @@ class CameraPoller(PollingProcessor):
         # Report newly discovered files, per group (best-effort; the sink
         # keeps any ids of its own and never raises).
         for group_dir, group_files in new_files_by_group.items():
-            await self.recordings.recording_found(group_dir, group_files)
+            await self.recordings.recording_found(
+                group_dir, group_files, camera=self.camera.name
+            )
 
         total_seen = sum(counts.values())
         logger.info(

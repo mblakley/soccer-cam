@@ -13,6 +13,7 @@ class FakeRecordingSink(IRecordingSink):
 
     def __init__(self, accept_phases: bool = True):
         self.found: list[tuple[str, list[Any]]] = []
+        self.found_by_camera: list[str | None] = []
         self.steps: list[tuple[str, StepReport]] = []
         self.published_videos: list[tuple[str, str, datetime]] = []
         self.phase_payloads: list[tuple[str, dict[str, Any]]] = []
@@ -23,8 +24,11 @@ class FakeRecordingSink(IRecordingSink):
     def from_context(cls, context) -> None:
         return None
 
-    async def recording_found(self, group_dir: str, files: list[Any]) -> None:
+    async def recording_found(
+        self, group_dir: str, files: list[Any], camera: str | None = None
+    ) -> None:
         self.found.append((group_dir, list(files)))
+        self.found_by_camera.append(camera)
 
     async def progress(self, group_dir: str, report: StepReport) -> None:
         self.steps.append((group_dir, report))

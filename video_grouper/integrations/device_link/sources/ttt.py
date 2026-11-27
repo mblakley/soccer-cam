@@ -35,7 +35,13 @@ from typing import Any
 
 from video_grouper.integrations.registry import provides
 
-from ..base import DeviceCommand, DeviceHealth, HeartbeatReply, IDeviceLink
+from ..base import (
+    DeviceCamera,
+    DeviceCommand,
+    DeviceHealth,
+    HeartbeatReply,
+    IDeviceLink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +57,21 @@ class TTTDeviceLink(IDeviceLink):
         self,
         client: Any,
         ttt_config: Any,
-        storage_path: str = ".",
+        storage_path: str | None = None,
         machine_id: Any = _UNSET,
+        camera_ids: Any = None,
     ):
         self._client = client
         self._ttt_config = ttt_config
         self._storage_path = storage_path
+        if camera_ids is None:
+            from video_grouper.integrations.ttt_cameras import TTTCameraIds
+
+            camera_ids = TTTCameraIds(
+                storage_path, getattr(ttt_config, "camera_id", "") or None
+            )
+        # camera name -> TTT camera id (shared with the TTT recording sink)
+        self._cameras = camera_ids
         self._machine_id = machine_id
         self._service_id: str | None = None
         self.heartbeat_interval = int(getattr(ttt_config, "heartbeat_interval", 30))
@@ -65,14 +80,18 @@ class TTTDeviceLink(IDeviceLink):
     def from_context(cls, context) -> TTTDeviceLink | None:
         if not context.ttt_enabled():
             return None
-        return cls(context.ttt_client(), context.config.ttt, context.storage_path)
-
-    @property
-    def _camera_id(self) -> str | None:
-        return getattr(self._ttt_config, "camera_id", None) or None
+        return cls(
+            context.ttt_client(),
+            context.config.ttt,
+            context.storage_path,
+            camera_ids=context.ttt_cameras(),
+        )
 
     def _machine(self) -> str | None:
         if self._machine_id is _UNSET:
+            if not self._storage_path:
+                self._machine_id = None  # nowhere to keep a stable id
+                return None
             try:
                 from video_grouper.utils.machine_id import get_or_create_machine_id
 
@@ -105,6 +124,42 @@ class TTTDeviceLink(IDeviceLink):
         except Exception as exc:
             logger.error("TTT_JOBS: failed to register service: %s", exc)
 
+    async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
+        """POST /device-link/register: this machine + its cameras (keyed on
+        serial by TTT), ids remembered for the recording sink."""
+        cameras = [c for c in cameras if c.serial]
+        machine_id = self._machine()
+        if not cameras or not machine_id or not self._client.is_authenticated():
+            return {}
+        machine_name = getattr(self._ttt_config, "machine_name", "") or platform.node()
+        try:
+            result = await asyncio.to_thread(
+                self._client.register_device,
+                machine_id,
+                machine_name,
+                [
+                    {
+                        "name": c.name,
+                        "serial": c.serial,
+                        "camera_type": c.camera_type,
+                        "model": c.model,
+                    }
+                    for c in cameras
+                ],
+            )
+        except Exception as e:
+            logger.warning("TTT: device registration failed: %s", e)
+            return {}
+        ids = {
+            str(row["name"]): str(row["camera_id"])
+            for row in (result or {}).get("cameras", [])
+            if row.get("name") and row.get("camera_id")
+        }
+        self._cameras.update(ids)
+        if ids:
+            logger.info("TTT: registered %d camera(s): %s", len(ids), sorted(ids))
+        return ids
+
     # ------------------------------------------------------------------
     # heartbeat
     # ------------------------------------------------------------------
@@ -136,19 +191,18 @@ class TTTDeviceLink(IDeviceLink):
         except Exception as exc:
             logger.debug("TTT_JOBS: heartbeat failed: %s", exc)
 
+    def _update_camera_status_sync(self, camera_id: str, status: str) -> None:
+        self._client.update_camera_status(camera_id=camera_id, status=status)
+
     async def _camera_heartbeat(self) -> None:
-        camera_id = self._camera_id
-        if not camera_id:
-            return
-        try:
-            await asyncio.to_thread(
-                lambda: self._client.update_camera_status(
-                    camera_id=camera_id, status="online"
+        for camera_id in self._cameras.all_ids().values():
+            try:
+                await asyncio.to_thread(
+                    self._update_camera_status_sync, camera_id, "online"
                 )
-            )
-            logger.debug("TTT: Heartbeat sent")
-        except Exception as e:
-            logger.warning("TTT: Heartbeat failed: %s", e)
+                logger.debug("TTT: Heartbeat sent for camera %s", camera_id)
+            except Exception as e:
+                logger.warning("TTT: Heartbeat failed: %s", e)
 
     async def _camera_enabled_state(self) -> dict[str, bool] | None:
         """Camera name -> enabled on this machine; None when unknown."""
@@ -179,27 +233,28 @@ class TTTDeviceLink(IDeviceLink):
         return state
 
     async def _pending_commands(self) -> list[DeviceCommand]:
-        camera_id = self._camera_id
-        if not camera_id:
-            return []
-        try:
-            result = await asyncio.to_thread(
-                self._client.get_pending_commands, camera_id
+        commands: list[DeviceCommand] = []
+        for name, camera_id in self._cameras.all_ids().items():
+            try:
+                result = await asyncio.to_thread(
+                    self._client.get_pending_commands, camera_id
+                )
+            except Exception as e:
+                logger.warning("TTT: Failed to poll commands: %s", e)
+                continue
+            if result:
+                logger.info("TTT: Found %d pending command(s)", len(result))
+            commands.extend(
+                DeviceCommand(
+                    id=str(cmd["id"]),
+                    type=cmd.get("command_type") or "",
+                    parameters=cmd.get("parameters") or {},
+                    camera=name or None,
+                )
+                for cmd in result or []
+                if cmd.get("id")
             )
-        except Exception as e:
-            logger.warning("TTT: Failed to poll commands: %s", e)
-            return []
-        if result:
-            logger.info("TTT: Found %d pending command(s)", len(result))
-        return [
-            DeviceCommand(
-                id=str(cmd["id"]),
-                type=cmd.get("command_type") or "",
-                parameters=cmd.get("parameters") or {},
-            )
-            for cmd in result or []
-            if cmd.get("id")
-        ]
+        return commands
 
     # ------------------------------------------------------------------
     # commands

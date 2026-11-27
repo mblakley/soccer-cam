@@ -7,7 +7,7 @@ from typing import Any
 
 from video_grouper.integrations.registry import NULL_PRIORITY, provides
 
-from ..base import DeviceHealth, HeartbeatReply, IDeviceLink
+from ..base import DeviceCamera, DeviceHealth, HeartbeatReply, IDeviceLink
 
 
 @provides(IDeviceLink)
@@ -21,6 +21,9 @@ class NullDeviceLink(IDeviceLink):
 
     async def register(self, capabilities: dict[str, Any]) -> None:
         return None
+
+    async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
+        return {}
 
     async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
         return HeartbeatReply()

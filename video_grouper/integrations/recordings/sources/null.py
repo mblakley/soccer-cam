@@ -19,7 +19,9 @@ class NullRecordingSink(IRecordingSink):
     def from_context(cls, context) -> NullRecordingSink:
         return cls()
 
-    async def recording_found(self, group_dir: str, files: list[Any]) -> None:
+    async def recording_found(
+        self, group_dir: str, files: list[Any], camera: str | None = None
+    ) -> None:
         return None
 
     async def progress(self, group_dir: str, report: StepReport) -> None:

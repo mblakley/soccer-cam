@@ -1,5 +1,17 @@
 """IDeviceLink port. See :mod:`video_grouper.integrations.device_link.base`."""
 
-from .base import DeviceCommand, DeviceHealth, HeartbeatReply, IDeviceLink
+from .base import (
+    DeviceCamera,
+    DeviceCommand,
+    DeviceHealth,
+    HeartbeatReply,
+    IDeviceLink,
+)
 
-__all__ = ["DeviceCommand", "DeviceHealth", "HeartbeatReply", "IDeviceLink"]
+__all__ = [
+    "DeviceCamera",
+    "DeviceCommand",
+    "DeviceHealth",
+    "HeartbeatReply",
+    "IDeviceLink",
+]

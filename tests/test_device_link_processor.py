@@ -252,3 +252,61 @@ async def test_each_heartbeat_carries_this_installs_health(tmp_path):
     assert health.cpu_usage_percent == 7.0 and health.disk_free_gb == 120.5
     assert health.version == __version__
     assert (health.last_error, health.error_count_24h) == ("disk full", 3)
+
+
+class _Camera:
+    def __init__(self, name, serial="SER", fail=False):
+        self.name = name
+        self.config = MagicMock(type="reolink")
+        self._serial, self._fail = serial, fail
+
+    async def get_device_info(self):
+        if self._fail:
+            raise OSError("offline")
+        return {"serial_number": self._serial, "model": "RLC-81MA"}
+
+
+@pytest.mark.asyncio
+async def test_registers_cameras_that_can_identify_themselves(tmp_path):
+    from video_grouper.integrations.device_link import DeviceCamera
+
+    link = FakeDeviceLink()
+    link.camera_ids = {"front": "c-1"}
+    cams = [_Camera("front", "SER-1"), _Camera("dark", fail=True), _Camera("x", "")]
+    processor = _processor(tmp_path, link, cameras=lambda: cams)
+    await processor.discover_work()
+    assert link.registered_cameras == [
+        [DeviceCamera("front", "SER-1", "reolink", "RLC-81MA")]
+    ]
+    await processor.discover_work()  # registered: not again within the hour
+    assert len(link.registered_cameras) == 1
+
+
+@pytest.mark.asyncio
+async def test_camera_registration_retries_until_it_succeeds(tmp_path):
+    link = FakeDeviceLink()  # returns no ids: not registered yet (signed out, ...)
+    processor = _processor(tmp_path, link, cameras=lambda: [_Camera("front")])
+    await processor.discover_work()
+    await processor.discover_work()
+    assert len(link.registered_cameras) == 2
+    link.camera_ids = {"front": "c-1"}
+    await processor.discover_work()
+    await processor.discover_work()
+    assert len(link.registered_cameras) == 3
+
+
+@pytest.mark.asyncio
+async def test_cameras_are_re_announced_hourly(tmp_path, monkeypatch):
+    import video_grouper.task_processors.device_link_processor as dlp
+
+    clock = [1000.0]
+    monkeypatch.setattr(dlp.time, "monotonic", lambda: clock[0])
+    link = FakeDeviceLink()
+    link.camera_ids = {"front": "c-1"}
+    processor = _processor(tmp_path, link, cameras=lambda: [_Camera("front")])
+    await processor.discover_work()
+    clock[0] += 3599
+    await processor.discover_work()
+    clock[0] += 2
+    await processor.discover_work()
+    assert len(link.registered_cameras) == 2

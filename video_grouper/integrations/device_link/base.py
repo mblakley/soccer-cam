@@ -27,6 +27,17 @@ class DeviceCommand:
     id: str
     type: str
     parameters: dict[str, Any] = field(default_factory=dict)
+    camera: str | None = None  # the camera it targets, when known
+
+
+@dataclass(frozen=True)
+class DeviceCamera:
+    """One of this install's cameras, as it identifies itself."""
+
+    name: str
+    serial: str
+    camera_type: str
+    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +72,11 @@ class IDeviceLink(Provider, ABC):
     async def register(self, capabilities: dict[str, Any]) -> None:
         """Announce this install and what it can do. Idempotent: once it has
         succeeded, later calls do nothing; until then each call retries."""
+
+    @abstractmethod
+    async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
+        """Make this install and its cameras known; idempotent. Returns the
+        link's id for each camera by name ({} when it can't say right now)."""
 
     @abstractmethod
     async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:

@@ -118,3 +118,15 @@ class IntegrationContext:
                 storage_path=str(self.storage_path),
             )
         return self.services["ttt"]
+
+    def ttt_cameras(self) -> Any:
+        """TTT's ids for this install's cameras, shared by every TTT
+        implementation (see :mod:`video_grouper.integrations.ttt_cameras`)."""
+        if "ttt_cameras" not in self.services:
+            from video_grouper.integrations.ttt_cameras import TTTCameraIds
+
+            self.services["ttt_cameras"] = TTTCameraIds(
+                str(self.storage_path),
+                getattr(self.config.ttt, "camera_id", "") or None,
+            )
+        return self.services["ttt_cameras"]

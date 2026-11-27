@@ -85,17 +85,21 @@ class TTTRecordingSink(IRecordingSink):
     name = "ttt"
     priority = 10
 
-    def __init__(self, client: Any, camera_id: str | None = None):
+    def __init__(self, client: Any, camera_id: str | None = None, cameras: Any = None):
         self._client = client
-        self._camera_id = camera_id or None
+        if cameras is None:
+            from video_grouper.integrations.ttt_cameras import TTTCameraIds
+
+            cameras = TTTCameraIds(None, camera_id)
+        # camera name -> TTT camera id, filled by the TTT device link
+        self._cameras = cameras
         self._team_id: str | None = None
 
     @classmethod
     def from_context(cls, context) -> TTTRecordingSink | None:
         if not context.ttt_enabled():
             return None
-        camera_id = getattr(context.config.ttt, "camera_id", "") or None
-        return cls(context.ttt_client(), camera_id)
+        return cls(context.ttt_client(), cameras=context.ttt_cameras())
 
     # -- helpers -------------------------------------------------------------
 
@@ -123,8 +127,11 @@ class TTTRecordingSink(IRecordingSink):
 
     # -- port ----------------------------------------------------------------
 
-    async def recording_found(self, group_dir: str, files: list[Any]) -> None:
-        if not self._camera_id or not files or not self._signed_in():
+    async def recording_found(
+        self, group_dir: str, files: list[Any], camera: str | None = None
+    ) -> None:
+        camera_id = self._cameras.id_for(camera)
+        if not camera_id or not files or not self._signed_in():
             return
         try:
             file_group = _dir_name(group_dir)
@@ -145,7 +152,7 @@ class TTTRecordingSink(IRecordingSink):
             if not team_id:
                 return
             registered = await asyncio.to_thread(
-                self._client.register_recordings, self._camera_id, team_id, rows
+                self._client.register_recordings, camera_id, team_id, rows
             )
             ttt_id = registered[0].get("id") if registered else None
             if ttt_id:

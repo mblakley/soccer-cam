@@ -651,6 +651,7 @@ class VideoGrouperApp:
             link=self.integrations.device_link,
             command_executor=CommandExecutor(self),
             error_tracker=self.error_tracker,
+            cameras=lambda: [p.camera for p in self.camera_pollers.values()],
             capabilities=(
                 job_capabilities(self.config)
                 if self.ttt_job_processor is not None

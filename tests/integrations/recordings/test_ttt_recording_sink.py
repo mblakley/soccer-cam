@@ -271,3 +271,15 @@ async def test_session_errors_are_swallowed():
         await TTTRecordingSink(client, "cam").phases("grp", {"times": {"end": 1.0}})
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_recordings_are_reported_under_the_camera_that_recorded_them(tmp_path):
+    from video_grouper.integrations.ttt_cameras import TTTCameraIds
+
+    cameras = TTTCameraIds(None, "typed")
+    cameras.update({"front": "c-front", "back": "c-back"})
+    client = _client()
+    sink = TTTRecordingSink(client, cameras=cameras)
+    await sink.recording_found(str(_group(tmp_path)), [_file()], camera="back")
+    assert client.register_recordings.call_args.args[0] == "c-back"
