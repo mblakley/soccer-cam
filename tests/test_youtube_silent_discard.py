@@ -24,6 +24,7 @@ from video_grouper.utils.youtube_upload import (
     YouTubeChannelNotVerifiedError,
     YouTubeQuotaError,
     YouTubeUploader,
+    YouTubeUploadRejectedError,
 )
 
 
@@ -32,7 +33,14 @@ def _uploader(long_uploads_status=None):
     up.credentials_file = "c.json"
     up.token_file = "t.json"
     up.youtube = MagicMock()
-    up._long_uploads_status = long_uploads_status
+    # Only "allowed" is ever cached; any other status is read from the channel.
+    up._long_uploads_status = (
+        long_uploads_status if long_uploads_status == "allowed" else None
+    )
+    if long_uploads_status and long_uploads_status != "allowed":
+        up.youtube.channels.return_value.list.return_value = _channels_response(
+            long_uploads_status
+        )
     up.skip_upload = False
     return up
 
@@ -198,3 +206,65 @@ class TestOnboardingGate:
         upload-time gate and the settle check are the backstops."""
         body = self._body(None)
         assert "/setup/summary" in body
+
+
+class TestReviewFixes:
+    """Code review of #145 (2026-11-27)."""
+
+    def test_an_unverified_status_is_re_read_so_verifying_takes_effect(self):
+        # The app keeps one uploader for clips/reels; caching "eligible" kept
+        # uploads blocked after the user verified, until a restart.
+        up = _uploader()
+        up.youtube.channels.return_value.list.side_effect = [
+            _channels_response("eligible"),
+            _channels_response("allowed"),
+        ]
+        assert up.get_long_uploads_status() == "eligible"
+        assert up.get_long_uploads_status() == "allowed"
+
+    def test_status_probe_never_signs_in_interactively(self):
+        # A failed refresh used to fall through to run_local_server, which
+        # blocks the dashboard/wizard request thread waiting for a browser.
+        up = _uploader()
+        up.youtube = None
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(False, "refresh failed"),
+            ),
+            patch.object(YouTubeUploader, "authenticate") as interactive,
+        ):
+            assert up.get_long_uploads_status() is None
+        interactive.assert_not_called()
+
+    def test_failed_status_checks_do_not_trigger_a_re_upload(self):
+        # Every videos.list erroring (network, quota) is "unknown", not
+        # "discarded": insert returned an id; re-uploading makes a duplicate.
+        up = _uploader()
+        up.youtube.videos.return_value.list.return_value.execute.side_effect = (
+            RuntimeError("network")
+        )
+        with patch("video_grouper.utils.youtube_upload.time.sleep"):
+            assert up._confirm_upload_settled("vid") == "present"
+
+    def test_a_rejected_upload_is_a_permanent_failure(self):
+        up = _uploader()
+        up.youtube.videos.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {"status": {"uploadStatus": "rejected", "rejectionReason": "duplicate"}}
+            ]
+        }
+        with pytest.raises(YouTubeUploadRejectedError, match="duplicate"):
+            up._confirm_upload_settled("vid")
+
+    def test_a_rejection_escapes_upload_video(self, tmp_path):
+        video = tmp_path / "game.mp4"
+        video.write_bytes(b"x" * 32)
+        up = _uploader(long_uploads_status="allowed")
+        up._confirm_upload_settled = MagicMock(
+            side_effect=YouTubeUploadRejectedError("rejected: duplicate")
+        )
+        insert = up.youtube.videos.return_value.insert.return_value
+        insert.next_chunk.return_value = (None, {"id": "vid"})
+        with pytest.raises(YouTubeUploadRejectedError):
+            up.upload_video(str(video), "t", "d")

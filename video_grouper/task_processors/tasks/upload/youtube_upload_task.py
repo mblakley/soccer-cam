@@ -284,10 +284,13 @@ class YoutubeUploadTask(BaseUploadTask):
             logger.error(f"YouTube upload functionality not available: {e}")
             return False
         except Exception as e:
-            from video_grouper.utils.youtube_upload import YouTubeQuotaError
+            from video_grouper.utils.youtube_upload import (
+                YouTubeQuotaError,
+                YouTubeUploadRejectedError,
+            )
 
-            if isinstance(e, YouTubeQuotaError):
-                raise  # Propagate to processor for deferred retry
+            if isinstance(e, YouTubeQuotaError | YouTubeUploadRejectedError):
+                raise  # The processor holds (quota) or fails (rejected) it
             logger.error(f"Error during YouTube upload for {self.group_dir}: {e}")
             return False
 

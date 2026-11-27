@@ -254,3 +254,35 @@ class TestQueueProcessorInProgressPersistence:
         assert processor._queue.qsize() == 1
         _, _, item = processor._queue.get_nowait()
         assert item.name == "legacy-item"
+
+
+class TestRejectedUploadIsNotRetried:
+    """A YouTube rejection (duplicate, copyright, ...) is permanent: retrying
+    re-sends the whole game for the same answer (code review of #145)."""
+
+    @pytest.mark.asyncio
+    async def test_rejected_upload_is_removed_without_retry(
+        self, tmp_path, mock_config
+    ):
+        from video_grouper.utils.youtube_upload import YouTubeUploadRejectedError
+
+        processor = StubQueueProcessor(str(tmp_path), mock_config)
+        processor._queue = asyncio.PriorityQueue()
+        processor._max_retries = 3
+        attempts = []
+
+        async def rejected(item):
+            attempts.append(item)
+            raise YouTubeUploadRejectedError("rejected: duplicate")
+
+        processor.process_item = rejected
+        await processor.add_work(StubTask("game"))
+
+        run_task = asyncio.create_task(processor._run())
+        await asyncio.sleep(0.5)
+        processor._shutdown_event.set()
+        await asyncio.wait_for(run_task, timeout=5.0)
+
+        assert len(attempts) == 1
+        assert processor._queue.qsize() == 0
+        assert processor._retry_counts == {}

@@ -614,6 +614,38 @@ def _youtube_credentials_problem(storage: Path) -> str | None:
         return f"Could not validate the stored credentials: {exc}"
 
 
+# The dashboard reloads every 10 s; probing YouTube on every load would spend
+# quota all day for a value that changes about once in a channel's life.
+_LONG_UPLOAD_STATUS_TTL_SECONDS = 15 * 60
+_long_upload_status_cache: dict[str, tuple[float, float, str | None]] = {}
+
+
+def _cached_long_uploads_status(storage: Path) -> str | None:
+    """longUploadsStatus, re-read at most every 15 min or when the token file
+    changes (a re-authorization may be a different channel)."""
+    from video_grouper.utils.youtube_upload import YouTubeUploader
+
+    yt_dir = storage / "youtube"
+    token = yt_dir / "token.json"
+    key = str(token)
+    mtime = token.stat().st_mtime if token.exists() else 0.0
+    hit = _long_upload_status_cache.get(key)
+    if (
+        hit
+        and hit[1] == mtime
+        and time.monotonic() - hit[0] < _LONG_UPLOAD_STATUS_TTL_SECONDS
+    ):
+        return hit[2]
+    state = YouTubeUploader(
+        credentials_file=str(yt_dir / "client_secret.json"),
+        token_file=str(token),
+    ).get_long_uploads_status()
+    # Re-stat: the probe may have refreshed (rewritten) the token file.
+    mtime = token.stat().st_mtime if token.exists() else 0.0
+    _long_upload_status_cache[key] = (time.monotonic(), mtime, state)
+    return state
+
+
 def _render_long_upload_warning(storage: Path) -> str:
     """Warn if this channel cannot keep a full-length game.
 
@@ -623,14 +655,7 @@ def _render_long_upload_warning(storage: Path) -> str:
     know to go and verify, so surface it here rather than only in the log.
     """
     try:
-        from video_grouper.utils.youtube_upload import YouTubeUploader
-
-        yt_dir = storage / "youtube"
-        uploader = YouTubeUploader(
-            credentials_file=str(yt_dir / "client_secret.json"),
-            token_file=str(yt_dir / "token.json"),
-        )
-        state = uploader.get_long_uploads_status()
+        state = _cached_long_uploads_status(storage)
     except Exception as exc:  # never break the dashboard over a status probe
         logger.debug("long-upload status probe failed: %s", exc)
         return ""
@@ -705,8 +730,14 @@ def _render_youtube_section(storage: Path, config_path: Path | None = None) -> s
         )
     ident = html.escape(status.get("identity") or "?")
     creds_warning = ""
+    channel_note = ""
     if _youtube_uploads_enabled(config_path):
         problem = _youtube_credentials_problem(storage)
+        # Only ask YouTube about the channel when uploads are on and the
+        # credentials work: otherwise the probe can only fail (or spend quota
+        # for nothing).
+        if not problem:
+            channel_note = _render_long_upload_warning(storage)
         if problem:
             creds_warning = (
                 '<p class="warn"><span class="status-dot bad"></span>'
@@ -725,7 +756,7 @@ def _render_youtube_section(storage: Path, config_path: Path | None = None) -> s
             else "."
         )
         + "</p>"
-        + _render_long_upload_warning(storage)
+        + channel_note
         + '<p><a class="btn btn-ghost" href="/auth/youtube/start">'
         "Re-authorize a different account</a></p>"
         f"{_YT_UPLOAD_FORM}"

@@ -25,6 +25,15 @@ class YouTubeQuotaError(Exception):
     pass
 
 
+class YouTubeUploadRejectedError(Exception):
+    """YouTube processed the upload and rejected it (duplicate, copyright,
+    length, ...). Sending the same file again gets the same answer, so this is
+    never retried: the queue fails the item instead of re-uploading a whole
+    game up to three times."""
+
+    pass
+
+
 class YouTubeChannelNotVerifiedError(YouTubeQuotaError):
     """The channel cannot accept videos longer than 15 minutes.
 
@@ -419,6 +428,21 @@ class YouTubeUploader:
         self.skip_upload = skip_upload
         self.youtube = None
 
+    def _authenticate_headless(self) -> bool:
+        """Load the stored token (refreshing it if needed) without ever opening
+        a browser. Status probes run from web requests and the service, where
+        an interactive sign-in would block the request thread indefinitely."""
+        ok, message = ensure_valid_token(self.credentials_file, self.token_file)
+        if not ok:
+            logger.warning("YouTube status check skipped: %s", message)
+            return False
+        with open(self.token_file) as token:
+            creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
+                json.load(token), SCOPES
+            )
+        self.youtube = build(API_SERVICE_NAME, API_VERSION, credentials=creds)
+        return True
+
     def authenticate(self) -> bool:
         """Authenticate with YouTube API.
 
@@ -444,12 +468,13 @@ class YouTubeUploader:
         "eligible" means the channel *could* be verified but has not been --
         long uploads are still destroyed. Only "allowed" is safe.
 
-        Cached per instance; it costs 1 quota unit and does not change during
-        a run.
+        Only "allowed" is cached (verification is one-way). Anything else is
+        re-read on the next call, so verifying the channel takes effect on the
+        next upload attempt without a restart. Never signs in interactively.
         """
-        if self._long_uploads_status is not None:
-            return self._long_uploads_status
-        if not self.youtube and not self.authenticate():
+        if self._long_uploads_status == "allowed":
+            return "allowed"
+        if not self.youtube and not self._authenticate_headless():
             return None
         try:
             resp = self.youtube.channels().list(part="status", mine=True).execute()
@@ -465,8 +490,10 @@ class YouTubeUploader:
                 "Create one at https://www.youtube.com before uploading."
             )
             return None
-        self._long_uploads_status = items[0].get("status", {}).get("longUploadsStatus")
-        return self._long_uploads_status
+        status = items[0].get("status", {}).get("longUploadsStatus")
+        if status == "allowed":
+            self._long_uploads_status = status
+        return status
 
     def _confirm_upload_settled(self, video_id: str) -> str:
         """Watch a freshly uploaded video long enough to trust it.
@@ -480,6 +507,7 @@ class YouTubeUploader:
         """
         attempts = max(1, UPLOAD_SETTLE_TIMEOUT_SECONDS // UPLOAD_SETTLE_POLL_SECONDS)
         ever_seen = False
+        any_answer = False  # did any status check actually get a reply?
         for attempt in range(attempts):
             if attempt:
                 # Poll immediately first: a small video can already be
@@ -491,15 +519,14 @@ class YouTubeUploader:
                 logger.warning("Could not check upload status: %s", exc)
                 continue
             if not isinstance(resp, dict):
-                # Unexpected response shape. Do not spend the whole settle
-                # window re-asking; accept the upload and say so.
+                # Not an answer: count it like a failed check.
                 logger.warning(
-                    "Unexpected videos.list response for %s (%s); "
-                    "skipping settle check.",
+                    "Unexpected videos.list response for %s (%s)",
                     video_id,
                     type(resp).__name__,
                 )
-                return "present"
+                continue
+            any_answer = True
             items = resp.get("items", [])
             if not items:
                 if ever_seen:
@@ -512,13 +539,25 @@ class YouTubeUploader:
             if state == "processed":
                 return "processed"
             if state in ("rejected", "failed"):
-                logger.error(
-                    "YouTube %s the upload: %s",
-                    state,
-                    items[0].get("status", {}).get("rejectionReason"),
+                status = items[0].get("status", {})
+                reason = status.get("rejectionReason") or status.get("failureReason")
+                raise YouTubeUploadRejectedError(
+                    f"YouTube {state} video {video_id}: {reason}. Not retrying: "
+                    "the same file would get the same answer."
                 )
-                return "discarded"
-        return "present" if ever_seen else "discarded"
+        if ever_seen:
+            return "present"
+        if not any_answer:
+            # Every check failed (network, quota). We cannot tell whether the
+            # video survived; insert returned an id, so keep it rather than
+            # upload the whole game again as a likely duplicate.
+            logger.error(
+                "Could not confirm %s: every status check failed. Keeping it "
+                "as uploaded rather than re-uploading a possible duplicate.",
+                video_id,
+            )
+            return "present"
+        return "discarded"
 
     def upload_video(
         self,
@@ -732,7 +771,7 @@ class YouTubeUploader:
                 logger.error("Upload completed but no response received")
                 return None
 
-        except YouTubeQuotaError:
+        except (YouTubeQuotaError, YouTubeUploadRejectedError):
             # MUST propagate. YouTubeQuotaError is an Exception, so the broad
             # handler below used to swallow it and return None -- the caller
             # then saw a generic failure, the queue processor's quota-deferral
