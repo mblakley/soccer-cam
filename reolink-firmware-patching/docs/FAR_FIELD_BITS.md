@@ -59,6 +59,53 @@ structure). `detail` is mean absolute Laplacian.
 - The far band holds a quarter of the near band's detail, so it is cheap: bits
   moved there go a long way.
 
+## How much bitrate would be enough (estimated 2026-11-27)
+
+**The stream runs at QP 34 to 35.** Read from the slice headers of a 10 s
+Lakefront clip (`ffmpeg -bsf:v trace_headers`): keyframes QP 34 to 35, other
+frames QP 33 to 35, mean 34.2. The rate controller's allowed range is 25 to 51,
+so the stream is nowhere near its floor. The headers also show Main profile,
+level 5.0, 64-pixel CTBs, and per-block QP deltas enabled down to 16x16. This is
+the frame-level QP; the per-block values after AQ cannot be read with any tool
+we have.
+
+**QP 35 is coarse for a far ball.** The quantiser step roughly doubles every 6
+QP: about 36 at QP 35, about 18 at QP 29. A ball 3 to 8 pixels wide is a small,
+low-contrast blob, and a blob whose transform coefficients fall under the step
+is rounded away. **ESTIMATE, not measured:** the far field needs about QP 28 to
+29, six steps lower than it gets.
+
+**What that costs, by proxy.** Two seconds of the Lakefront clip, cut into four
+full-width bands and re-encoded with x265 at fixed QP 35 and QP 29 (same GOP, no
+B-frames, AQ off):
+
+| band (rows) | share of frame | share of bits at QP 35 | cost of QP 35 → 29 |
+|---|---|---|---|
+| above the far touchline (0–159) | 7 % | 2.5 % | ×1.54 |
+| far band (160–479) | 15 % | **4.4 %** | ×1.67 |
+| rest of the pitch (480–1471) | 46 % | 45.1 % | ×1.53 |
+| foreground below the near touchline (1472–2159) | 32 % | **48.0 %** | ×1.48 |
+| whole frame | | | ×1.51 |
+
+- **Uniformly, the answer is 31 to 41 Mbps.** ×1.51 on today's 20.7 Mbps is
+  31 Mbps, and that is a floor: the source was already quantised at QP 35, so
+  the detail a clean source would add at QP 29 is missing from the estimate.
+  The usual rule (bitrate doubles per 6 QP) gives 41 Mbps.
+- **For the far band alone, it is under 1 Mbps.** That band takes 4.4 % of the
+  bits. Six QP lower costs it ×1.67, about 0.7 Mbps on the proxy, perhaps
+  1.5 Mbps on a clean source.
+- **Half the stream is spent below the near touchline.** At this field the
+  bottom third of the picture is sideline and spectators, and it takes 48 % of
+  the bits.
+
+So raising the cap is the expensive way to get there: of every extra bit a
+higher uniform bitrate buys, about 4 % lands on the far band. A window on the
+far band (lever 2) asks the encoder for the same six QP at a twentieth of the
+cost, and a 2 s keyframe interval (lever 1) frees several times what it needs.
+
+Limits of this: one 2 s clip from one game; x265 is not the camera's encoder;
+the proxy ignores AQ, which may already favour the flat far band.
+
 ## Levers, in the order to try them
 
 ### 1. Keyframe interval (no flash)

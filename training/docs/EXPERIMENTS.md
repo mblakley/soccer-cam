@@ -4,6 +4,28 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-02: what bitrate would hold far-ball detail — the far band is 4 % of the bits (2026-11-27)
+
+**Hypothesis:** the far field needs a higher bitrate than the 20.5 Mbps the camera accepts.
+
+**Method:** 10 s of `heat__2026.06.10_vs_Lakefront_SC_away` (segment 19:21). (a) Slice QP from the
+bitstream headers (`ffmpeg -c copy -bsf:v trace_headers`). (b) Proxy for where bits go: the first
+2 s cut into four full-width bands, each re-encoded with libx265 `-preset fast`, fixed QP 35 and
+29, keyint 20, no B-frames, AQ off; compare sizes.
+
+**Result:** (a) slice QP 34–35 on keyframes, 33–35 (mean 34.2) on other frames; allowed range is
+25–51. (b) Share of bits at QP 35: rows 0–159 (above far touchline) 2.5 %; far band 160–479
+**4.4 %**; rest of pitch 480–1471 45.1 %; foreground 1472–2159 **48.0 %**. Cost of QP 35→29: whole
+frame ×1.51; far band ×1.67 (≈0.7 Mbps of a 20.7 Mbps stream).
+
+**Conclusion:** hypothesis is true but points the wrong way. A uniform stream at QP 29 needs
+31 Mbps by this proxy (a floor, since the source is already quantised) to ~41 Mbps by the
+6-QP-doubles rule — beyond anything the cap search has reached. The far band alone needs under
+~1.5 Mbps. Raising the cap puts ~4 % of the new bits where they are wanted; a far-band ROI window
+does the same job inside the existing budget. The QP 28–29 target itself is an estimate from
+quantiser step sizes, not a measured detection threshold. One clip, one game; x265 is not the
+camera's encoder; per-block QP after the camera's AQ is not readable.
+
 ## EXP-ENC-01: where the Reolink main stream's bits go on game footage — keyframes take a third (2026-11-27)
 
 **Hypothesis:** far-field blockiness is bit starvation, and the stream is at its cap during
