@@ -329,7 +329,9 @@ quota) on the E1.6 fresh account (Terms already accepted), publisher client =
 
 | Step | Result |
 |---|---|
-| 1 consent wording | "Manage your Cloud Platform projects", "Manage your Google API service configuration", plus email/"associate you with your personal info". Captured on a re-consent, so Google showed it behind "already has some access"; first-time layout not yet seen |
+| 1 consent wording | "Manage your Cloud Platform projects", "Manage your Google API service configuration", plus email/"associate you with your personal info" |
+| 1 consent layout (2nd run, recorded) | **Granular consent: each Cloud permission is its own checkbox, unticked by default** ("Select what soccer-cam-e1-client can access"). A parent who just clicks Continue grants nothing. The quota callback now checks the granted scopes and asks the user to tick both; project creation never starts with half a grant |
+| 2nd end-to-end run | Wizard -> TTT sign-in -> Connect YouTube -> Set up quota on the same account: new `soccer-cam-nn0xo82j`, ready in **80 s**, `has_channel=true` (Mark created a channel at 13:12). Recorded as two GIFs |
 | — | **New: the publisher's own project must enable Cloud Resource Manager + Service Usage APIs.** Pre-project calls bill the OAuth client's project; without them `projects.create` → `403 SERVICE_DISABLED` naming project 396182566355. User can't fix it; provisioner now fails with `publisher_setup`. **E2 checklist item.** |
 | 3 create → done | ~8 s (operation already done on first poll) |
 | 4 enable → done | ~4 s; then `channels.list` with header → stable 200 at **+61 s total** from consent |

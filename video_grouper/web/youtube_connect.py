@@ -144,6 +144,24 @@ def _account_email(creds) -> str | None:
     return None
 
 
+_CLOUD_SCOPES = (
+    "https://www.googleapis.com/auth/cloudplatformprojects",
+    "https://www.googleapis.com/auth/service.management",
+)
+
+
+def _granted_scopes(flow) -> set[str]:
+    """Scopes Google actually granted (the token response's ``scope``)."""
+    raw = (getattr(flow, "oauth2session", None) and flow.oauth2session.token or {}).get(
+        "scope"
+    )
+    if isinstance(raw, str):
+        return set(raw.split())
+    if isinstance(raw, list | tuple | set):
+        return set(raw)
+    return set(getattr(flow.credentials, "granted_scopes", None) or [])
+
+
 def _id_token_email(creds) -> str | None:
     raw = getattr(creds, "id_token", None)
     if not raw:
@@ -333,6 +351,20 @@ def build_router(storage_path: str) -> APIRouter:
             logger.error("YOUTUBE_QUOTA: token exchange failed: %s", exc)
             return _error(f"Token exchange failed: {html.escape(str(exc))}")
         setup_creds = flow.credentials
+        # Google's granular consent shows each Cloud permission as its own
+        # checkbox, unticked by default (seen live 2026-11-27). Without both,
+        # project creation or enabling fails later with a confusing 403.
+        granted = _granted_scopes(flow)
+        missing = [s for s in _CLOUD_SCOPES if s not in granted]
+        if missing:
+            return _error(
+                "Google didn't grant both permissions soccer-cam needs. On "
+                "Google's screen, tick <strong>both</strong> boxes (or "
+                '<em>Select all</em>): "Manage your Cloud Platform projects" '
+                'and "Manage your Google API service configuration". '
+                f"<a href='/auth/youtube/quota/start?return_to={entry['return_to']}'>"
+                "Try again</a>"
+            )
         email = _id_token_email(setup_creds)
         if entry["email"] and email and email != entry["email"]:
             return _error(
