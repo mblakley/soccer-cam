@@ -17,7 +17,7 @@ import os
 from typing import Any
 
 from video_grouper.task_processors.services.ntfy_service import NtfyService
-from video_grouper.utils.config import Config
+from video_grouper.utils.config import Config, sanitize_ttt_conn
 
 from .base_ntfy_task import BaseNtfyTask, NtfyTaskResult
 
@@ -29,12 +29,7 @@ _PHASE_LABELS = {
     "second_half": "Second-half kickoff",
     "end": "End of game",
 }
-_SECRET_KEYS = ("email", "password")
-
-
-def sanitize_ttt_conn(ttt_config: dict | None) -> dict:
-    """Drop credentials from a TTT config dict — safe to persist in task metadata."""
-    return {k: v for k, v in (ttt_config or {}).items() if k not in _SECRET_KEYS}
+__all__ = ["PhaseVerifyTask", "sanitize_ttt_conn"]
 
 
 def _mmss(seconds: float) -> str:
