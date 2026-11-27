@@ -115,12 +115,6 @@ class TestTTTJobProcessorInit:
         proc = TTTJobProcessor(storage_path=ttt_storage, config=ttt_config)
         assert isinstance(proc.work, NullWorkSource)
 
-    def test_init_no_service_id(self, processor):
-        # Service registration moved to TTTPoller; the processor itself
-        # doesn't track service id anymore. Sanity check the attr still
-        # exists on the (rare) path that sets it.
-        assert processor._service_id is None
-
     def test_init_stores_optional_processors(self, ttt_storage, ttt_config):
         download = Mock()
         video = Mock()

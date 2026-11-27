@@ -56,7 +56,6 @@ def _mk_config(*, ttt_enabled: bool = True, camera_id: str | None = None):
 def _mk_ttt(authenticated: bool = True):
     c = MagicMock()
     c.is_authenticated.return_value = authenticated
-    c.register_service.return_value = {"id": "svc-1"}
     return c
 
 
@@ -200,34 +199,24 @@ async def test_cancelled_error_propagates(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# TTT-only calls (service register / heartbeat, schedule) keep the TTT gate
+# The schedule refresh keeps the TTT gate; device-link calls are not here
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_job_feature_registers_service_and_heartbeats(tmp_path):
+async def test_job_feature_makes_no_device_link_calls(tmp_path):
+    # Announcing the install + its heartbeat moved to DeviceLinkProcessor
+    # (tests/test_device_link_processor.py).
     ttt = _mk_ttt()
     work = FakeWorkSource([WorkItem(PROCESS_RECORDING, "j1", {"id": "j1"})])
     p_job = _mk_processor()
     poller = _mk_poller(tmp_path, work, ttt, ttt_job_processor=p_job)
 
     await poller.discover_work()
-    await poller.discover_work()
 
-    ttt.register_service.assert_called_once()  # once, then cached
-    assert ttt.send_heartbeat.call_count == 2
-    ttt.send_heartbeat.assert_called_with("svc-1", "online")
-    p_job.add_work.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_no_job_feature_no_service_registration(tmp_path):
-    ttt = _mk_ttt()
-    poller = _mk_poller(
-        tmp_path, FakeWorkSource(), ttt, clip_request_processor=_mk_processor()
-    )
-    await poller.discover_work()
     ttt.register_service.assert_not_called()
+    ttt.send_heartbeat.assert_not_called()
+    p_job.add_work.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -246,8 +235,6 @@ async def test_ttt_calls_skipped_without_a_ttt_session(
         schedule_service=schedule,
     )
     await poller.discover_work()
-    ttt.register_service.assert_not_called()
-    ttt.send_heartbeat.assert_not_called()
     schedule.refresh.assert_not_called()
 
 

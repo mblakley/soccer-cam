@@ -5,7 +5,6 @@ from pathlib import Path
 
 from video_grouper.api_integrations.command_executor import CommandExecutor
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
-from video_grouper.api_integrations.ttt_reporter import TTTReporter
 from video_grouper.task_processors import (
     ArchiveProcessor,
     CameraPoller,
@@ -606,9 +605,8 @@ class VideoGrouperApp:
                     logger.info("TTT JobProcessor initialized")
 
                 # Single TTTPoller polls the work source and enqueues onto
-                # each kind's processor. It keeps the TTT client only for
-                # service register / heartbeat and the schedule refresh
-                # (IDeviceLink, plan phase 5).
+                # each kind's processor. It keeps the TTT client only for the
+                # schedule refresh's session gate.
                 has_any = any(
                     p is not None
                     for p in (
@@ -639,35 +637,29 @@ class VideoGrouperApp:
             except Exception as e:
                 logger.error(f"Failed to initialize TTTPoller: {e}")
 
-        # TTT Reporter — optional, best-effort status reporting back to TTT
-        # Works independently of the clip request processor: enabled when TTT
-        # credentials are present, regardless of the full TTT enabled flag.
-        # TTT reporter reuses the same TTT client the TTTPoller is using.
-        ttt_reporter_client = getattr(self, "_ttt_client", None)
-        # Load machine ID for multi-computer awareness
-        machine_id = None
-        if self.config.ttt.enabled:
-            try:
-                from video_grouper.utils.machine_id import get_or_create_machine_id
-
-                machine_id = get_or_create_machine_id(self.storage_path)
-            except Exception:
-                pass
-
-        command_executor = CommandExecutor(self)
-        self.ttt_reporter = TTTReporter(
-            ttt_client=ttt_reporter_client,
-            config=self.config,
-            error_tracker=self.error_tracker,
-            command_executor=command_executor,
-            machine_id=machine_id,
+        # Device link: announce this install (only when it takes remote
+        # processing jobs), heartbeat, run remote commands, and tell the
+        # camera pollers which cameras this install should poll.
+        from video_grouper.task_processors.device_link_processor import (
+            DeviceLinkProcessor,
+            job_capabilities,
         )
 
-        # Recording reports go to the recordings port; the camera poller still
-        # asks the reporter whether a camera is enabled (device-link port, later).
+        self.device_link_processor = DeviceLinkProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            link=self.integrations.device_link,
+            command_executor=CommandExecutor(self),
+            capabilities=(
+                job_capabilities(self.config)
+                if self.ttt_job_processor is not None
+                else None
+            ),
+        )
+
         recordings = self.integrations.recordings
         for poller in self.camera_pollers.values():
-            poller.ttt_reporter = self.ttt_reporter
+            poller.is_camera_enabled = self.device_link_processor.is_camera_enabled
             poller.recordings = recordings
         for dl_proc in self.download_processors.values():
             dl_proc.recordings = recordings
@@ -840,8 +832,8 @@ class VideoGrouperApp:
         for processor in self.processors:
             await processor.start()
 
-        # Start optional TTT status reporter (best-effort, never blocks startup)
-        await self.ttt_reporter.start()
+        # Device link heartbeat (best-effort, never blocks startup)
+        await self.device_link_processor.start()
 
         logger.info("VideoGrouperApp initialization complete")
 
@@ -1281,8 +1273,8 @@ class VideoGrouperApp:
         # Signal shutdown to wake up the run() method if it's waiting
         self._shutdown_event.set()
 
-        # Stop TTT reporter (best-effort, no-op if not configured)
-        await self.ttt_reporter.stop()
+        # Stop the device link heartbeat
+        await self.device_link_processor.stop()
 
         # Stop all processors
         for processor in self.processors:

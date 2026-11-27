@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from video_grouper.integrations import build_integrations, registry
+from video_grouper.integrations.device_link import IDeviceLink
 from video_grouper.integrations.entitlements import IEntitlements
 from video_grouper.integrations.recordings import IRecordingSink
 from video_grouper.integrations.registry import (
@@ -97,6 +98,8 @@ def test_every_built_in_port_resolves_with_ttt_off():
     assert integrations.phase_hints.name == "none"
     assert isinstance(integrations.work, IWorkSource)
     assert integrations.work.name == "none"
+    assert isinstance(integrations.device_link, IDeviceLink)
+    assert integrations.device_link.name == "none"
 
 
 def test_ttt_on_shares_one_client_across_ports():
@@ -112,6 +115,8 @@ def test_ttt_on_shares_one_client_across_ports():
     assert integrations.phase_hints.name == "ttt"
     assert integrations.work.name == "ttt"
     assert integrations.work._client is client
+    assert integrations.device_link.name == "ttt"
+    assert integrations.device_link._client is client
 
 
 def test_active_defaults_to_the_null_set_and_activate_replaces_it(monkeypatch):

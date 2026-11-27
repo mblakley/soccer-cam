@@ -9,9 +9,9 @@ the duplicate without needing to stitch from raw lens streams.
 This module is consumed by in-house downstream code (ball detection, tracking,
 broadcast-perspective render). It is deliberately NOT called during combine or
 trim — both remain stream-copy. The profile is stored **per-camera** at
-`config.processing.seam_realign_profile_path` (populated by ttt_reporter when
-the TTT calibration tool pushes an update). Readers call `load_profile` on
-that path — there is no per-recording sidecar.
+`config.processing.seam_realign_profile_path` (nothing in soccer-cam fetches
+it from TTT's calibration tool today; the file is placed there by hand).
+Readers call `load_profile` on that path — there is no per-recording sidecar.
 """
 
 from __future__ import annotations

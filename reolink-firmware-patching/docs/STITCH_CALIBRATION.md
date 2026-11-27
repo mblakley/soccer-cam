@@ -469,7 +469,7 @@ misalignment of two lenses produces that.
 
 **This cannot be settled against real data, because no real profile exists.** The only anchor data in
 the repo is a test fixture — `[(0,-10), (477,-20), (657,-35), (1500,0), (2160,0)]`
-(`tests/test_stitch_remap.py:23`, `tests/test_ttt_reporter_stitch.py:20`) **[M]** — which is
+(`tests/test_stitch_remap.py:23`) **[M]** — which is
 non-monotone and manifestly synthetic; no camera does that. So the first real measurement must
 report it: fit a line to the measured `dx(y)` and record `r²` and the max residual in the artifact.
 If the residual is small, the roll model holds and the mesh is lossless. If it is not, that is a

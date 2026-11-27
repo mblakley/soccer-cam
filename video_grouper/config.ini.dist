@@ -28,9 +28,9 @@ retry_delay = 60
 # game_start_method = phase_detection
 
 # Per-row stitch correction (dual-lens panoramic cameras only). The profile
-# is per-camera and lives at seam_realign_profile_path. TTT's calibration tool
-# writes to it via ttt_reporter.sync_config when a coach saves a profile
-# against this camera in the web UI. Downstream readers (ball detection,
+# is per-camera and lives at seam_realign_profile_path (written by the local
+# stitch calibration; profiles saved in TTT's calibration tool are not pulled
+# down yet). Downstream readers (ball detection,
 # tracking, broadcast-perspective render) apply the per-row dx shift to the
 # right half on decode. No recording is ever re-encoded — combine/trim stay
 # stream-copy, and the profile is read fresh each time frames are consumed.

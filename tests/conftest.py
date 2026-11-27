@@ -68,6 +68,7 @@ def fake_integrations():
     from types import SimpleNamespace
 
     from video_grouper import integrations
+    from video_grouper.integrations.device_link.fake import FakeDeviceLink
     from video_grouper.integrations.entitlements.fake import FakeEntitlements
     from video_grouper.integrations.phase_hints.fake import FakePhaseHintSource
     from video_grouper.integrations.recordings.fake import FakeRecordingSink
@@ -80,6 +81,7 @@ def fake_integrations():
         recordings=FakeRecordingSink(),
         work=FakeWorkSource(),
         phase_hints=FakePhaseHintSource(),
+        device_link=FakeDeviceLink(),
         context=IntegrationContext(
             SimpleNamespace(ttt=SimpleNamespace(enabled=False)), "."
         ),

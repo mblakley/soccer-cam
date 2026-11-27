@@ -13,10 +13,11 @@ processor is wired for; each item goes to its kind's processor. It also owns:
 * the reprocess-request lifecycle dance — cancel propagation and
   status reporting for in-flight rows, which aren't discrete enqueueable
   jobs
-* still TTT-specific until plan phase 5 (IDeviceLink): service
-  registration + heartbeat for the processing-job feature and the schedule
-  refresh, on the TTT client and behind the ``ttt.enabled`` +
-  ``is_authenticated`` gate, exactly as before
+* the schedule refresh, still behind the ``ttt.enabled`` +
+  ``is_authenticated`` gate on the TTT client
+
+Announcing this install and its heartbeat are not here: they belong to the
+device link (:class:`~video_grouper.task_processors.device_link_processor.DeviceLinkProcessor`).
 
 The processors handle the heavyweight work (FFmpeg, uploads, etc.) and
 do that inside :meth:`QueueProcessor.process_item`, gated by the shared
@@ -28,7 +29,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import platform
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -85,7 +85,7 @@ class TTTPoller(PollingProcessor):
         poll_interval: int = 60,
     ):
         super().__init__(storage_path, config, poll_interval)
-        # Service register / heartbeat + schedule only (IDeviceLink, phase 5).
+        # Only the schedule refresh's session gate still reads the client.
         self.ttt_client = ttt_client
         self.work: IWorkSource = work or NullWorkSource()
         self.clip_request_processor = clip_request_processor
@@ -104,8 +104,6 @@ class TTTPoller(PollingProcessor):
             )
             if proc is not None
         }
-        # TTT-job service registration + heartbeat live here.
-        self._service_id: str | None = None
         # Reprocess-request lifecycle tracking — request_id -> group_dir.
         self._reprocess_tracked: dict[str, Path] = {}
 
@@ -123,23 +121,15 @@ class TTTPoller(PollingProcessor):
         logger.info("TTTPoller: %d feature(s) wired (%s)", len(wired), ", ".join(wired))
 
     async def discover_work(self) -> None:
-        """One tick: device link (TTT, gated), then one ``pending()`` for the
-        wired kinds, then the schedule refresh (TTT, gated). Exceptions are
-        caught + logged per step and per item so one bad endpoint or item
-        can't starve the others."""
-        ttt_ready = self._ttt_session_ready()
-        if ttt_ready and self.ttt_job_processor is not None:
-            # Service registration + heartbeat — owned by the poller because
-            # they're cheap calls that naturally belong on the poll cadence
-            # (and the processor itself doesn't need them to run a job).
-            # TTT client calls until IDeviceLink takes them (plan phase 5).
-            await self._safe_poll("ttt_jobs", self._register_and_heartbeat)
+        """One tick: one ``pending()`` for the wired kinds, then the schedule
+        refresh (TTT, gated). Exceptions are caught + logged per step and per
+        item so one bad endpoint or item can't starve the others."""
         await self._safe_poll("work", self._poll_work)
-        if ttt_ready:
+        if self._ttt_session_ready():
             await self._safe_poll("schedule", self._poll_schedule)
 
     def _ttt_session_ready(self) -> bool:
-        """The TTT gate for the calls still made on the TTT client."""
+        """The TTT gate for the schedule refresh."""
         ttt_cfg = getattr(self.config, "ttt", None)
         if ttt_cfg is None or not getattr(ttt_cfg, "enabled", False):
             return False
@@ -196,48 +186,6 @@ class TTTPoller(PollingProcessor):
         if self.schedule_service is None:
             return
         await asyncio.to_thread(self.schedule_service.refresh)
-
-    # ------------------------------------------------------------------
-    # TTTJob: service registration + heartbeat (TTT client; IDeviceLink in
-    # plan phase 5)
-    # ------------------------------------------------------------------
-
-    async def _register_and_heartbeat(self) -> None:
-        await self._maybe_register_service()
-        await self._maybe_heartbeat()
-
-    async def _maybe_register_service(self) -> None:
-        if self._service_id is not None:
-            return
-        try:
-            machine_name = self.config.ttt.machine_name or platform.node()
-            capabilities = {
-                "ffmpeg": True,
-                "pipeline": self.config.pipeline.is_active(),
-                "camera_type": self.config.camera.type,
-                "camera_ip": self.config.camera.device_ip,
-            }
-            result = await asyncio.to_thread(
-                self.ttt_client.register_service, machine_name, capabilities
-            )
-            self._service_id = result.get("id") if result else None
-            logger.info(
-                "TTT_JOBS: registered service as '%s' (id=%s)",
-                machine_name,
-                self._service_id,
-            )
-        except Exception as exc:
-            logger.error("TTT_JOBS: failed to register service: %s", exc)
-
-    async def _maybe_heartbeat(self) -> None:
-        if not self._service_id:
-            return
-        try:
-            await asyncio.to_thread(
-                self.ttt_client.send_heartbeat, self._service_id, "online"
-            )
-        except Exception as exc:
-            logger.debug("TTT_JOBS: heartbeat failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Reprocess: inline cancel + progress reporting for in-flight rows

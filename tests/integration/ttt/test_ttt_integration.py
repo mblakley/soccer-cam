@@ -14,7 +14,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from video_grouper.api_integrations.ttt_api import TTTApiClient, TTTApiError
-from video_grouper.api_integrations.ttt_reporter import TTTReporter
 
 from .conftest import (
     CAMERA_ID,
@@ -878,62 +877,45 @@ class TestTimeSyncAndReconcile:
 class TestStandaloneOperation:
     """Soccer-cam pipeline works fully without TTT enabled."""
 
-    def test_reporter_disabled_when_no_client(self):
-        """TTTReporter with no client is disabled and all methods are no-ops."""
-        config = MagicMock()
-        config.ttt.camera_id = ""
-        config.ttt.ttt_sync_enabled = False
-        config.ttt.heartbeat_interval = 30
-        reporter = TTTReporter(ttt_client=None, config=config)
-        assert reporter.enabled is False
+    def test_device_link_is_null_without_ttt(self):
+        """TTT off -> the device link is the Null implementation."""
+        from types import SimpleNamespace
+
+        from video_grouper.integrations import build_integrations
+        from video_grouper.integrations.device_link.sources.null import (
+            NullDeviceLink,
+        )
+
+        integrations = build_integrations(
+            SimpleNamespace(ttt=SimpleNamespace(enabled=False)), "."
+        )
+        assert isinstance(integrations.device_link, NullDeviceLink)
 
     @pytest.mark.asyncio
-    async def test_reporter_noop_methods_when_disabled(self):
-        """All reporter methods return None/[] without raising when disabled."""
-        config = MagicMock()
-        config.ttt.camera_id = ""
-        config.ttt.ttt_sync_enabled = False
-        config.ttt.heartbeat_interval = 30
-        reporter = TTTReporter(ttt_client=None, config=config)
+    async def test_null_device_link_sends_nothing(self):
+        """Every device-link verb is a no-op; the reply says nothing."""
+        from video_grouper.integrations.device_link import HeartbeatReply
+        from video_grouper.integrations.device_link.sources.null import (
+            NullDeviceLink,
+        )
 
-        # None of these should raise
-        await reporter.report_camera_status("online")
-        result = await reporter.sync_config()
-        assert result is None
-        await reporter.push_config()
-        commands = await reporter.poll_pending_commands()
-        assert commands == []
+        link = NullDeviceLink()
+        await link.register({"ffmpeg": True})
+        assert await link.heartbeat() == HeartbeatReply()
+        await link.acknowledge_command("cmd-1")
+        await link.complete_command("cmd-1", {"success": True})
 
-    def test_processors_default_ttt_reporter_is_none(self):
-        """All pipeline processors default ttt_reporter to None."""
-        from video_grouper.task_processors.download_processor import DownloadProcessor
-        from video_grouper.task_processors.upload_processor import UploadProcessor
-        from video_grouper.task_processors.video_processor import VideoProcessor
-
-        # DownloadProcessor
-        dp = DownloadProcessor.__new__(DownloadProcessor)
-        dp.ttt_reporter = None  # Mimics default
-        assert dp.ttt_reporter is None
-
-        # VideoProcessor
-        vp = VideoProcessor.__new__(VideoProcessor)
-        vp.ttt_reporter = None
-        assert vp.ttt_reporter is None
-
-        # UploadProcessor
-        up = UploadProcessor.__new__(UploadProcessor)
-        up.ttt_reporter = None
-        assert up.ttt_reporter is None
-
-    def test_camera_poller_skips_registration_without_ttt(self):
-        """CameraPoller with no ttt_reporter skips TTT file registration."""
+    def test_camera_poller_defaults_to_every_camera_enabled(self, tmp_path):
+        """Unwired, a CameraPoller polls every camera (no device link)."""
         from video_grouper.task_processors.camera_poller import CameraPoller
 
-        poller = CameraPoller.__new__(CameraPoller)
-        poller.ttt_reporter = None
-        # The guard `if self.ttt_reporter and new_files_by_group:` means
-        # no TTT calls happen when ttt_reporter is None
-        assert poller.ttt_reporter is None
+        poller = CameraPoller(
+            storage_path=str(tmp_path),
+            config=MagicMock(),
+            camera=MagicMock(),
+            download_processor=MagicMock(),
+        )
+        assert poller.is_camera_enabled("any-camera") is True
 
     @pytest.mark.asyncio
     async def test_job_processor_skips_when_not_authenticated(self):
@@ -990,44 +972,47 @@ class TestStandaloneOperation:
 class TestGracefulDegradation:
     """TTT enabled but unreachable -- pipeline continues working."""
 
-    def _make_failing_reporter(self):
-        """Create a TTTReporter with a client that errors on every method."""
+    def _failing_client(self):
+        """A signed-in TTT client that errors on every method."""
         client = MagicMock()
-        # Make every client method raise
+        client.is_authenticated.return_value = True
         for method_name in [
+            "register_service",
+            "send_heartbeat",
             "update_camera_status",
+            "list_machine_cameras",
+            "get_pending_commands",
+            "acknowledge_command",
+            "complete_command",
             "register_recordings",
             "update_recording_step",
-            "enhanced_heartbeat",
-            "get_pending_commands",
-            "get_camera_config",
-            "push_camera_config",
             "get_high_water_mark",
             "get_team_assignments",
         ]:
             getattr(client, method_name).side_effect = Exception("Network unreachable")
+        return client
 
-        config = MagicMock()
-        config.ttt.camera_id = "test-camera"
-        config.ttt.ttt_sync_enabled = True
-        config.ttt.heartbeat_interval = 30
-        config.ttt.service_id = None
-        return TTTReporter(ttt_client=client, config=config)
+    def _failing_link(self):
+        from types import SimpleNamespace
 
-    @pytest.mark.asyncio
-    async def test_camera_status_survives_network_error(self):
-        """report_camera_status doesn't raise on network error."""
-        reporter = self._make_failing_reporter()
-        await reporter.report_camera_status("online")  # Should not raise
+        from video_grouper.integrations.device_link.sources.ttt import (
+            TTTDeviceLink,
+        )
+
+        return TTTDeviceLink(
+            self._failing_client(),
+            SimpleNamespace(
+                camera_id="test-camera", machine_name="test", heartbeat_interval=30
+            ),
+            machine_id="machine-1",
+        )
 
     def _failing_sink(self):
         from video_grouper.integrations.recordings.sources.ttt import (
             TTTRecordingSink,
         )
 
-        reporter = self._make_failing_reporter()
-        reporter.client.is_authenticated.return_value = True
-        return TTTRecordingSink(reporter.client, "test-camera")
+        return TTTRecordingSink(self._failing_client(), "test-camera")
 
     @pytest.mark.asyncio
     async def test_recording_found_survives_network_error(self):
@@ -1049,24 +1034,25 @@ class TestGracefulDegradation:
         )  # Should not raise
 
     @pytest.mark.asyncio
+    async def test_register_survives_error(self):
+        """Service registration with an unreachable TTT doesn't raise."""
+        await self._failing_link().register({"ffmpeg": True})
+
+    @pytest.mark.asyncio
     async def test_heartbeat_survives_error(self):
-        """report_heartbeat silently continues on error."""
-        reporter = self._make_failing_reporter()
-        await reporter.report_heartbeat()  # Should not raise
+        """A heartbeat with an unreachable TTT doesn't raise and says
+        nothing: camera state unknown, no commands."""
+        from video_grouper.integrations.device_link import HeartbeatReply
+
+        assert await self._failing_link().heartbeat() == HeartbeatReply()
 
     @pytest.mark.asyncio
-    async def test_command_poll_returns_empty_on_error(self):
-        """poll_pending_commands returns [] when TTT is unreachable."""
-        reporter = self._make_failing_reporter()
-        result = await reporter.poll_pending_commands()
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_sync_config_returns_none_on_error(self):
-        """sync_config returns None when TTT is unreachable."""
-        reporter = self._make_failing_reporter()
-        result = await reporter.sync_config()
-        assert result is None
+    async def test_command_reports_survive_error(self):
+        """Acknowledging / completing a command with TTT unreachable doesn't
+        raise."""
+        link = self._failing_link()
+        await link.acknowledge_command("cmd-1")
+        await link.complete_command("cmd-1", {"success": True, "message": "ok"})
 
     @pytest.mark.asyncio
     async def test_job_processor_survives_api_error(self):

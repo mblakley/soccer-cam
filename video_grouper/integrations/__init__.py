@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from .device_link import IDeviceLink
 from .entitlements import IEntitlements
 from .phase_hints import IPhaseHintSource
 from .recordings import IRecordingSink
@@ -33,6 +34,7 @@ class Integrations:
     recordings: IRecordingSink
     work: IWorkSource
     phase_hints: IPhaseHintSource
+    device_link: IDeviceLink
     context: IntegrationContext
 
     def shared_ttt_client(self) -> Any:
@@ -53,6 +55,7 @@ def build_integrations(config: Any, storage_path: str, **services: Any) -> Integ
         recordings=build_port(IRecordingSink, context),
         work=build_port(IWorkSource, context),
         phase_hints=build_port(IPhaseHintSource, context),
+        device_link=build_port(IDeviceLink, context),
         context=context,
     )
 

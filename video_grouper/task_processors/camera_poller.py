@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import pytz
@@ -275,7 +276,9 @@ class CameraPoller(PollingProcessor):
         self.ntfy_service = None
         # Where discovered recordings are reported; the app wires the real sink.
         self.recordings: IRecordingSink = NullRecordingSink()
-        self.ttt_reporter = None
+        # Whether the device link lets this install poll a camera (it can be
+        # moved to another computer remotely); the app wires the real check.
+        self.is_camera_enabled: Callable[[str], bool] = lambda camera_name: True
         self._cleanup_state_path = get_home_cleanup_state_path(storage_path)
         # Reconciliation pass: re-scan the window between the watermark and
         # now when the download queue is idle, and re-queue anything missing
@@ -290,10 +293,8 @@ class CameraPoller(PollingProcessor):
         Poll camera for new files and group them into directories.
         """
         try:
-            # Check if this camera is enabled on this machine (TTT multi-computer)
-            if self.ttt_reporter and not self.ttt_reporter.is_camera_enabled(
-                self.camera.name
-            ):
+            # Check if this camera is enabled on this machine (multi-computer)
+            if not self.is_camera_enabled(self.camera.name):
                 logger.debug(
                     "CAMERA_POLLER: Camera %s disabled on this machine, skipping",
                     self.camera.name,

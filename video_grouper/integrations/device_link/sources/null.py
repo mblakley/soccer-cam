@@ -1,0 +1,32 @@
+"""No device link (TTT off): nothing is sent, every camera stays enabled and
+no commands ever arrive."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from video_grouper.integrations.registry import NULL_PRIORITY, provides
+
+from ..base import HeartbeatReply, IDeviceLink
+
+
+@provides(IDeviceLink)
+class NullDeviceLink(IDeviceLink):
+    name = "none"
+    priority = NULL_PRIORITY
+
+    @classmethod
+    def from_context(cls, context) -> NullDeviceLink:
+        return cls()
+
+    async def register(self, capabilities: dict[str, Any]) -> None:
+        return None
+
+    async def heartbeat(self) -> HeartbeatReply:
+        return HeartbeatReply()
+
+    async def acknowledge_command(self, command_id: str) -> None:
+        return None
+
+    async def complete_command(self, command_id: str, result: dict[str, Any]) -> None:
+        return None

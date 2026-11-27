@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 class TTTJobProcessor(QueueProcessor):
     """Drains the processing-job queue.
 
-    Service registration + heartbeats are owned by :class:`TTTPoller`
-    (they're cheap calls on the poll cadence). This processor's job is
+    Announcing this install as a job-taking service, and its heartbeat, are
+    the device link's (:class:`DeviceLinkProcessor`). This processor's job is
     purely the per-task pipeline: claim → download → combine → trim →
     upload. The entire flow runs under ``ram_heavy``.
     """
@@ -44,7 +44,6 @@ class TTTJobProcessor(QueueProcessor):
         self.video_processor = video_processor
         self.upload_processor = upload_processor
         self.resource_manager = resource_manager
-        self._service_id: str | None = None  # set by TTTPoller via setter
 
     @property
     def queue_type(self) -> QueueType:
