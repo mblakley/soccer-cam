@@ -430,11 +430,12 @@ _CAMERA_TEST_JS = """
 </script>
 """
 
-_STEPS = ("welcome", "storage", "camera", "youtube", "summary")
+_STEPS = ("welcome", "storage", "camera", "ttt", "youtube", "summary")
 _STEP_LABELS = {
     "welcome": "Welcome",
     "storage": "Storage",
     "camera": "Camera",
+    "ttt": "Team Tech Tools",
     "youtube": "YouTube",
     "summary": "Review & save",
 }
@@ -507,7 +508,10 @@ def _youtube_long_uploads_status(storage_path: str | None) -> str | None:
 
 
 def _render_youtube_body(
-    has_secret: bool, has_token: bool, long_uploads_status: str | None = None
+    has_secret: bool,
+    has_token: bool,
+    long_uploads_status: str | None = None,
+    nav: bool = True,
 ) -> str:
     """Render the wizard body for the YouTube step.
 
@@ -578,6 +582,15 @@ def _render_youtube_body(
         '<button class="btn-ghost btn" type="submit">'
         "Skip &mdash; set up later</button></form>"
     )
+    # Nested inside the publisher step's disclosure, that step owns Back/Skip.
+    nav_row = (
+        '<div class="row" style="margin-top:18px;">'
+        '<a class="btn-ghost btn" href="/setup/ttt">Back</a>'
+        f"{skip_form}"
+        "</div>"
+        if nav
+        else ""
+    )
     if not has_secret:
         body = (
             "<p>Soccer-cam can upload your finished games to <strong>your own"
@@ -587,10 +600,7 @@ def _render_youtube_body(
             "<h3>One-time setup</h3>"
             f"{setup_steps}"
             f"{upload_form}"
-            '<div class="row" style="margin-top:18px;">'
-            '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
-            f"{skip_form}"
-            "</div>"
+            f"{nav_row}"
         )
         return body
     if not has_token:
@@ -607,10 +617,7 @@ def _render_youtube_body(
             '<a class="btn" href="/auth/youtube/start?return_to=/setup/youtube">'
             "Authorize with YouTube</a>"
             "</div>"
-            '<div class="row" style="margin-top:18px;">'
-            '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
-            f"{skip_form}"
-            "</div>"
+            f"{nav_row}"
         )
         return body
     if long_uploads_status is not None and long_uploads_status != "allowed":
@@ -657,6 +664,125 @@ def _render_youtube_body(
         "</div>"
     )
     return body
+
+
+def _render_ttt_body(status: dict) -> str:
+    """Wizard body for the Team Tech Tools sign-in step (optional).
+
+    Reuses the dashboard's sign-in endpoints; ``return_to`` brings the user
+    back here, and the YouTube step that follows carries Connect YouTube.
+    """
+    nav = (
+        '<div class="row">'
+        '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
+        '<a class="btn" href="/setup/youtube">Continue</a>'
+        "</div>"
+    )
+    if status.get("authenticated"):
+        ident = html.escape(status.get("identity") or "?")
+        return (
+            f"<p class='ok'>Signed in as <code>{ident}</code>.</p>"
+            "<p class='muted'>Next you can connect the YouTube account your "
+            "games should go to.</p>" + nav
+        )
+    providers = " ".join(
+        f'<a class="btn" href="/login?provider={p}&amp;return_to=/setup/ttt">'
+        f"{p.title()}</a>"
+        for p in ("google", "apple", "facebook", "discord")
+    )
+    return (
+        "<p>Sign in to <strong>Team Tech Tools</strong> to link this camera to "
+        "your team. That also lets soccer-cam upload to YouTube without you "
+        "setting up anything in Google Cloud yourself.</p>"
+        f"<p>{providers}</p>"
+        '<details class="auth-details"><summary>Or sign in with email and '
+        "password</summary>"
+        '<form method="post" action="/login/password" class="auth-form">'
+        '<input type="hidden" name="return_to" value="/setup/ttt">'
+        '<label>Email <input name="email" type="email" autocomplete="username" '
+        "required></label>"
+        '<label>Password <input name="password" type="password" '
+        'autocomplete="current-password" required></label>'
+        '<button type="submit" class="btn">Sign in</button></form></details>'
+        '<details class="auth-details"><summary>Or get a magic link by email'
+        "</summary>"
+        '<form method="post" action="/login/magic" class="auth-form">'
+        '<input type="hidden" name="return_to" value="/setup/ttt">'
+        '<label>Email <input name="email" type="email" autocomplete="email" '
+        "required></label>"
+        '<button type="submit" class="btn">Send magic link</button></form></details>'
+        '<div class="row">'
+        '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
+        '<a class="btn-ghost btn" href="/setup/youtube">Skip &mdash; sign in later</a>'
+        "</div>"
+    )
+
+
+def _render_publisher_youtube_body(conn: dict, byo_body: str) -> str:
+    """YouTube step when the build carries the publisher (TTT) client."""
+    from video_grouper.web.youtube_connect import NO_CHANNEL_HTML
+
+    back = "/setup/youtube"
+    nav_back = '<a class="btn-ghost btn" href="/setup/ttt">Back</a>'
+    skip = (
+        '<form method="post" action="/setup/youtube/skip" class="inline">'
+        '<button class="btn-ghost btn" type="submit">Skip &mdash; set up later'
+        "</button></form>"
+    )
+    if conn["connected"] and conn["quota_project"]:
+        return (
+            "<p class='ok'>YouTube connected. Uploads are billed to your own "
+            "Google Cloud project "
+            f"<code>{html.escape(conn['quota_project'])}</code>.</p>"
+            + (NO_CHANNEL_HTML if conn["no_channel"] else "")
+            + '<div class="row">'
+            + nav_back
+            + '<a class="btn-ghost btn" '
+            f'href="/auth/youtube/connect?return_to={back}">'
+            "Use a different account</a>"
+            '<a class="btn" href="/setup/summary">Continue</a></div>'
+        )
+    if conn["connected"]:
+        label = "Show progress" if conn["provisioning"] else "Set up YouTube quota"
+        return (
+            "<p>YouTube is connected. One more step: soccer-cam sets up a free "
+            "Google Cloud project in your account so your uploads have their "
+            "own daily allowance. Uploads stay paused until this is done.</p>"
+            f'<div class="row">{nav_back}'
+            f'<a class="btn" href="/auth/youtube/quota?return_to={back}">{label}</a>'
+            f"{skip}</div>"
+        )
+    return (
+        "<p>Soccer-cam can upload your finished games to <strong>your</strong> "
+        "YouTube channel. Google will let you choose which account and "
+        "channel to use.</p>"
+        f'<p><a class="btn" href="/auth/youtube/connect?return_to={back}">'
+        "Connect YouTube</a></p>"
+        '<details class="auth-details"><summary>Use my own Google Cloud client '
+        f"instead</summary>{byo_body}</details>"
+        f'<div class="row">{nav_back}{skip}</div>'
+    )
+
+
+def _carry_ttt_tokens(service_storage: str | None, wizard_storage: str) -> None:
+    """Copy the TTT sign-in to the storage folder the wizard just configured.
+
+    The TTT step signs in through the running service, which writes
+    ``ttt/tokens.json`` under *its* storage folder. When the wizard picked a
+    different folder, the restarted service would otherwise come up signed
+    out. Never overwrites a sign-in already there.
+    """
+    if not service_storage or not wizard_storage:
+        return
+    src = Path(service_storage) / "ttt" / "tokens.json"
+    dst = Path(wizard_storage) / "ttt" / "tokens.json"
+    if not src.exists() or dst.exists() or src.resolve() == dst.resolve():
+        return
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes())
+    except OSError as exc:
+        logger.warning("SETUP: could not carry TTT sign-in to %s: %s", dst, exc)
 
 
 def _render_steps(active: str) -> str:
@@ -769,8 +895,12 @@ def _camera_body(state) -> str:
     )
 
 
-def build_router(config_path: Path) -> APIRouter:
-    """Build the wizard router. Persists to ``config_path`` on submit."""
+def build_router(config_path: Path, service_storage: str | None = None) -> APIRouter:
+    """Build the wizard router. Persists to ``config_path`` on submit.
+
+    ``service_storage`` is the running service's storage folder, where the
+    TTT sign-in writes ``ttt/tokens.json``. ``None`` hides TTT status.
+    """
     router = APIRouter(prefix="/setup")
 
     @router.get("/", response_class=HTMLResponse)
@@ -1238,7 +1368,34 @@ def build_router(config_path: Path) -> APIRouter:
         state.camera_ip = camera_ip.strip()
         state.camera_username = camera_username.strip() or "admin"
         state.camera_password = camera_password
-        return _redirect_with_cookie("/setup/youtube", token)
+        return _redirect_with_cookie("/setup/ttt", token)
+
+    def _ttt_status() -> dict:
+        if not service_storage:
+            return {"authenticated": False}
+        from video_grouper.web.auth_server import _read_status
+
+        return _read_status(Path(service_storage) / "ttt" / "tokens.json")
+
+    @router.get("/ttt", response_class=HTMLResponse)
+    def ttt_get(request: Request) -> HTMLResponse:
+        token, _ = get_or_create(request.cookies.get(cookie_name()))
+        resp = HTMLResponse(
+            _page(
+                "ttt",
+                "Team Tech Tools",
+                "Link this camera to your team. Optional.",
+                _render_ttt_body(_ttt_status()),
+            )
+        )
+        resp.set_cookie(
+            key=cookie_name(),
+            value=token,
+            max_age=3600,
+            httponly=True,
+            samesite="lax",
+        )
+        return resp
 
     @router.get("/youtube", response_class=HTMLResponse)
     def youtube_get(request: Request) -> HTMLResponse:
@@ -1250,10 +1407,17 @@ def build_router(config_path: Path) -> APIRouter:
         yt_dir = Path(state.storage_path or "") / "youtube"
         has_secret = (yt_dir / "client_secret.json").exists()
         has_token = (yt_dir / "token.json").exists()
-        long_uploads = (
-            _youtube_long_uploads_status(state.storage_path) if has_token else None
-        )
-        body = _render_youtube_body(has_secret, has_token, long_uploads)
+        from video_grouper.web.youtube_connect import youtube_connection
+
+        conn = youtube_connection(Path(state.storage_path or ""))
+        if conn["available"] and not (has_token and not conn["connected"]):
+            byo = _render_youtube_body(has_secret, False, nav=False)
+            body = _render_publisher_youtube_body(conn, byo)
+        else:
+            long_uploads = (
+                _youtube_long_uploads_status(state.storage_path) if has_token else None
+            )
+            body = _render_youtube_body(has_secret, has_token, long_uploads)
         resp = HTMLResponse(
             _page(
                 "youtube",
@@ -1385,6 +1549,7 @@ def build_router(config_path: Path) -> APIRouter:
                 detail=f"Could not write {config_path}: {exc}",
             ) from exc
 
+        _carry_ttt_tokens(service_storage, state.storage_path)
         discard(token)
         # Land on /config so the user can immediately tweak integrations.
         resp = RedirectResponse(url="/config?saved=1", status_code=303)

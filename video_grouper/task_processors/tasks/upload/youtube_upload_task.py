@@ -81,9 +81,9 @@ class YoutubeUploadTask(BaseUploadTask):
             # Get credentials and token file paths
             credentials_file, token_file = get_youtube_paths(storage_path)
 
-            # Check if credentials file exists
-            if not os.path.exists(credentials_file):
-                logger.error(f"YouTube credentials file not found: {credentials_file}")
+            # A publisher-client install has token.json but no client_secret.json.
+            if not os.path.exists(credentials_file) and not os.path.exists(token_file):
+                logger.error(f"YouTube is not connected (no {token_file})")
                 return False
 
             # Resolve the group directory path
