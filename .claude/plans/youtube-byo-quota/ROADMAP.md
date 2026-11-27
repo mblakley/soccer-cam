@@ -1,8 +1,10 @@
 # YouTube onboarding — user-owned quota with a publisher OAuth client
 
-**Status**: E1 COMPLETE — PASSED. Design confirmed viable; E1.6 and E2 next.
+**Status**: E1 PASSED, E1.6 DONE (2026-11-27). Auto-create adopted
+(2026-11-27) — E1.7 next, then E2.
 **Goal**: Cut the per-user Google Cloud Console walkthrough down to a sign-in
-plus two console clicks. The API quota is **always** supplied by the user's own
+plus a one-time Terms of Service acceptance; the app creates the project and
+enables the API itself. The API quota is **always** supplied by the user's own
 Cloud project; only the OAuth client varies.
 
 Two supported configurations:
@@ -34,6 +36,25 @@ every install. The `x-goog-user-project` quota-project override is what breaks
 that coupling. E1 confirmed it works -- see results below.
 
 ## Target flow
+
+**Revised 2026-11-27 — auto-create** (see "Decided along the way"). The app
+creates the project and enables the API through the Resource Manager / Service
+Usage APIs using a setup-only token, so the user's part is sign-in + Allow and
+the one-time GCP Terms. E1.7 proves this out.
+
+```
+1. Wizard: "Sign in with Google"   -> publisher client, youtube.* scopes
+2. Wizard: "Set up your quota"     -> second, setup-only consent:
+                                      cloudplatformprojects + service.management
+3. projects.create(soccer-cam-<8>) -> TOS violation? open the GCP welcome page,
+                                      user accepts Terms, wizard retries
+4. Poll the create operation, then services.enable(youtube.googleapis.com)
+5. Poll channels.list with x-goog-user-project (states: E1.6 table)
+6. 200 -> revoke the setup-only token, id -> config, Ready
+```
+
+The deep-link flow below is the **fallback** (setup consent declined, or the
+API path fails) and remains the E1.6-measured baseline:
 
 ```
 1. Wizard: "Sign in with Google"   -> system browser, publisher client,
@@ -75,8 +96,8 @@ Established 2026-08-22. Re-check anything Google-side before relying on it.
 | F4 | `youtube.upload` is **sensitive**, not restricted → verification needs justification + demo video, no CASA assessment | Google verification docs |
 | F5 | `projects.create` needs `cloud-platform` **or** `cloudplatformprojects`; `services.enable` needs `cloud-platform` **or** `service.management` — all sensitive | Resource Manager v3 / Service Usage v1 |
 | F6 | `projects.create` fails until the account has accepted GCP ToS (violation type `TOS`); no API accepts it | Resource Manager, confirmed reports |
-| F7 | `projectcreate` **ignores** `projectName`/`projectId` params; id is auto-generated random (observed `arctic-operand-506401-h6`) and only changeable via *Edit* before Create | observed in browser |
-| F8 | Consumer accounts have a project quota (~25; observed "23 projects remaining") | observed in browser |
+| F7 | `projectcreate` **ignores** `projectName`/`projectId` params; id is auto-generated random (observed `arctic-operand-506401-h6`, and `adroit-archive-516017-t8` on a fresh account 2026-11-27) and only changeable via *Edit* before Create | observed in browser |
+| F8 | Consumer accounts have a project quota that **varies by account**: "23 projects remaining" (Aug), "12 projects remaining" on a never-used account (2026-11-27) | observed in browser |
 | F9 | `console.cloud.google.com/apis/enableflow?apiid=<api>&project=<id>` is a real one-click enable deep link | Google Chat API setup docs |
 | F10 | Google blocks WebDriver-driven sign-in; every workaround is detection evasion → not shippable for an app seeking OAuth verification | Google sign-in behavior |
 | F11 | Unlisted uploads work today from the current BYO setup — the docs' "unverified projects locked to private" note does not bite our existing project | Mark, in production |
@@ -87,7 +108,7 @@ Established 2026-08-22. Re-check anything Google-side before relying on it.
 - **Q2** Does it work with `youtube.*` scopes only, or must the token carry `cloud-platform`?
 - **Q3** Is quota actually decremented on the header project rather than the client's?
 - **Q4** Can a *fresh*, unaudited project upload `unlisted`? (F11 covers our aged project, not a new one.)
-- **Q5** What exact status/reason does each failure state return? The wizard's auto-advance is only as reliable as our ability to tell them apart.
+- **Q5** ~~What exact status/reason does each failure state return?~~ **Answered 2026-11-27 by E1.6** — see the results table there.
 - **Q6** Do refresh tokens survive past 7 days once TTT's app is in *Production*?
 
 ---
@@ -171,7 +192,7 @@ absent; project exists + API disabled; project exists + API enabled; caller
 lacks `serviceusage.services.use`. Also confirm F6 and F7 hold for a genuinely
 fresh account.
 
-### E1.6 run sheet — in progress 2026-11-27 (handoff)
+### E1.6 run sheet — 2026-11-27 (executed; results below)
 
 Tooling: `e1_quota_project_probe.py` gained `new-id`, `e16-probe` (one call per
 situation, classified) and `e16-watch` (polls `channels.list` with the quota
@@ -218,11 +239,96 @@ OAuth consent "Allow"; Claude may drive everything else in Chrome):
    observed lag), update Q5 + F6/F7/F8, commit + push on this branch. Then the
    wizard's state list for E4 comes from that table.
 
+### E1.6 results — 2026-11-27, DONE
+
+Rig change (more realistic than the run sheet): instead of adding the fresh
+account as a test user, `soccer-cam-e1-client` was **published to Production**
+(unverified). Branding needed a home page, privacy link and authorized domain
+before *Publish app* un-greyed; filled with the GitHub repo URL / `github.com`.
+So the fresh account went through exactly what a stranger sees before E2:
+account chooser → "Google hasn't verified this app" → Advanced → Go to
+(unsafe) → Allow. Token carried only the three `youtube.*` scopes, with a
+refresh token. Revert with *Audience → Back to testing* if wanted.
+
+All Cloud Console clicks after sign-in were made by Claude in Chrome as the fresh
+account, to record the exact user path. Mark clicked the GCP Terms *Agree* and
+the OAuth *Allow*.
+
+**State catalogue** (`channels.list?part=id&mine=true`, header = quota project):
+
+| Situation | HTTP | `error.status` | `errors[0].reason` | `details` reason | `classify()` | Message (start) |
+|---|---|---|---|---|---|---|
+| No header, account has no channel (U8) | 200 | — | — | — | `ok_no_channel` | empty `items` |
+| Project id does not exist | 400 | `INVALID_ARGUMENT` | `badRequest` | `USER_PROJECT_DENIED` | `project_denied` | "Project 'projects/<id>' not found or deleted." |
+| User's own id, not yet created | 400 | `INVALID_ARGUMENT` | `badRequest` | `USER_PROJECT_DENIED` | `project_denied` | identical to the row above |
+| Someone else's project | 403 | `PERMISSION_DENIED` | `forbidden` | `USER_PROJECT_DENIED` | `project_denied` | "Caller does not have required permission to use project … serviceusage.services.use" |
+| Own project, seconds old (IAM propagating) | 403 | `PERMISSION_DENIED` | `forbidden` | `USER_PROJECT_DENIED` | `project_denied` | identical to the row above |
+| Own project, API not enabled | 403 | `PERMISSION_DENIED` | `accessNotConfigured` | `SERVICE_DISABLED` | `service_disabled` | "YouTube Data API v3 has not been used in project … or it is disabled." |
+| Own project, API enabled | 200 | — | — | — | `ok_no_channel` | empty `items` (fresh account has no channel) |
+
+**Lags** (watcher polling every 5 s, so ±5 s):
+
+| Transition | Lag |
+|---|---|
+| *Create* clicked (12:20:28) → first `service_disabled` (12:22:00) | **~92 s** |
+| then flapped: `service_disabled` → 403 `USER_PROJECT_DENIED` (12:22:10) → `service_disabled` (12:22:15) | ~15 s of flapping |
+| *Enable* clicked (12:23:00) → `ok_no_channel` (12:23:07) | **~7 s** |
+
+**Findings**
+
+- **"ToS not accepted" is invisible to the YouTube API.** No project can exist
+  without it, so it reads exactly like "project absent" (400). Via the deep-link
+  path the wizard cannot say "accept the Terms first"; the auto-create path can,
+  because `projects.create` returns a `TOS` violation (F6) — another reason for
+  E1.7.
+- **The wizard must key on HTTP status + `errors[0].reason`, not `classify()`.**
+  `project_denied` lumps a 400 (absent — keep waiting) with a 403 (no access).
+- **The 403 "no access" state is transient on a brand-new own project.** It
+  appeared for one poll ~10 s after `service_disabled` first showed. So 403
+  `forbidden`/`USER_PROJECT_DENIED` within ~2 min of creation means *keep
+  waiting*; only a persistent one means "that's not your project".
+- **States are not monotonic** — never auto-advance on a single poll; require
+  the state to hold (e.g. 2 consecutive polls) before advancing.
+- **F6 confirmed** on a never-used account: first Cloud Console visit shows the
+  "Welcome" dialog (country + Terms checkbox + *Agree and continue*). Once
+  accepted, `projectcreate` goes straight to the form.
+- **F7 confirmed** (random pre-filled id). **F8 revised** — 12 remaining, not ~25.
+- E7 (disable after enable) was not run; it's lower value now that auto-create
+  can re-enable via API. Fold it into E1.7.
+
+**Exact user actions, deep-link path** (the fallback): (1) choose account,
+(2) unverified-app warning: Advanced → Go to (unsafe) *[gone after E2]*,
+(3) Allow, (4) GCP Welcome: country + tick Terms + Agree and continue,
+(5) `projectcreate`: Edit → type id → Create, (6) enableflow: Next → Enable.
+About 10 interactions over four Google pages — the reason auto-create was adopted.
+
+## E1.7 — auto-create the user's project via API
+
+**Adopted 2026-11-27. Needs a second never-used Gmail account** (to see the
+`TOS` violation before acceptance) **and** the existing fresh account (Terms
+already accepted, 11 projects left).
+
+Goal: prove the user's part shrinks to *Allow* + the one-time Terms, and capture
+everything the wizard needs to drive it.
+
+| Step | What | Answers |
+|---|---|---|
+| 1 | Second, setup-only consent on `soccer-cam-e1-client`: `cloudplatformprojects` + `service.management` (no `cloud-platform`). Screenshot the consent wording | How scary is it, exactly |
+| 2 | `projects.create` **before** Terms (account 2) | Exact `TOS` envelope + the URL to send the user to |
+| 3 | User accepts Terms; retry `projects.create(soccer-cam-<8>)`; poll the operation | Create → done lag; does the YouTube-side ~92 s lag still apply after the op completes |
+| 4 | `services.enable(youtube.googleapis.com)`; poll the operation, then `channels.list` with header | Enable lag via API vs ~7 s via console |
+| 5 | Revoke the setup-only token; confirm the youtube token still refreshes and uploads | Whether revoking one grant kills the other (incremental auth / `include_granted_scopes`) |
+| 6 | `services.disable` then probe; re-enable via API (former E7) | Wizard can self-heal a disabled API |
+| 7 | Re-run on an account at its project quota (F8) | Envelope for "no projects left" |
+
+Gate: if step 1's consent is unacceptable to show a soccer parent, or step 5
+shows the grants can't be separated, fall back to the deep-link flow and record why.
+
 ## The rest — gated on E1
 
 | # | What | Verifies |
 |---|---|---|
-| E2 | Stand up the publisher OAuth client: branded consent screen, published to **Production**, submit brand + sensitive-scope verification. **No YouTube API quota-extension audit is needed** -- the publisher project never serves quota | Consent screen loses the warning. ~2 hrs to submit, days-to-weeks for Google |
+| E2 | Stand up the publisher OAuth client: branded consent screen, published to **Production**, submit brand + sensitive-scope verification (youtube.* **plus** the E1.7 setup scopes `cloudplatformprojects` + `service.management`). **No YouTube API quota-extension audit is needed** -- the publisher project never serves quota | Consent screen loses the warning. ~2 hrs to submit, days-to-weeks for Google |
 | E3 | Mint a token against the Production client, park it, re-check at day 8. Also check the token response for `refresh_token_expires_in` | Q6 — kills the weekly re-auth treadmill |
 | E4 | Wire it up: re-enter through `authenticate_youtube_embedded()`, thread the quota header through the API client, rebuild the wizard step | Full game (raw + processed + playlist) lands unlisted, quota moves on the user's project |
 | E5 | Negative paths: wrong project id, API not enabled, ToS unaccepted, no `serviceusage.services.use`, project-quota exhausted (F8), **and header missing/invalid** | Each produces a fixable wizard message; the missing-header case refuses to upload rather than silently billing the publisher project |
@@ -240,7 +346,16 @@ OAuth consent "Allow"; Claude may drive everything else in Chrome):
   step and polls for completion, not that it drives the clicks. The Selenium
   TeamSnap dev-portal automation that suggested otherwise was orphaned dead code
   and has been removed on `chore/remove-teamsnap-dev-portal-automation`.
-- **No auto-creation of the user's project.** It needs two sensitive scopes (F5)
+- **2026-11-27 — Auto-create the user's project (reverses the entry below).**
+  E1.6 measured the deep-link path at ~10 interactions across four Google pages
+  for a user who doesn't want to touch Cloud Console at all. The Terms step stays
+  either way (F6), but auto-create removes project creation, id entry and API
+  enablement, and lets the wizard detect "Terms not accepted" directly (the
+  YouTube API cannot). Cost accepted: two more sensitive scopes in E2's
+  verification, requested in a separate setup-only consent and revoked after
+  use. Must be settled before E2 is submitted. Proven out by E1.7; the
+  deep-link flow stays as the fallback.
+- ~~**No auto-creation of the user's project.**~~ *(Reversed 2026-11-27, above.)* It needs two sensitive scopes (F5)
   and still cannot skip the ToS trip (F6), so it buys ~3 clicks at the cost of a
   scarier consent screen and a harder review. Revisit only if E1.6 shows ToS is
   already accepted for a meaningful share of accounts. Note that adding scopes to
