@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import av
 import pytest
 
 from video_grouper.utils.youtube_upload import (
@@ -26,6 +27,10 @@ from video_grouper.utils.youtube_upload import (
     YouTubeUploader,
     YouTubeUploadRejectedError,
 )
+
+# conftest's autouse mock_ffmpeg patches av.open during every test; keep the
+# real one for the tests that read real files.
+_REAL_AV_OPEN = av.open
 
 
 def _uploader(long_uploads_status=None):
@@ -53,36 +58,93 @@ def _channels_response(status):
 
 
 class TestUploadGate:
-    """No upload is attempted at all while the channel is unverified.
+    """Long uploads wait for channel verification; short ones go through.
 
-    This is deliberately stricter than YouTube's own rule. YouTube only
-    refuses videos over 15 minutes, so a short clip would technically go
-    through -- but soccer-cam exists to deliver full games, and a channel that
-    cannot receive them is not usable. Length is not consulted.
+    Unverified channels keep videos up to 15 minutes and destroy longer ones
+    after accepting them (measured 2026-11-27: 15 s..15:30 kept, 20:00 and
+    60:00 destroyed within 15 s). So only uploads over 15:00 -- or whose
+    length can't be read -- are held; clips and reels upload normally.
     """
 
+    @staticmethod
+    def _duration(seconds):
+        return patch(
+            "video_grouper.utils.youtube_upload._video_duration_seconds",
+            return_value=seconds,
+        )
+
     @pytest.mark.parametrize("status", ["eligible", "disallowed"])
-    def test_blocks_every_upload_when_unverified(self, tmp_path, status):
+    def test_holds_a_long_upload_on_an_unverified_channel(self, tmp_path, status):
         video = tmp_path / "game.mp4"
         video.write_bytes(b"x" * 32)
         up = _uploader(long_uploads_status=status)
 
-        with pytest.raises(YouTubeChannelNotVerifiedError) as exc:
+        with (
+            self._duration(90 * 60),
+            pytest.raises(YouTubeChannelNotVerifiedError) as exc,
+        ):
             up.upload_video(str(video), "t", "d")
 
         assert "youtube.com/verify" in str(exc.value)
         assert "15 minutes" in str(exc.value)
         up.youtube.videos.return_value.insert.assert_not_called()
 
-    def test_length_is_not_consulted(self, tmp_path):
-        """A two-second clip is blocked exactly like a 90-minute game."""
-        video = tmp_path / "tiny.mp4"
-        video.write_bytes(b"x" * 8)
+    def test_unreadable_length_is_treated_as_long(self, tmp_path):
+        video = tmp_path / "game.mp4"
+        video.write_bytes(b"not a video")
         up = _uploader(long_uploads_status="eligible")
 
-        with pytest.raises(YouTubeChannelNotVerifiedError):
+        with self._duration(None), pytest.raises(YouTubeChannelNotVerifiedError):
             up.upload_video(str(video), "t", "d")
         up.youtube.videos.return_value.insert.assert_not_called()
+
+    @pytest.mark.parametrize("seconds", [30, 10 * 60, 15 * 60])
+    def test_a_short_upload_goes_through_unverified(self, tmp_path, seconds):
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"x" * 32)
+        up = _uploader(long_uploads_status="eligible")
+        up.youtube.videos.return_value.insert.side_effect = RuntimeError("stop")
+
+        with self._duration(seconds):
+            up.upload_video(str(video), "t", "d")
+
+        up.youtube.videos.return_value.insert.assert_called_once()
+        # Short uploads never need the channel's status at all.
+        up.youtube.channels.return_value.list.assert_not_called()
+
+    def test_one_second_over_the_limit_is_held(self, tmp_path):
+        video = tmp_path / "game.mp4"
+        video.write_bytes(b"x" * 32)
+        up = _uploader(long_uploads_status="eligible")
+        with self._duration(15 * 60 + 1), pytest.raises(YouTubeChannelNotVerifiedError):
+            up.upload_video(str(video), "t", "d")
+
+    def test_reads_a_real_video_length(self, tmp_path):
+        from video_grouper.utils.youtube_upload import _video_duration_seconds
+
+        path = tmp_path / "two_seconds.mp4"
+        junk = tmp_path / "junk.mp4"
+        junk.write_bytes(b"not a video")
+        with patch("av.open", _REAL_AV_OPEN):
+            self._write_video(path)
+            assert _video_duration_seconds(str(path)) == pytest.approx(2.0, abs=0.3)
+            assert _video_duration_seconds(str(junk)) is None
+
+    @staticmethod
+    def _write_video(path):
+        import numpy as np
+
+        with av.open(str(path), "w") as c:
+            s = c.add_stream("libx264", rate=5)
+            s.width, s.height, s.pix_fmt = 64, 64, "yuv420p"
+            for _ in range(10):
+                frame = av.VideoFrame.from_ndarray(
+                    np.zeros((64, 64, 3), dtype=np.uint8), format="rgb24"
+                )
+                for packet in s.encode(frame):
+                    c.mux(packet)
+            for packet in s.encode():
+                c.mux(packet)
 
     def test_parks_like_a_quota_error(self):
         """The queue processor keys on YouTubeQuotaError to park and re-probe.

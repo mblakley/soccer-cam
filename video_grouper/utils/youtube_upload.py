@@ -62,6 +62,26 @@ MAX_RETRIES = 5
 # The discarded 16-minute test video still reported uploadStatus="uploaded"
 # at t+10s and was gone by t+20s, so presence alone -- checked early -- reports
 # success for a video that is about to be destroyed.
+# Unverified channels keep videos up to 15 minutes and destroy longer ones
+# after accepting them. Measured 2026-11-27 on an unverified channel: 15 s to
+# 15:30 all reached "processed" and stayed (checked at +38..63 min); 20:00 and
+# 60:00 were accepted and gone within 15 s (16:00 likewise on 2026-08-23).
+LONG_UPLOAD_LIMIT_SECONDS = 15 * 60
+
+
+def _video_duration_seconds(path: str) -> float | None:
+    """Container duration in seconds, or None if it can't be read."""
+    try:
+        import av
+
+        with av.open(path) as container:
+            if container.duration:
+                return container.duration / av.time_base
+    except Exception:
+        return None
+    return None
+
+
 UPLOAD_SETTLE_TIMEOUT_SECONDS = 180
 UPLOAD_SETTLE_POLL_SECONDS = 10
 
@@ -611,20 +631,22 @@ class YouTubeUploader:
             logger.error(f"Video file not found: {video_path}")
             return None
 
-        # Do not attempt any upload while the channel is unverified. YouTube
-        # does not reject an over-length upload -- it accepts it, returns an
-        # id, and then destroys the video -- so this has to happen before we
-        # send anything. We gate every upload rather than only ones over 15
-        # minutes: an unverified channel cannot receive the games this exists
-        # to deliver, and uploading clips into a channel whose games are all
-        # missing produces a confusing half-state.
-        status = self.get_long_uploads_status()
+        # An unverified channel destroys anything over 15 minutes after
+        # accepting it (no refusal, no reason), so a long upload has to be
+        # held BEFORE anything is sent. Shorter videos -- clips, reels -- are
+        # kept, so they go through. A video whose length can't be read is
+        # treated as long. Decided 2026-11-27 on measurements (see
+        # LONG_UPLOAD_LIMIT_SECONDS).
+        duration = _video_duration_seconds(video_path)
+        is_long = duration is None or duration > LONG_UPLOAD_LIMIT_SECONDS
+        status = self.get_long_uploads_status() if is_long else None
         if status is not None and status != "allowed":
             raise YouTubeChannelNotVerifiedError(
-                f"YouTube uploads are blocked: this channel is not verified "
-                f"(longUploadsStatus={status}), so YouTube will not accept "
-                "videos longer than 15 minutes. soccer-cam is holding all "
-                "uploads until the channel is verified. To fix it: open "
+                f"Holding {os.path.basename(video_path)}: this YouTube channel "
+                f"is not verified (longUploadsStatus={status}), and YouTube "
+                "deletes videos longer than 15 minutes from unverified "
+                "channels. Clips and other short videos still upload. To fix "
+                "it: open "
                 "https://www.youtube.com/verify, sign in as the Google "
                 "account this install is authorized under, and choose text "
                 "message or voice call to receive a code. Held uploads then "
