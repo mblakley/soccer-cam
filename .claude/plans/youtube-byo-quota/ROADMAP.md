@@ -80,7 +80,7 @@ the same poll covers it.
   `video_grouper/utils/youtube_upload.py`; wizard step at
   `web/setup/router.py:294`; dashboard re-auth in `web/auth_server.py`.
 - **Dormant**: `authenticate_youtube_embedded()` + `EMBEDDED_CLIENT_CONFIG`
-  (project `team-tech-tools-hh`), fed at build time by `_youtube_secrets.py`
+  (project `team-tech-tools-hh`; replaced by `team-tech-tools-app` in E2), fed at build time by `_youtube_secrets.py`
   from `build-installer.ps1:40` and `build-windows-service.yml:70`. No
   production callers — this is the hook the new flow re-enters through.
 
@@ -353,6 +353,33 @@ shows the grants can't be separated, fall back to the deep-link flow and record 
 | E6 | Keep `make_youtube_flow()` BYO alive behind a disclosure | Escape hatch if TTT's client is ever suspended — it is a single point of failure for *identity* even though quota stays distributed |
 | E7 | Re-run the probe at service startup, not just setup | A project that later loses its API enablement surfaces as a wizard state, not upload failures |
 | E8 | Customer-perspective run: clean Windows box, fresh Google account, CI-built installer with real `_youtube_secrets.py`, no dev shortcuts | The whole thing, as a real camera manager |
+
+
+### E2 progress — 2026-11-27
+
+Publisher project: **`team-tech-tools-app`** ("Team Tech Tools", org
+teamtechtools.com, owner admin@teamtechtools.com, number 435575856533).
+
+- [x] Cloud Resource Manager + Service Usage APIs enabled.
+- [x] Data Access: `youtube`, `youtube.upload`, `youtube.readonly`,
+      `cloudplatformprojects`, `service.management` (sensitive); `openid`,
+      `userinfo.email` (non-sensitive).
+- [x] Branding: home/privacy/terms on www.teamtechtools.com; authorized domains
+      `teamtechtools.com` plus both TTT Supabase projects (Preview
+      `opirofrhbffpszrnzsyp`, Prod `zmuwmngqqiaectpcqlfj`).
+- [x] Published to **Production** (was Testing). Until verification the
+      unverified-app warning and the 100-user sensitive-scope cap still apply.
+- [x] Desktop client `soccer-cam publisher (production)`; its id/secret are the
+      repo secrets `SOCCER_CAM_YT_CLIENT_ID` / `SOCCER_CAM_YT_CLIENT_SECRET`.
+      One client serves TTT Preview and Prod alike: it only redirects to
+      loopback, and the TTT environment is chosen by `[TTT].api_base_url`.
+- [ ] Submit verification (Verification Center). Needs teamtechtools.com
+      verified in Search Console for admin@teamtechtools.com, a demo video of
+      each scope in use, and the scope justifications.
+
+Note: this consent screen is shared with TTT Preview's Google sign-in
+(`Web client 1`, redirect to the Preview Supabase callback), so its app name
+and publishing status apply there too.
 
 ## Decided along the way
 

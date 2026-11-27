@@ -121,7 +121,7 @@ def _load_embedded_client_config():
     return {
         "installed": {
             "client_id": YT_CLIENT_ID,
-            "project_id": "team-tech-tools-hh",
+            "project_id": "team-tech-tools-app",
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
