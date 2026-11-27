@@ -256,6 +256,9 @@ class VideoGrouperApp:
 
         self.ntfy_processor = None
         if self.config.ntfy.enabled:
+            from video_grouper.task_processors.services.calendar_service import (
+                CalendarService,
+            )
             from video_grouper.task_processors.services.match_info_service import (
                 MatchInfoService,
             )
@@ -300,6 +303,7 @@ class VideoGrouperApp:
                 teamsnap_service=teamsnap_service,
                 playmetrics_service=playmetrics_service,
                 ntfy_service=ntfy_service,
+                calendar_service=CalendarService(self.config, self.config.app),
             )
 
             # Set the services in the processor

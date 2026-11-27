@@ -317,7 +317,7 @@ Each video group directory gets a `state.json` tracking file states: `pending â†
 
 ### Configuration
 
-Pydantic models in `video_grouper/utils/config.py`. Loaded from INI file (default: `shared_data/config.ini`). Sections: CAMERA, STORAGE, APP, PROCESSING, LOGGING, TEAMSNAP, PLAYMETRICS, YOUTUBE, NTFY, AUTOCAM.
+Pydantic models in `video_grouper/utils/config.py`. Loaded from INI file (default: `shared_data/config.ini`). Sections: CAMERA, STORAGE, APP, PROCESSING, LOGGING, TEAMSNAP, PLAYMETRICS, CALENDAR (iCal schedule feed), YOUTUBE, NTFY, AUTOCAM.
 
 ### External Integrations
 

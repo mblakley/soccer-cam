@@ -36,6 +36,7 @@ class MatchInfoService:
         playmetrics_service: PlayMetricsService,
         ntfy_service: NtfyService,
         schedule_service=None,
+        calendar_service=None,
     ):
         """
         Initialize match info service.
@@ -50,6 +51,8 @@ class MatchInfoService:
         self.playmetrics_service = playmetrics_service
         self.ntfy_service = ntfy_service
         self.schedule_service = schedule_service
+        # Calendar-feed source (Byga / Google Calendar), beside TeamSnap and PlayMetrics.
+        self.calendar_service = calendar_service
 
     def _get_recording_timespan(
         self, group_dir: str
@@ -226,6 +229,24 @@ class MatchInfoService:
             except Exception as e:
                 logger.error(f"Error getting game from PlayMetrics: {e}")
 
+        # Try a calendar feed (Byga / Google Calendar)
+        if self.calendar_service is not None and self.calendar_service.enabled:
+            try:
+                logger.info("Querying calendar feed for games...")
+                calendar_game = self.calendar_service.find_game_for_recording(
+                    recording_start, recording_end
+                )
+                if calendar_game:
+                    logger.info(
+                        f"Found calendar game: {calendar_game.get('team_name', 'Unknown')} "
+                        f"vs {calendar_game.get('opponent_name', 'Unknown')}"
+                    )
+                    games.append(calendar_game)
+                else:
+                    logger.info("No calendar game found for the recording timespan")
+            except Exception as e:
+                logger.error(f"Error getting game from calendar feed: {e}")
+
         logger.info(f"Total games found from APIs: {len(games)}")
         for i, game in enumerate(games):
             logger.info(f"Game {i + 1}: {game}")
@@ -299,6 +320,18 @@ class MatchInfoService:
                 "location": game.get("location_name", ""),
             }
             logger.info(f"TeamSnap conversion result: {match_info}")
+            return match_info
+        elif source == "Calendar":
+            match_info = {
+                "my_team_name": game.get("team_name", ""),
+                "opponent_team_name": game.get("opponent_name", ""),
+                "location": "Home" if game.get("is_home", True) else "Away",
+            }
+            start_time = game.get("start_time")
+            if start_time:
+                match_info["date"] = start_time.strftime("%Y-%m-%d")
+                match_info["time"] = start_time.strftime("%H:%M")
+            logger.info(f"Calendar conversion result: {match_info}")
             return match_info
         elif source == "PlayMetrics":
             # Use is_home flag from API to set "Home"/"Away" as location

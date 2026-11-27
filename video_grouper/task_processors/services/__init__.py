@@ -2,6 +2,7 @@
 Services module for external API integrations.
 """
 
+from .calendar_service import CalendarService
 from .cleanup_service import CleanupService
 from .match_info_service import MatchInfoService
 from .ntfy_service import NtfyService
@@ -14,4 +15,5 @@ __all__ = [
     "NtfyService",
     "MatchInfoService",
     "CleanupService",
+    "CalendarService",
 ]

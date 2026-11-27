@@ -2149,3 +2149,18 @@ argument for offering a re-scan from Settings later, not only during onboarding.
 
 **Not done:** no attempt at Reolink's or Dahua's proprietary UDP discovery broadcasts. The HTTP
 fingerprint is vendor-documented behaviour and needed no reverse engineering.
+
+## Decision: calendar-feed schedule source for owners not on TTT (2026-11-27)
+
+Implements the 2026-11-26 decision (calendar feeds in both repos). `[CALENDAR]` takes the iCal /
+webcal address (`url`) and the team label (`team_label`); `CalendarService` matches a recording
+against that team's games with the shared `select_best_game`, queried after TeamSnap and
+PlayMetrics. With TTT in use, TTT reads the feed instead and soccer-cam gets games from TTT's
+schedule (team-tech-tools #169).
+
+**Shape of a real Byga feed** (Hilton Heat, read 2026-11-27): the member's personal calendar, mixing
+every club group they belong to; team events are titled `<Type>: <team> (<location>)` with TZID
+times, club events have no type prefix. It held 26 practices and no games (indoor offseason), so
+game titles are parsed from the usual forms (`Game: <team> vs|@|at <opponent>`, `Match: ...`).
+**Re-check against a real Byga game title once spring games are posted.** The feed is re-read at
+most every 30 minutes.

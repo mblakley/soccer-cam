@@ -14,6 +14,7 @@ from ..utils.paths import (
 from .base_polling_processor import PollingProcessor
 from .download_processor import DownloadProcessor
 from .services import (
+    CalendarService,
     CleanupService,
     MatchInfoService,
     NtfyService,
@@ -97,7 +98,10 @@ class StateAuditor(PollingProcessor):
         # Create NTFY service for the match info service and general use
         self.ntfy_service = NtfyService(config.ntfy, storage_path)
         self.match_info_service = MatchInfoService(
-            self.teamsnap_service, self.playmetrics_service, self.ntfy_service
+            self.teamsnap_service,
+            self.playmetrics_service,
+            self.ntfy_service,
+            calendar_service=CalendarService(config, getattr(config, "app", None)),
         )
 
         # Initialize cleanup service

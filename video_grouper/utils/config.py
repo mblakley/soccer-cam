@@ -165,6 +165,19 @@ class TeamSnapConfig(BaseModel):
             )
 
 
+class CalendarConfig(BaseModel):
+    """A calendar-feed (iCal) schedule: Byga, Google Calendar, ... (decided
+    2026-11-26). ``url`` is the iCal / webcal address; ``team_label`` picks this
+    camera's team out of a member's feed (e.g. ``BU15 - Guzzetta``);
+    ``team_name`` is how the team is named in match info (defaults to the label).
+    """
+
+    enabled: bool = False
+    url: str | None = None
+    team_label: str | None = None
+    team_name: str | None = None
+
+
 class PlayMetricsTeamConfig(BaseModel):
     team_id: str | None = None
     team_name: str | None = None
@@ -406,6 +419,7 @@ class Config(BaseModel):
     app: AppConfig = Field(alias="APP")
     teamsnap: TeamSnapConfig = Field(alias="TEAMSNAP")
     playmetrics: PlayMetricsConfig = Field(alias="PLAYMETRICS")
+    calendar: CalendarConfig = Field(alias="CALENDAR", default_factory=CalendarConfig)
     ntfy: NtfyConfig = Field(alias="NTFY")
     youtube: YouTubeConfig = Field(alias="YOUTUBE")
     cloud_sync: CloudSyncConfig = Field(
