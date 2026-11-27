@@ -234,6 +234,43 @@ _SUCCESS_PAGE = _chrome.notice_page(
 )
 
 
+_RETURN_COOKIE = "sc_login_return"
+
+
+def _success_page(storage: Path, return_to: str | None) -> str:
+    """Page shown after TTT sign-in.
+
+    From the wizard (``return_to`` set) it goes straight back there -- the
+    wizard's YouTube step carries the Connect button. From the dashboard it
+    offers Connect YouTube as a button when this build has the publisher
+    client and nothing is connected yet; the user may want a different Google
+    account for YouTube than for TTT, so it never starts on its own.
+    """
+    from video_grouper.web.youtube_connect import _safe_return, youtube_connection
+
+    if return_to:
+        target = _safe_return(return_to)
+        return _chrome.notice_page(
+            "Signed in",
+            "Signed in to Team Tech Tools",
+            f'<p class="muted">Returning&hellip;</p><p><a href="{target}">Continue now</a></p>',
+            tone="ok",
+            extra_js=f'setTimeout(function(){{location.href="{target}";}}, 1000);',
+        )
+    conn = youtube_connection(storage)
+    if conn["available"] and not conn["connected"]:
+        return _chrome.notice_page(
+            "Signed in",
+            "Signed in to Team Tech Tools",
+            "<p>Connect a YouTube account so soccer-cam can upload your games. "
+            "You'll choose which Google account and channel to use.</p>"
+            '<p><a class="btn" href="/auth/youtube/connect">Connect YouTube</a> '
+            '<a class="btn btn-ghost" href="/">Not now</a></p>',
+            tone="ok",
+        )
+    return _SUCCESS_PAGE
+
+
 _MAGIC_LINK_SENT_PAGE = _chrome.notice_page(
     "Magic link sent",
     "Magic link sent",
@@ -471,10 +508,19 @@ def _render_auth_flags_banner(storage: Path) -> str:
         # prose below until they grow their own re-auth endpoint.
         cta = ""
         if provider_raw == "youtube":
-            cta = (
-                ' <a class="btn btn-ghost" '
-                'href="/auth/youtube/start">Re-authenticate</a>'
-            )
+            from video_grouper.web.youtube_connect import youtube_connection
+
+            conn = youtube_connection(storage)
+            if conn["connected"] and not conn["quota_project"]:
+                href, label = "/auth/youtube/quota", "Set up YouTube quota"
+            elif conn["connected"] or (
+                conn["available"]
+                and not (storage / "youtube" / "client_secret.json").exists()
+            ):
+                href, label = "/auth/youtube/connect", "Reconnect YouTube"
+            else:
+                href, label = "/auth/youtube/start", "Re-authenticate"
+            cta = f' <a class="btn btn-ghost" href="{href}">{label}</a>'
         rows.append(
             f"<li><strong>{provider}</strong> &mdash; "
             f"<code>{msg}</code> "
@@ -583,7 +629,60 @@ def _render_tray_section(storage: Path) -> str:
 
 
 def _render_youtube_section(storage: Path) -> str:
-    """Render the YouTube auth status block on the dashboard.
+    """Render the YouTube block: publisher client first, BYO as the fallback.
+
+    With the publisher (TTT) client in this build, "Connect YouTube" is the
+    primary action and the bring-your-own client sits behind a disclosure.
+    Builds without it (source builds) show only the BYO flow.
+    """
+    from video_grouper.web.youtube_connect import youtube_connection
+
+    conn = youtube_connection(storage)
+    if conn["connected"]:
+        if conn["quota_project"]:
+            quota = (
+                '<p><span class="status-dot on"></span>Connected'
+                + (
+                    f" as <code>{html.escape(conn['account'])}</code>"
+                    if conn["account"]
+                    else ""
+                )
+                + f"; uploads billed to your project "
+                f"<code>{html.escape(conn['quota_project'])}</code>.</p>"
+            )
+            if conn["no_channel"]:
+                from video_grouper.web.youtube_connect import NO_CHANNEL_HTML
+
+                quota += NO_CHANNEL_HTML
+        elif conn["provisioning"]:
+            quota = (
+                '<p><span class="status-dot off"></span>Setting up your quota '
+                'project&hellip; <a href="/auth/youtube/quota">Show progress</a></p>'
+            )
+        else:
+            quota = (
+                '<p class="warn"><span class="status-dot bad"></span>YouTube is '
+                "connected, but uploads are paused until your quota project is "
+                "set up.</p>"
+                '<p><a class="btn" href="/auth/youtube/quota">Set up YouTube quota</a></p>'
+            )
+        return quota + (
+            '<p><a class="btn btn-ghost" href="/auth/youtube/connect">'
+            "Connect a different account</a></p>"
+        )
+    byo = _render_byo_youtube_section(storage)
+    if not conn["available"]:
+        return byo
+    return (
+        '<p><span class="status-dot off"></span>YouTube not connected.</p>'
+        '<p><a class="btn" href="/auth/youtube/connect">Connect YouTube</a></p>'
+        '<details class="auth-details"><summary>Use my own Google Cloud client '
+        f"instead</summary>{byo}</details>"
+    )
+
+
+def _render_byo_youtube_section(storage: Path) -> str:
+    """Render the bring-your-own-client YouTube block.
 
     Shows three states:
       - No client_secret yet: bootstrap help + upload form
@@ -860,7 +959,7 @@ def create_app(
         # editor — both need a writable config path.
         from video_grouper.web.setup.router import build_router as _build_setup
 
-        app.include_router(_build_setup(config_path))
+        app.include_router(_build_setup(config_path, storage_path))
 
         # And the stitch-seam calibration tool at /stitch/*. Same trigger
         # again -- it reads the camera credentials out of config.ini and
@@ -870,6 +969,12 @@ def create_app(
         )
 
         app.include_router(_build_stitch(config_path, storage))
+
+    # Connect YouTube through the publisher (TTT) client + a quota project
+    # the user owns. Routes explain themselves when the build has no client.
+    from video_grouper.web.youtube_connect import build_router as _build_yt_connect
+
+    app.include_router(_build_yt_connect(storage_path))
 
     # Phase 4: master nodes expose the worker-coordination API.
     if node_role == "master":
@@ -986,8 +1091,28 @@ def create_app(
         host = request.headers.get("host") or request.url.netloc
         return f"{proto}://{host}/callback"
 
+    def _with_return_cookie(resp: Response, return_to: str) -> Response:
+        # Supabase's redirect_to allow-list is exact, so the wizard's landing
+        # page rides in a short-lived cookie instead of the callback URL.
+        from video_grouper.web.youtube_connect import _safe_return
+
+        if return_to:
+            resp.set_cookie(
+                _RETURN_COOKIE,
+                _safe_return(return_to),
+                max_age=600,
+                httponly=True,
+                samesite="lax",
+            )
+        return resp
+
     @app.get("/login")
-    def login(request: Request, provider: str = "google") -> RedirectResponse:
+    def login(
+        request: Request, provider: str = "google", return_to: str = ""
+    ) -> Response:
+        return _with_return_cookie(_login_redirect(request, provider), return_to)
+
+    def _login_redirect(request: Request, provider: str) -> RedirectResponse:
         # Do NOT pass `state` to Supabase. GoTrue treats client-supplied
         # state as authoritative for the redirect to Google but never
         # creates a flow_state row for it, so /auth/v1/callback rejects
@@ -1005,7 +1130,9 @@ def create_app(
         return RedirectResponse(url=authorize_url, status_code=302)
 
     @app.post("/login/password")
-    def login_password(email: str = Form(...), password: str = Form(...)) -> Response:
+    def login_password(
+        email: str = Form(...), password: str = Form(...), return_to: str = Form("")
+    ) -> Response:
         try:
             client.login(email, password)
         except TTTApiError as exc:
@@ -1015,10 +1142,19 @@ def create_app(
             )
         logger.info("Password sign-in complete for %s", email)
         auto_claim_camera_manager(client)
+        from video_grouper.web.youtube_connect import _safe_return, youtube_connection
+
+        if return_to:
+            return RedirectResponse(url=_safe_return(return_to), status_code=303)
+        conn = youtube_connection(storage)
+        if conn["available"] and not conn["connected"]:
+            return HTMLResponse(_success_page(storage, None))
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/login/magic")
-    def login_magic(request: Request, email: str = Form(...)) -> Response:
+    def login_magic(
+        request: Request, email: str = Form(...), return_to: str = Form("")
+    ) -> Response:
         try:
             client.send_magic_link(email, _redirect_uri(request))
         except TTTApiError as exc:
@@ -1026,8 +1162,11 @@ def create_app(
                 _error_page(message=html.escape(str(exc))),
                 status_code=400,
             )
-        return HTMLResponse(
-            _MAGIC_LINK_SENT_PAGE.replace("__EMAIL__", html.escape(email))
+        return _with_return_cookie(
+            HTMLResponse(
+                _MAGIC_LINK_SENT_PAGE.replace("__EMAIL__", html.escape(email))
+            ),
+            return_to,
         )
 
     @app.get("/callback", response_class=HTMLResponse)
@@ -1035,7 +1174,9 @@ def create_app(
         return HTMLResponse(_CALLBACK_PAGE)
 
     @app.post("/receive-token", response_class=HTMLResponse)
-    def receive_token(payload: dict[str, Any] = Body(default={})) -> HTMLResponse:
+    def receive_token(
+        request: Request, payload: dict[str, Any] = Body(default={})
+    ) -> HTMLResponse:
         # POST + same-origin Origin/Referer (enforced by middleware) is
         # the CSRF defense for this endpoint; <img>/<script> attacks can
         # only do GET, and cross-origin form/fetch POSTs fail the
@@ -1057,7 +1198,10 @@ def create_app(
             )
         logger.info("OAuth sign-in complete; tokens persisted")
         auto_claim_camera_manager(client)
-        return HTMLResponse(_SUCCESS_PAGE)
+        resp = HTMLResponse(_success_page(storage, request.cookies.get(_RETURN_COOKIE)))
+        if _RETURN_COOKIE in request.cookies:
+            resp.delete_cookie(_RETURN_COOKIE)
+        return resp
 
     @app.post("/auth/youtube/upload-credentials", response_class=HTMLResponse)
     async def youtube_upload_credentials(

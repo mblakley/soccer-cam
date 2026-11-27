@@ -321,6 +321,22 @@ everything the wizard needs to drive it.
 | 6 | `services.disable` then probe; re-enable via API (former E7) | Wizard can self-heal a disabled API |
 | 7 | Re-run on an account at its project quota (F8) | Envelope for "no projects left" |
 
+### E1.7 results so far — 2026-11-27 (run through the shipped code, not the probe)
+
+Run against the real implementation (wizard → Connect YouTube → Set up YouTube
+quota) on the E1.6 fresh account (Terms already accepted), publisher client =
+`soccer-cam-e1-client` via `SOCCER_CAM_YT_CLIENT_ID/SECRET`.
+
+| Step | Result |
+|---|---|
+| 1 consent wording | "Manage your Cloud Platform projects", "Manage your Google API service configuration", plus email/"associate you with your personal info". Captured on a re-consent, so Google showed it behind "already has some access"; first-time layout not yet seen |
+| — | **New: the publisher's own project must enable Cloud Resource Manager + Service Usage APIs.** Pre-project calls bill the OAuth client's project; without them `projects.create` → `403 SERVICE_DISABLED` naming project 396182566355. User can't fix it; provisioner now fails with `publisher_setup`. **E2 checklist item.** |
+| 3 create → done | ~8 s (operation already done on first poll) |
+| 4 enable → done | ~4 s; then `channels.list` with header → stable 200 at **+61 s total** from consent |
+| — | Header proven on the upload path: same `build()` client with a bogus quota project → `400 not found`; with the real one → `200` |
+| 5 grant persistence | **Online access does not mean the grant disappears.** The Cloud scopes stay listed in the user's Google Account third-party access after Allow; only soccer-cam's copy of the token is never saved. Wizard copy corrected to say so. Revocation test still open |
+| 2, 6, 7 | **Not yet run:** `TOS` envelope (needs a second never-used account), disable/re-enable, out-of-projects |
+
 Gate: if step 1's consent is unacceptable to show a soccer parent, or step 5
 shows the grants can't be separated, fall back to the deep-link flow and record why.
 
@@ -328,9 +344,9 @@ shows the grants can't be separated, fall back to the deep-link flow and record 
 
 | # | What | Verifies |
 |---|---|---|
-| E2 | Stand up the publisher OAuth client: branded consent screen, published to **Production**, submit brand + sensitive-scope verification (youtube.* **plus** the E1.7 setup scopes `cloudplatformprojects` + `service.management`). **No YouTube API quota-extension audit is needed** -- the publisher project never serves quota | Consent screen loses the warning. ~2 hrs to submit, days-to-weeks for Google |
+| E2 | Stand up the publisher OAuth client: branded consent screen, published to **Production**, **enable Cloud Resource Manager + Service Usage APIs on the publisher project** (E1.7), submit brand + sensitive-scope verification (youtube.* **plus** the E1.7 setup scopes `cloudplatformprojects` + `service.management`). **No YouTube API quota-extension audit is needed** -- the publisher project never serves quota | Consent screen loses the warning. ~2 hrs to submit, days-to-weeks for Google |
 | E3 | Mint a token against the Production client, park it, re-check at day 8. Also check the token response for `refresh_token_expires_in` | Q6 — kills the weekly re-auth treadmill |
-| E4 | Wire it up: re-enter through `authenticate_youtube_embedded()`, thread the quota header through the API client, rebuild the wizard step | Full game (raw + processed + playlist) lands unlisted, quota moves on the user's project |
+| E4 | **Built 2026-11-27** (`web/youtube_connect.py`, `utils/youtube_quota_project.py`, wizard TTT step). Connect YouTube is a button after TTT sign-in / in the wizard; uploads attach the header via `Credentials.with_quota_project` and fail closed without it. Remaining: a real full-game upload through it | Full game (raw + processed + playlist) lands unlisted, quota moves on the user's project |
 | E5 | Negative paths: wrong project id, API not enabled, ToS unaccepted, no `serviceusage.services.use`, project-quota exhausted (F8), **and header missing/invalid** | Each produces a fixable wizard message; the missing-header case refuses to upload rather than silently billing the publisher project |
 | E6 | Keep `make_youtube_flow()` BYO alive behind a disclosure | Escape hatch if TTT's client is ever suspended — it is a single point of failure for *identity* even though quota stays distributed |
 | E7 | Re-run the probe at service startup, not just setup | A project that later loses its API enablement surfaces as a wizard state, not upload failures |

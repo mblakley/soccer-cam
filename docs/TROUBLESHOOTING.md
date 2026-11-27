@@ -50,7 +50,10 @@ Several things can cause upload failures:
 
 - **Quota exceeded:** YouTube refuses further uploads once you hit its limit. The app detects this, holds the upload, and re-probes every 30 minutes (`quota_retry_minutes`) until the limit frees. It deliberately does not wait for a fixed reset time: the limit that usually bites is an account-level one that rolls off on its own schedule -- measured at 75-90 minutes in one test, and observed still rejecting 3h39m after midnight Pacific in another. No action is needed on your part.
 - **Token expired:** If your YouTube authentication has expired, re-authenticate through the tray app's YouTube settings. The app sends an NTFY notification when this happens so you know to take action.
-- **Missing credentials:** Make sure `client_secret.json` is present in your `youtube/` directory. This file is required for YouTube API access.
+- **"No Google Cloud quota project is set up":** You connected YouTube through Team Tech Tools but the quota step didn't finish. Open the dashboard's YouTube section and click **Set up YouTube quota**. Uploads stay paused until it's done -- on purpose, so they never draw on a shared allowance.
+- **"This Google account has no YouTube channel yet":** The account you picked can't receive uploads until it has a channel. Create one at youtube.com/create_channel; nothing else needs redoing.
+- **"Soccer-cam's Google sign-in app is missing a setting":** A problem on the app's side, not yours. Report it.
+- **Missing credentials (own Google Cloud client only):** If you use your own OAuth client instead of Connect YouTube, make sure `client_secret.json` is present in your `youtube/` directory.
 - **Upload interrupted:** If an upload is cut short (network drop, app restart, etc.), the file will be retried up to 3 times automatically.
 
 

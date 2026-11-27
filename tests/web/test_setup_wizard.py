@@ -68,7 +68,12 @@ def test_full_flow_persists_config(client, config_path):
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/setup/youtube"
+    assert resp.headers["location"] == "/setup/ttt"
+
+    # Team Tech Tools step — optional; it renders and offers a way past it.
+    resp = client.get("/setup/ttt")
+    assert resp.status_code == 200
+    assert 'href="/setup/youtube"' in resp.text
 
     # YouTube step — skip without configuring (this fast path is the
     # one users will hit if they don't have GCP credentials handy yet;

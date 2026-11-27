@@ -75,6 +75,69 @@ def _load_embedded_client_config():
 
 EMBEDDED_CLIENT_CONFIG = _load_embedded_client_config()
 
+# The publisher (TTT) client additionally asks for the account's email so the
+# quota-project step can check the user picked the same Google account twice.
+PUBLISHER_SCOPES = SCOPES + [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+]
+
+
+class YouTubeQuotaProjectMissing(Exception):
+    """A publisher-client token has no user-owned quota project configured.
+
+    Raised instead of falling back: without the ``x-goog-user-project`` header
+    every call bills the publisher's project, one pool shared by every install.
+    See ROADMAP "Fail closed".
+    """
+
+
+def publisher_client_id() -> str:
+    return EMBEDDED_CLIENT_CONFIG["installed"]["client_id"] or ""
+
+
+def publisher_client_available() -> bool:
+    """True when this build carries the publisher OAuth client."""
+    cfg = EMBEDDED_CLIENT_CONFIG["installed"]
+    return bool(cfg["client_id"] and cfg["client_secret"])
+
+
+def is_publisher_token(token_data: dict) -> bool:
+    cid = publisher_client_id()
+    return bool(cid) and token_data.get("client_id") == cid
+
+
+def make_publisher_flow(redirect_uri: str, scopes: list[str]) -> InstalledAppFlow:
+    """Flow against the build-injected publisher client (no client_secret.json)."""
+    flow = InstalledAppFlow.from_client_config(EMBEDDED_CLIENT_CONFIG, scopes)
+    flow.redirect_uri = redirect_uri
+    return flow
+
+
+def load_youtube_credentials(token_file: str):
+    """Load ``token.json``, attaching the user's quota project when required.
+
+    BYO tokens load as before. Publisher tokens get
+    ``with_quota_project(<id>)``, which sends ``x-goog-user-project`` on every
+    call; with no project saved this raises :class:`YouTubeQuotaProjectMissing`.
+    """
+    from video_grouper.utils.youtube_quota_project import read_quota_project
+
+    with open(token_file) as f:
+        data = json.load(f)
+    if not is_publisher_token(data):
+        return google.oauth2.credentials.Credentials.from_authorized_user_info(
+            data, SCOPES
+        )
+    saved = read_quota_project(os.path.dirname(token_file))
+    if not saved:
+        raise YouTubeQuotaProjectMissing(
+            "YouTube is connected but no Google Cloud quota project is set up. "
+            "Finish 'Set up YouTube quota' on the dashboard."
+        )
+    creds = google.oauth2.credentials.Credentials.from_authorized_user_info(data)
+    return creds.with_quota_project(saved["project_id"])
+
 
 def make_youtube_flow(credentials_file: str, redirect_uri: str) -> InstalledAppFlow:
     """Build an InstalledAppFlow against the user's BYO ``client_secret.json``.
@@ -124,21 +187,20 @@ def ensure_valid_token(credentials_file: str, token_file: str) -> tuple[bool, st
     Returns:
         Tuple[bool, str]: (success, message)
     """
-    if not os.path.exists(credentials_file):
-        return False, f"YouTube credentials file not found: {credentials_file}"
-
     if not os.path.exists(token_file):
+        if not os.path.exists(credentials_file):
+            return False, "YouTube is not connected. Connect it on the dashboard."
         return (
             False,
             "No YouTube token found. Please authenticate via the tray app.",
         )
 
+    # token.json carries its own client id/secret, so a publisher-client
+    # token needs no client_secret.json beside it.
     try:
-        with open(token_file) as f:
-            creds_data = json.load(f)
-            creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
-                creds_data, SCOPES
-            )
+        creds = load_youtube_credentials(token_file)
+    except YouTubeQuotaProjectMissing as e:
+        return False, str(e)
     except Exception as e:
         return False, f"Error loading YouTube token: {e}"
 
@@ -395,17 +457,29 @@ class YouTubeUploader:
         Returns:
             bool: True if authentication was successful, False otherwise
         """
+        if self._is_publisher_token():
+            # Publisher tokens never go through the interactive BYO flow; a
+            # missing quota project raises rather than billing the publisher.
+            ok, message = ensure_valid_token(self.credentials_file, self.token_file)
+            if not ok:
+                logger.error("YouTube authentication failed: %s", message)
+                return False
+            creds = load_youtube_credentials(self.token_file)
+            self.youtube = build(API_SERVICE_NAME, API_VERSION, credentials=creds)
+            return True
         success, _ = authenticate_youtube(self.credentials_file, self.token_file)
         if success:
-            creds = None
-            with open(self.token_file) as token:
-                creds_data = json.load(token)
-                creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
-                    creds_data, SCOPES
-                )
+            creds = load_youtube_credentials(self.token_file)
             self.youtube = build(API_SERVICE_NAME, API_VERSION, credentials=creds)
             return True
         return False
+
+    def _is_publisher_token(self) -> bool:
+        try:
+            with open(self.token_file) as f:
+                return is_publisher_token(json.load(f))
+        except (OSError, ValueError):
+            return False
 
     def upload_video(
         self,
