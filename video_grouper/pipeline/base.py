@@ -14,9 +14,9 @@ must be able to read step metadata without dragging in the ONNX/cv2 stack).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -35,15 +35,21 @@ class StepContext:
             manifest and all per-step artifacts live here.
         team_name: Team identifier (e.g. ``"flash"``) or ``None`` if unknown.
         storage_path: Absolute path to soccer-cam's shared-data root.
-        ttt_config: Dict-form ``TTTConfig`` (or ``None`` when TTT is disabled).
-            Steps that acquire a TTT-licensed asset read credentials here. Kept
-            a plain dict so this module stays free of upstream config imports.
+        ttt_config: Dict-form ``TTTConfig`` without credentials (or ``None``
+            when TTT is disabled). Read by the phase push until it moves onto
+            the recording-sink port.
+        entitlements: The ``IEntitlements`` port (``None`` = nothing granted).
+            Steps that run a licensed model get it from here.
+        signing_public_keys: soccer-cam's trust anchors for licences and
+            plugin bundles.
     """
 
     group_dir: Path
     team_name: str | None
     storage_path: Path
     ttt_config: dict | None = None
+    entitlements: Any = None
+    signing_public_keys: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

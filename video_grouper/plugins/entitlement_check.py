@@ -1,4 +1,4 @@
-"""Decorator for plugin entry points that re-queries TTT for the current entitlement.
+"""Decorator for plugin entry points that re-checks the current entitlement.
 
 Usage:
     from video_grouper.plugins.entitlement_check import (
@@ -6,14 +6,14 @@ Usage:
     )
 
     @requires_entitlement("premium.example.feature")
-    def run_premium_operation(ttt_client, ...):
+    def run_premium_operation(entitlements, ...):
         ...
 
 The decorator expects the wrapped callable's first positional argument (or a
-keyword argument named ``ttt_client``) to be the TTT API client. It calls
-``ttt_client.check_entitlement(key)`` at most once per ``cache_ttl_seconds``,
-caching the result in-process. Raises ``PluginEntitlementError`` when the
-server returns False.
+keyword argument named ``entitlements``) to be the ``IEntitlements`` port
+(``video_grouper.integrations.entitlements``). It calls
+``entitlements.has(key)`` at most once per ``cache_ttl_seconds``, caching the
+result in-process. Raises ``PluginEntitlementError`` when it returns False.
 """
 
 import threading
@@ -28,14 +28,14 @@ class PluginEntitlementError(RuntimeError):
 
 
 class _EntitlementCache:
-    """Per-(ttt_client, key) TTL cache keyed by id(ttt_client)."""
+    """Per-(entitlements, key) TTL cache keyed by id(entitlements)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._entries: dict[tuple[int, str], tuple[bool, float]] = {}
 
-    def get(self, ttt_client: Any, key: str, ttl: float, now: float) -> bool:
-        cache_key = (id(ttt_client), key)
+    def get(self, entitlements: Any, key: str, ttl: float, now: float) -> bool:
+        cache_key = (id(entitlements), key)
         with self._lock:
             entry = self._entries.get(cache_key)
             if entry is not None:
@@ -43,7 +43,7 @@ class _EntitlementCache:
                 if now - stored_at < ttl:
                     return value
         # Miss / stale — hit the server outside the lock
-        value = bool(ttt_client.check_entitlement(key))
+        value = bool(entitlements.has(key))
         with self._lock:
             self._entries[cache_key] = (value, now)
         return value
@@ -57,8 +57,8 @@ _cache = _EntitlementCache()
 
 
 def _resolve_client(args: tuple, kwargs: dict) -> Any:
-    if "ttt_client" in kwargs:
-        return kwargs["ttt_client"]
+    if "entitlements" in kwargs:
+        return kwargs["entitlements"]
     if args:
         return args[0]
     return None
@@ -70,13 +70,13 @@ def requires_entitlement(
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            ttt_client = _resolve_client(args, kwargs)
-            if ttt_client is None:
+            entitlements = _resolve_client(args, kwargs)
+            if entitlements is None:
                 raise PluginEntitlementError(
-                    f"requires_entitlement({key!r}) could not resolve ttt_client"
+                    f"requires_entitlement({key!r}) could not resolve the entitlements port"
                 )
             now = time.monotonic()
-            if not _cache.get(ttt_client, key, cache_ttl_seconds, now):
+            if not _cache.get(entitlements, key, cache_ttl_seconds, now):
                 raise PluginEntitlementError(
                     f"Current user does not hold entitlement {key!r}"
                 )

@@ -51,8 +51,16 @@ class PipelineProcessor(QueueProcessor):
         runtime: str = "service",
         resource_manager=None,
         ntfy_processor=None,
+        integrations=None,
     ):
         super().__init__(storage_path, config)
+        # The app hands in its integrations so one TTT session backs every
+        # port; a standalone processor resolves its own.
+        if integrations is None:
+            from video_grouper.integrations import build_integrations
+
+            integrations = build_integrations(config, storage_path)
+        self.integrations = integrations
         self.upload_processor = upload_processor
         self.runtime = runtime
         # Used by the reactive corruption-recovery path to warn the camera
@@ -150,6 +158,15 @@ class PipelineProcessor(QueueProcessor):
                 team_name=team_name,
                 storage_path=Path(item.storage_path or self.storage_path),
                 ttt_config=ttt_dump,
+                entitlements=self.integrations.entitlements,
+                signing_public_keys=list(
+                    getattr(
+                        getattr(self.config, "ttt", None),
+                        "plugin_signing_public_keys",
+                        [],
+                    )
+                    or []
+                ),
             )
             # A team may override which steps run on its games
             # ([TEAM.<key>] pipeline). Resolved here because this is the only

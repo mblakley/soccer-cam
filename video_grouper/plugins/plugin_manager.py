@@ -38,12 +38,12 @@ class PluginManager:
 
     def __init__(
         self,
-        ttt_client,
+        entitlements,
         storage_path: Path,
         public_keys: list[str],
         refresh_headroom_days: int = 7,
     ):
-        self.ttt_client = ttt_client
+        self.entitlements = entitlements
         self.plugins_dir = storage_path / "plugins"
         self.public_keys = list(public_keys)
         self.refresh_headroom = timedelta(days=refresh_headroom_days)
@@ -56,7 +56,7 @@ class PluginManager:
     def sync_plugins(self) -> None:
         """Fetch available plugins, download new or soon-to-expire ones, drop stale ones."""
         try:
-            available = self.ttt_client.get_available_plugins()
+            available = self.entitlements.list_plugins()
         except Exception:
             logger.warning("Failed to fetch available plugins from TTT", exc_info=True)
             return
@@ -117,9 +117,9 @@ class PluginManager:
 
         try:
             self.plugins_dir.mkdir(parents=True, exist_ok=True)
-            self.ttt_client.download_plugin(key, zip_path)
+            self.entitlements.fetch_plugin(key, zip_path)
 
-            user_id = self.ttt_client.current_user_id()
+            user_id = self.entitlements.licensee()
             if not user_id:
                 logger.warning("Cannot install plugin %s: no authenticated user", key)
                 zip_path.unlink(missing_ok=True)
@@ -164,7 +164,7 @@ class PluginManager:
 
         from video_grouper.pipeline import list_steps
 
-        user_id = self.ttt_client.current_user_id()
+        user_id = self.entitlements.licensee()
         if not user_id:
             logger.warning("Cannot load plugins: no authenticated user")
             return
@@ -215,7 +215,7 @@ class PluginManager:
     def check_entitlements(self) -> None:
         """Re-check available plugins and unload any no longer listed."""
         try:
-            available = self.ttt_client.get_available_plugins()
+            available = self.entitlements.list_plugins()
             available_keys = {p["key"] for p in available}
             for key in list(self._loaded_plugins.keys()):
                 if key not in available_keys:

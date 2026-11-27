@@ -143,6 +143,11 @@ class VideoGrouperApp:
             gpu_concurrency=self.config.pipeline.gpu_concurrency,
             ram_heavy_concurrency=self.config.pipeline.ram_heavy_concurrency,
         )
+        # The one composition point for outside services (TTT today). Every
+        # port, and every processor not yet on a port, shares its TTT session.
+        from video_grouper.integrations import build_integrations
+
+        self.integrations = build_integrations(self.config, self.storage_path)
         if self.config.pipeline.is_active():
             # Side-effect import: registers the built-in pipeline steps.
             import video_grouper.pipeline.register_steps  # noqa: F401
@@ -181,6 +186,7 @@ class VideoGrouperApp:
                 upload_processor=self.upload_processor,
                 runtime="service",
                 resource_manager=self.resource_manager,
+                integrations=self.integrations,
             )
             self.pipeline_discovery_processor = PipelineDiscoveryProcessor(
                 storage_path=self.storage_path,
@@ -345,12 +351,8 @@ class VideoGrouperApp:
                 from video_grouper.api_integrations.ttt_api import TTTApiClient
                 from video_grouper.utils.google_drive_upload import GoogleDriveUploader
 
-                ttt_client = TTTApiClient(
-                    supabase_url=self.config.ttt.supabase_url,
-                    anon_key=self.config.ttt.anon_key,
-                    api_base_url=self.config.ttt.api_base_url,
-                    storage_path=self.storage_path,
-                )
+                # The integrations' shared session -- not a second client.
+                ttt_client = self.integrations.shared_ttt_client()
                 # Login with stored credentials
                 if self.config.ttt.email and self.config.ttt.password:
                     try:
@@ -374,7 +376,7 @@ class VideoGrouperApp:
                     from video_grouper.plugins.plugin_manager import PluginManager
 
                     self.plugin_manager = PluginManager(
-                        ttt_client=ttt_client,
+                        entitlements=self.integrations.entitlements,
                         storage_path=Path(self.storage_path),
                         public_keys=self.config.ttt.plugin_signing_public_keys,
                         refresh_headroom_days=self.config.ttt.plugin_refresh_headroom_days,

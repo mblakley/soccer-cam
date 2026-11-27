@@ -83,14 +83,15 @@ def _make_signed_zip(
 
 
 def _make_ttt_client(priv: Ed25519PrivateKey, *, available: list[dict]) -> MagicMock:
+    """An IEntitlements stand-in (PluginManager only sees the port)."""
     client = MagicMock()
-    client.current_user_id = MagicMock(return_value=USER_ID)
-    client.get_available_plugins = MagicMock(return_value=available)
+    client.licensee = MagicMock(return_value=USER_ID)
+    client.list_plugins = MagicMock(return_value=available)
 
     def fake_download(key: str, dest_path: Path) -> None:
         _make_signed_zip(dest_path, priv, version=_version_for(available, key))
 
-    client.download_plugin = MagicMock(side_effect=fake_download)
+    client.fetch_plugin = MagicMock(side_effect=fake_download)
     return client
 
 
@@ -133,12 +134,12 @@ class TestSyncInstall:
         )
         mgr = PluginManager(client, tmp_path, public_keys=[pub])
         mgr.sync_plugins()
-        assert client.download_plugin.call_count == 1
+        assert client.fetch_plugin.call_count == 1
 
         # Second sync with same version + fresh manifest — no re-download
-        client.download_plugin.reset_mock()
+        client.fetch_plugin.reset_mock()
         mgr.sync_plugins()
-        assert client.download_plugin.call_count == 0
+        assert client.fetch_plugin.call_count == 0
 
     def test_refresh_on_expiry_headroom(self, tmp_path):
         priv, pub = _keypair()
@@ -161,7 +162,7 @@ class TestSyncInstall:
             client, tmp_path, public_keys=[pub], refresh_headroom_days=7
         )
         mgr.sync_plugins()
-        assert client.download_plugin.call_count == 1
+        assert client.fetch_plugin.call_count == 1
 
     def test_bad_signature_refuses_install(self, tmp_path):
         priv, _ = _keypair()
@@ -188,7 +189,7 @@ class TestSyncInstall:
         mgr.sync_plugins()
         assert (tmp_path / "plugins" / "premium.test.feature").is_dir()
 
-        client.get_available_plugins.return_value = []
+        client.list_plugins.return_value = []
         mgr.sync_plugins()
         assert not (tmp_path / "plugins" / "premium.test.feature").exists()
 
@@ -200,7 +201,7 @@ class TestSyncInstall:
                 {"key": "premium.test.feature", "version": "1.0.0"},
             ],
         )
-        client.current_user_id = MagicMock(return_value=None)
+        client.licensee = MagicMock(return_value=None)
         mgr = PluginManager(client, tmp_path, public_keys=[pub])
         mgr.sync_plugins()
         assert not (tmp_path / "plugins" / "premium.test.feature").exists()
