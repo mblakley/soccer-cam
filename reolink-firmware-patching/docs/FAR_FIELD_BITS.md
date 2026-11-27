@@ -106,6 +106,43 @@ cost, and a 2 s keyframe interval (lever 1) frees several times what it needs.
 Limits of this: one 2 s clip from one game; x265 is not the camera's encoder;
 the proxy ignores AQ, which may already favour the flat far band.
 
+## Putting the bits on the field (2026-11-27)
+
+Goal as Mark stated it: most of the stream should go to the field polygon; the
+sidelines and sky may look as bad as they like.
+
+**Today the field gets about a third.** Same Lakefront clip, same x265 proxy,
+with everything outside the confirmed field polygon blacked out and then the
+reverse: the polygon is 35 % of the frame and takes 35 to 37 % of the bits. About
+65 % of the stream, some 13 Mbps, is spent outside it.
+
+| region | share of frame | share of bits |
+|---|---|---|
+| field polygon | 35 % | ~36 % |
+| corners: inside the polygon's rows (160–1471) but outside it | 26 % | ~13 % |
+| outside those rows (mostly foreground) | 39 % | ~51 % |
+
+**What each mechanism can do with that.** Estimates, assuming the starved area
+drops to a third of its present cost:
+
+| mechanism | shape | field's share of bits | status |
+|---|---|---|---|
+| one ROI window on the field's rows | rectangle | ~36 % → ~60 %, about ×1.7 | build 4922 staged; unproven on hardware |
+| ten ROI windows | staircase around the polygon | → ~80 %, about ×2.2 | kernel holds ten, but the debug command writes only window 0; needs a code patch to its handler, or a shim inside `device` |
+| per-block QP map | the polygon itself | slightly better than ten windows | only reachable from inside `device` |
+| privacy masks (`SetMask`) | black rectangles | masked area costs almost nothing | no flash; the camera reports the `mask` ability. Count and timing unverified. **The masked picture is gone, not degraded** |
+
+A single rectangle captures most of the gain because most of the waste is one
+full-width band of foreground. ×1.7 on the field is about four QP; ×2.2 is about
+seven.
+
+**The window has to be set per game.** Across the 23 Reolink games of 2026 with
+a field polygon, the far touchline's top row ranges from 110 to 543 and the near
+touchline's bottom row from 1283 to 2154. In four games the field runs to the
+bottom edge of the frame. No fixed window fits; the horizontal extent barely
+varies, so a per-game config is two numbers (top row, bottom row). How those
+two numbers reach a camera that records unattended at the field is not solved.
+
 ## Levers, in the order to try them
 
 ### 1. Keyframe interval (no flash)

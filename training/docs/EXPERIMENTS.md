@@ -4,6 +4,27 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-03: how much of the stream lands inside the field polygon — about a third (2026-11-27)
+
+**Hypothesis:** most of the bitrate is spent outside the field.
+
+**Method:** the EXP-ENC-02 clip and x265 proxy (fixed QP 35, 2 s). Three encodes: whole frame;
+everything outside the confirmed `field_polygon` blacked out; everything inside it blacked out.
+Separately, read `field_polygon` from every 2026 Reolink `game.json` on F: (23 games) for where the
+field sits in frame.
+
+**Result:** whole 6,197,970 B; field only 2,264,092 B (36.5 %); outside only 4,206,529 B (67.9 %;
+the two sum to 104 % because each carries its own mask edges). The polygon is 35.1 % of the frame
+and 57.9 % of its own bounding rows. Across the 23 games the far touchline's top row is 110–543
+(median 219) and the near touchline's bottom row 1283–2154 (median 1760); x extent is nearly full
+width in all of them.
+
+**Conclusion:** confirmed — roughly 65 % of the stream goes outside the field. One full-width ROI
+window on the field's rows would recover most of it (estimated field share 36 % → ~60 %); following
+the polygon needs the ten-window or QP-map routes (→ ~80 %). The window cannot be a fixed default:
+the field's rows differ by hundreds of pixels game to game. Same single-clip, x265-proxy caveats as
+EXP-ENC-02; the "→ 60 % / 80 %" figures are arithmetic on these shares, not measurements.
+
 ## EXP-ENC-02: what bitrate would hold far-ball detail — the far band is 4 % of the bits (2026-11-27)
 
 **Hypothesis:** the far field needs a higher bitrate than the 20.5 Mbps the camera accepts.
