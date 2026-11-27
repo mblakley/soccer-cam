@@ -17,6 +17,12 @@ named. Run order matters: upload BEFORE burning quota.
     python e1_quota_project_probe.py step3 --quota-project YYY --video FILE --i-mean-it
     python e1_quota_project_probe.py step4 --quota-project YYY --calls 84
     python e1_quota_project_probe.py step5 --quota-project YYY --client-project XXX
+
+E1.6 (error taxonomy, fresh Google account; see ROADMAP "E1.6"):
+
+    python e1_quota_project_probe.py new-id
+    python e1_quota_project_probe.py e16-probe --quota-project ID --foreign-project ZZZ
+    python e1_quota_project_probe.py e16-watch --quota-project ID
 """
 
 from __future__ import annotations
@@ -103,11 +109,67 @@ def channels_me(creds, quota_project=None):
     )
 
 
+def classify(resp) -> str:
+    """E1.6: the wizard state a channels.list response means. Unrecognised
+    envelopes come back as 'other:<status>/<reason>' so nothing is hidden."""
+    if resp.ok:
+        return "ok" if resp.json().get("items") else "ok_no_channel"
+    try:
+        err = resp.json().get("error", {})
+    except ValueError:
+        return f"other:{resp.status_code}/non-json"
+    reasons = [d.get("reason") for d in err.get("details", []) or [] if d.get("reason")]
+    reasons += [d.get("reason") for d in err.get("errors", []) or [] if d.get("reason")]
+    for want, state in (
+        ("SERVICE_DISABLED", "service_disabled"),
+        ("USER_PROJECT_DENIED", "project_denied"),
+        ("CONSUMER_INVALID", "project_invalid"),
+        ("RATE_LIMIT_EXCEEDED", "quota"),
+    ):
+        if want in reasons:
+            return state
+    return f"other:{resp.status_code}/{err.get('status')}/{','.join(map(str, reasons))}"
+
+
+def record(log: Path, label: str, quota_project, resp, state: str) -> None:
+    import time
+
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text[:2000]
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "label": label,
+                    "header": quota_project,
+                    "status": resp.status_code,
+                    "state": state,
+                    "body": body,
+                }
+            )
+            + "\n"
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "step",
-        choices=["auth", "baseline", "step1", "step2", "step3", "step4", "step5"],
+        choices=[
+            "auth",
+            "baseline",
+            "step1",
+            "step2",
+            "step3",
+            "step4",
+            "step5",
+            "new-id",
+            "e16-probe",
+            "e16-watch",
+        ],
     )
     ap.add_argument(
         "--port",
@@ -119,6 +181,15 @@ def main() -> int:
     ap.add_argument(
         "--client-project", help="project X -- the project owning the OAuth client"
     )
+    ap.add_argument(
+        "--foreign-project",
+        help="e16-probe: a real project this account is NOT a member of",
+    )
+    ap.add_argument(
+        "--log", type=Path, help="e16-*: append every response here as JSON lines"
+    )
+    ap.add_argument("--interval", type=int, default=10, help="e16-watch: seconds")
+    ap.add_argument("--minutes", type=int, default=30, help="e16-watch: give up after")
     ap.add_argument("--storage", type=Path, default=DEFAULT_STORAGE)
     ap.add_argument(
         "--client-secret",
@@ -136,6 +207,15 @@ def main() -> int:
     args = ap.parse_args()
 
     print(f"== {args.step} ==")
+
+    if args.step == "new-id":
+        # The id the wizard would hand the user: 6-30 chars, starts with a letter.
+        import secrets
+        import string
+
+        alphabet = string.ascii_lowercase + string.digits
+        print("soccer-cam-" + "".join(secrets.choice(alphabet) for _ in range(8)))
+        return 0
 
     if args.step == "auth":
         # One-time browser sign-in, reusing the existing client. Writes a fresh
@@ -169,6 +249,60 @@ def main() -> int:
         # step2: same call once Y has the API enabled. Expect 200.
         channels_me(creds, quota_project=args.quota_project)
         return 0
+
+    if args.step == "e16-probe":
+        # One call per situation the wizard must tell apart.
+        import secrets
+
+        log = args.log or Path("e16_results.jsonl")
+        cases = [
+            ("no header (channel check, U8)", None),
+            ("project that does not exist", f"soccer-cam-nx{secrets.token_hex(4)}"),
+            ("the user's own project", args.quota_project),
+        ]
+        if args.foreign_project:
+            cases.append(("someone else's project", args.foreign_project))
+        for label, project in cases:
+            print(f"-- {label}")
+            resp = channels_me(creds, quota_project=project)
+            state = classify(resp)
+            print(f"  => {state}")
+            record(log, label, project, resp, state)
+        print(f"  (responses appended to {log})")
+        return 0
+
+    if args.step == "e16-watch":
+        # What the wizard does: poll with the header, report each state change
+        # and how long after the start it happened. Bounded, never unattended.
+        import time
+
+        log = args.log or Path("e16_results.jsonl")
+        start = time.monotonic()
+        last = None
+        while time.monotonic() - start < args.minutes * 60:
+            if not creds.valid:
+                creds.refresh(Request())
+            resp = requests.get(
+                f"{YT}/channels",
+                headers={
+                    "Authorization": f"Bearer {creds.token}",
+                    "x-goog-user-project": args.quota_project,
+                },
+                params={"part": "id", "mine": "true"},
+                timeout=60,
+            )
+            state = classify(resp)
+            if state != last:
+                elapsed = int(time.monotonic() - start)
+                print(f"  +{elapsed:>4}s  {time.strftime('%H:%M:%S')}  {state}")
+                record(log, f"watch +{elapsed}s", args.quota_project, resp, state)
+                last = state
+            if state in ("ok", "ok_no_channel"):
+                print("  API reachable through the user's project -- done")
+                return 0
+            time.sleep(args.interval)
+        print(f"  gave up after {args.minutes} min, last state {last}")
+        return 1
 
     if args.step == "step3":
         if not args.i_mean_it or not args.video:

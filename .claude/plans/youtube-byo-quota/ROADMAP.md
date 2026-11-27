@@ -171,6 +171,53 @@ absent; project exists + API disabled; project exists + API enabled; caller
 lacks `serviceusage.services.use`. Also confirm F6 and F7 hold for a genuinely
 fresh account.
 
+### E1.6 run sheet — in progress 2026-11-27 (handoff)
+
+Tooling: `e1_quota_project_probe.py` gained `new-id`, `e16-probe` (one call per
+situation, classified) and `e16-watch` (polls `channels.list` with the quota
+header the way the wizard will; prints each state change with elapsed seconds).
+Every response is appended as JSON lines to `--log` — keep that log **outside the
+repo** (scratchpad); only the summary table below is committed. `classify()`
+states: `ok`, `ok_no_channel`, `service_disabled`, `project_denied`,
+`project_invalid`, `quota`, else `other:<status>/<reason>` (record those verbatim).
+
+Rig:
+- OAuth client: `soccer-cam-e1-client` (Desktop, Testing mode), secret at
+  `%LOCALAPPDATA%\credentials\e1-youtube-client.json`.
+- Fresh token goes to `%LOCALAPPDATA%\credentials\e16-fresh-token.json`.
+- The wizard-style project id for this run: **`soccer-cam-wrub0sw4`** (not created yet).
+- "Someone else's project" case: `soccer-cam-e2-15a668` (the August rig's).
+- The fresh account's address is Mark's to give; never commit it.
+- The August test tokens are dead (Testing-mode 7-day expiry, F2) — don't reuse them.
+
+State at handoff (11:45):
+- Fresh account created. Opening Cloud Console as it showed the first-run
+  "Welcome… Terms of Service" dialog → **F6 confirmed** on a never-used account.
+  Mark was told **not** to accept yet, so "ToS not accepted" can be recorded first.
+- Not yet confirmed: the fresh address added as a test user on
+  `console.cloud.google.com/auth/audience?project=soccer-cam-e1-client` — must be
+  done as the **owner** account (the fresh account gets "You need additional access").
+- No token yet; nothing probed yet.
+
+Steps (Mark clicks the two legal agreements himself — GCP ToS "Agree" and the
+OAuth consent "Allow"; Claude may drive everything else in Chrome):
+1. Owner account: add the fresh address as a test user.
+2. `auth --port 8090 --client-secret <secret> --token-file <fresh token>` (run in
+   background; send Mark the printed URL to open in the fresh account's window;
+   "Google hasn't verified this app" → Continue → Allow).
+3. **Before ToS**: `e16-probe --quota-project soccer-cam-wrub0sw4 --foreign-project soccer-cam-e2-15a668`
+   → no-header (channel exists? U8), nonexistent id, own id (not created), foreign.
+4. Start `e16-watch --quota-project soccer-cam-wrub0sw4` in the background.
+   Fresh account opens `console.cloud.google.com/projectcreate`: note ToS shown?,
+   pre-filled id (F7), "N projects remaining" (F8). Mark agrees to ToS; Edit id →
+   `soccer-cam-wrub0sw4` → Create. Watch logs the absent → `service_disabled` lag.
+5. `console.cloud.google.com/apis/enableflow?apiid=youtube.googleapis.com&project=soccer-cam-wrub0sw4`
+   → Enable. Watch logs the `service_disabled` → `ok`/`ok_no_channel` lag (F9).
+6. Optional (E7): disable the API again, re-run `e16-probe`, record the state.
+7. Record a results table here (state → HTTP status / reason / classify state /
+   observed lag), update Q5 + F6/F7/F8, commit + push on this branch. Then the
+   wizard's state list for E4 comes from that table.
+
 ## The rest — gated on E1
 
 | # | What | Verifies |
