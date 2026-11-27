@@ -22,13 +22,26 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-git.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "uv run ruff check --fix \"$CLAUDE_FILE_PATH\" 2>/dev/null; uv run ruff format \"$CLAUDE_FILE_PATH\" 2>/dev/null; true"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/format-edited-file.sh\"",
+            "timeout": 60
           }
         ]
       }
@@ -40,6 +53,11 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-hook.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stranded-work.sh\"",
+            "timeout": 15
           }
         ]
       }

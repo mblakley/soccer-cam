@@ -1,6 +1,6 @@
 name: Lint
 
-# Runs ruff (check + format) and mypy on every PR targeting main, plus
+# Runs ruff (check + format), mypy, and the unit tests on every PR targeting main, plus
 # every push to main itself. This is the gate that catches regressions
 # in already-clean modules; deferred per-module ignore_errors entries in
 # pyproject.toml are tracked separately.
@@ -41,3 +41,27 @@ jobs:
 
       - name: mypy
         run: uv run mypy video_grouper/
+
+  unit-tests:
+    # The unit suite (~2100 tests, ~10 min) was never run in CI -- only locally.
+    # Windows runner: the app ships as a Windows service + tray and the suite is
+    # verified green there; the repo is public, so hosted minutes are free.
+    name: unit tests (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync project dependencies
+        run: uv sync --frozen
+
+      - name: pytest (not integration, not e2e)
+        run: uv run pytest -m "not integration and not e2e" -q -p no:cacheprovider
