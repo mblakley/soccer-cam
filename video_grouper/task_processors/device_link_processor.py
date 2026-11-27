@@ -197,4 +197,5 @@ async def _describe(camera: Any) -> DeviceCamera | None:
         serial=str(serial),
         camera_type=str(getattr(getattr(camera, "config", None), "type", "") or ""),
         model=(info or {}).get("model") or None,
+        mac_address=(info or {}).get("mac_address") or None,
     )

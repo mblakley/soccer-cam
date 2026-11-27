@@ -1070,8 +1070,10 @@ class TTTApiClient:
         """Register this machine and its cameras; idempotent.
 
         POST {api_base_url}/api/internal/device-link/register
-        ``cameras``: ``[{name, serial, camera_type, model}]``. Returns
-        ``{machine_id, cameras: [{name, serial, camera_id, enabled}]}``.
+        ``cameras``: ``[{name, serial, camera_type, model, mac_address}]``.
+        Returns ``{machine_id, cameras: [{name, serial, camera_id, enabled,
+        error}]}`` (``error`` set for a camera TTT refused, e.g. a MAC that
+        doesn't match the camera already registered under that serial).
         """
         url = f"{self.api_base_url}/api/internal/device-link/register"
         body = {

@@ -143,6 +143,7 @@ class TTTDeviceLink(IDeviceLink):
                         "serial": c.serial,
                         "camera_type": c.camera_type,
                         "model": c.model,
+                        "mac_address": c.mac_address,
                     }
                     for c in cameras
                 ],
@@ -150,10 +151,19 @@ class TTTDeviceLink(IDeviceLink):
         except Exception as e:
             logger.warning("TTT: device registration failed: %s", e)
             return {}
+        rows = (result or {}).get("cameras", [])
+        for row in rows:
+            if row.get("error"):
+                logger.warning(
+                    "TTT: camera %s (%s) not registered: %s",
+                    row.get("name"),
+                    row.get("serial"),
+                    row["error"],
+                )
         ids = {
             str(row["name"]): str(row["camera_id"])
-            for row in (result or {}).get("cameras", [])
-            if row.get("name") and row.get("camera_id")
+            for row in rows
+            if row.get("name") and row.get("camera_id") and not row.get("error")
         }
         self._cameras.update(ids)
         if ids:

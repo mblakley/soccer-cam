@@ -192,7 +192,7 @@ async def test_configured_camera_id_is_the_fallback_until_registration():
 # ---------------------------------------------------------------------------
 
 CAMS = [
-    DeviceCamera("front", "SER-1", "reolink", "RLC-81MA"),
+    DeviceCamera("front", "SER-1", "reolink", "RLC-81MA", "AA:BB:CC:00:11:22"),
     DeviceCamera("no-serial", "", "dahua"),
 ]
 
@@ -214,6 +214,7 @@ async def test_registers_machine_and_cameras_and_heartbeats_each():
             "serial": "SER-1",
             "camera_type": "reolink",
             "model": "RLC-81MA",
+            "mac_address": "AA:BB:CC:00:11:22",
         }
     ]
     await link.heartbeat()
@@ -419,3 +420,22 @@ async def test_no_stitch_profiles_while_signed_out_or_on_error():
     failing.get_camera_config.side_effect = RuntimeError("down")
     link, _ = _link(failing)
     assert await link.stitch_profiles() == {}
+
+
+@pytest.mark.asyncio
+async def test_a_camera_ttt_refuses_gets_no_id(caplog):
+    client = _client()
+    client.register_device.return_value = {
+        "cameras": [
+            {
+                "name": "front",
+                "serial": "SER-1",
+                "camera_id": "c-1",
+                "error": "MAC does not match the registered camera",
+            }
+        ]
+    }
+    link, _ = _link(client, machine_id="me", camera_id="")
+    with caplog.at_level(logging.WARNING):
+        assert await link.register_cameras(CAMS) == {}
+    assert "MAC does not match" in caplog.text

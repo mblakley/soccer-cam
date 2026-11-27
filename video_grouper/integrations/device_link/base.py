@@ -38,6 +38,9 @@ class DeviceCamera:
     serial: str
     camera_type: str
     model: str | None = None
+    # Read from the camera itself: with the serial, evidence that this install
+    # actually has the camera (a printed serial alone isn't enough to join it).
+    mac_address: str | None = None
 
 
 @dataclass(frozen=True)

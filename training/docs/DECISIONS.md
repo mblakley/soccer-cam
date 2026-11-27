@@ -2450,3 +2450,19 @@ pulling stitch profiles saved in TTT's calibration tool down to the device (neve
 - **Build the stitch-profile pull.**
 - **Fix TTT's device-link authorization now** (separate TTT PR): camera status / command routes ran
   with a service session and never checked that the caller manages the camera.
+
+## Decision: cameras are identified by serial, managed by camera managers, and joined by possession (2026-11-27)
+
+**Corrects the same-day entry above** ("a camera belongs to its person"). Mark: "The camera is
+'managed' by a person in the camera manager role. Multiple camera managers might manage the same
+camera, and might record multiple different teams." And on joining: "If someone has possession of
+the camera, they should be able to upload to their teams."
+
+**Decided.** A TTT camera has no single owner: its identity is its serial (unique), it is linked to
+every team it records for, and it is managed by any camera manager / team admin of a linked team.
+Device registration (`POST /api/internal/device-link/register`) upserts by serial and links the
+caller's teams. Registering a serial that already exists **joins** it (the caller's teams are
+linked; they can upload for their teams; other teams' recordings stay private to those teams).
+Possession evidence: soccer-cam reports each camera's serial **and MAC address read from the camera
+over the network**; once TTT has a MAC for a serial, a join must match it (a printed serial alone is
+not enough). soccer-cam sends `mac_address` and logs any camera TTT refuses.

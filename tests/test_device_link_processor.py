@@ -263,7 +263,11 @@ class _Camera:
     async def get_device_info(self):
         if self._fail:
             raise OSError("offline")
-        return {"serial_number": self._serial, "model": "RLC-81MA"}
+        return {
+            "serial_number": self._serial,
+            "model": "RLC-81MA",
+            "mac_address": "aa:bb",
+        }
 
 
 @pytest.mark.asyncio
@@ -276,7 +280,7 @@ async def test_registers_cameras_that_can_identify_themselves(tmp_path):
     processor = _processor(tmp_path, link, cameras=lambda: cams)
     await processor.discover_work()
     assert link.registered_cameras == [
-        [DeviceCamera("front", "SER-1", "reolink", "RLC-81MA")]
+        [DeviceCamera("front", "SER-1", "reolink", "RLC-81MA", "aa:bb")]
     ]
     await processor.discover_work()  # registered: not again within the hour
     assert len(link.registered_cameras) == 1
