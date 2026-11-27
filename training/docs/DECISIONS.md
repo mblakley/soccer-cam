@@ -79,6 +79,38 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-11-26: Product behavior for the game-day loop with team-tech-tools (Mark)
+
+**Context.** A cross-repo audit (code + a full local run of TTT `development`) found the loop
+from recording to shared reel broken at several joints. Verified on soccer-cam `main`:
+`ScheduleService.find_game_for_recording` skips any TTT game without `start_time`, and TTT never
+sets one, so the "TTT schedule is authoritative" branch of `MatchInfoService` never matches and
+every recording falls back to direct TeamSnap/PlayMetrics; `TTTReporter.auto_match_video` then
+sends TTT only `team_id` + `video_url` + `recorded_at`, so TTT re-guesses and also misses. Moment
+clips are cut from the trimmed panorama (`get_trimmed_video_path` → `*-raw.mp4`) and highlight
+reels from `combined.mp4` (`find_combined_video`). Heat moved from TeamSnap to Byga (Google
+Calendar) in 2026-11; soccer-cam has no calendar source (`icalendar` is a dependency imported
+nowhere).
+
+**Decided:**
+- **Matching** stays date/time against the schedule (the existing `select_best_game` logic). TTT
+  games will carry a real `start_time`; when soccer-cam has matched a TTT game it reports **that
+  game** to TTT instead of letting TTT re-match from the recording time.
+- **Calendar feeds (Byga / Google Calendar / iCal)** are supported in **both** repos: a TTT
+  schedule provider (the authoritative path), and a soccer-cam fallback source alongside
+  PlayMetrics/TeamSnap for camera owners not using TTT.
+- **Moment clips and highlight reels are cut from the broadcast (ball-following) view**, not the
+  180° panorama. Clip requests already prefer the processed video
+  (`recording_locator.find_processed_video`); clips and reels follow the same rule, mapping times
+  onto the processed (trimmed) timeline.
+- **Reel rendering**: the soccer-cam install of the team's camera manager — the one that recorded
+  the game — renders any reel a team member builds, not only reels created by its own account
+  (TTT's claim is currently creator-only).
+- Matching TTT-side decisions (guardian access, Moment Tagger, onboarding, public share links) are
+  recorded in team-tech-tools `.claude/plans/business-roadmap/ROADMAP.md`, "Decided 2026-11-26".
+
+---
+
 ## 2026-08-17: Non-uniform camera warp DECLINED for image quality; the mesh READ is adopted as a calibration input
 
 **The proposal.** The Duo 3's 257×257 VPE warp mesh can now be read, modified, written and verified
