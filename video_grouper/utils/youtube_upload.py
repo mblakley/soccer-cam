@@ -771,7 +771,7 @@ class YouTubeUploader:
                 logger.error("Upload completed but no response received")
                 return None
 
-        except (YouTubeQuotaError, YouTubeUploadRejectedError):
+        except YouTubeQuotaError:
             # MUST propagate. YouTubeQuotaError is an Exception, so the broad
             # handler below used to swallow it and return None -- the caller
             # then saw a generic failure, the queue processor's quota-deferral
@@ -780,6 +780,8 @@ class YouTubeUploader:
             # unaffected by adding 429 detection upstream because the raise
             # never escaped this method.
             raise
+        except YouTubeUploadRejectedError:
+            raise  # permanent: the queue fails the item instead of retrying
         except Exception as e:
             logger.error(f"Error uploading video {video_path}: {e}")
             return None
