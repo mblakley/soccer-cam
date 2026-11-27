@@ -4,6 +4,56 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-05: where the 20.5 Mbps ceiling is — `device` provisions the main path at exactly 20,971,520 bps (2026-11-27)
+
+**Hypothesis:** the bitrate ceiling is a provisioned constant, not a hardware limit (the earlier
+notes guessed "computed dynamically… likely kdrv_h26x.ko").
+
+**Method:** static trace of the extracted firmware by a subagent, then its decisive claims re-read
+with `aarch64-linux-gnu-objdump` against `app_extracted/device`.
+
+**Result:** at VMA `4983b8` `device` loads `0x1400000` (20,971,520 = 20480 kbps × 1024) for the
+main path, selects it with `csel` on a per-path flag, stores it into a config struct and calls
+`hd_videoenc_set` with param 2 (`PATH_CONFIG`) at `498414`. A second load at `48c098` goes to
+`obj+0x2894`. This reproduces the measured boundary exactly: 20480 kbps equals the provisioned
+maximum and is accepted; 21504 (22,020,096 bps) exceeds it and is rejected. No constant in the
+(20480, 21504] window exists in `router`, and no HEVC level table or `22000000` literal exists in
+any of the binaries (a level-4.1 explanation I had floated is wrong).
+
+**Conclusion:** hypothesis supported, not proven. The instruction that actually rejects was not
+found — the bitrate-only setter clamps rather than rejects, so the refusal is in the full-config
+path or behind the ioctl in `kflow_videoenc.ko`. Five further loads of `0x1400000` in `device`
+(`55b2a0`–`55b4cc`) are uncharacterised, and the bitstream buffer is sized from this value. No
+patch built. Two no-flash readings settle the rest: `PATH CONFIG` in `/proc/hdal/venc/info`, and
+`dmesg` after a rejected `SetEnc`. Detail: `reolink-firmware-patching/docs/FAR_FIELD_BITS.md`.
+
+## EXP-ENC-04: can the field be found on the camera — the outline model in plain C (2026-11-27)
+
+**Hypothesis:** `field_outline_v2` is accurate enough to set a full-width ROI window's rows, and
+small enough to run on the camera with no runtime.
+
+**Method:** (a) the ONNX model on 5 frames from the middle segment of every 2026 Reolink game,
+predicted top row (min y of far keypoints) and bottom row (max y of near keypoints) against
+`field_polygon`. (b) `reolink-firmware-patching/fieldroi/fieldroi.c`: the network hand-written in C,
+weights exported to a flat file; `verify/test_fieldroi.sh` compares it with onnxruntime on the same
+frame, host build and static aarch64 build under qemu.
+
+**Result:** (a) 14 human-verified games: far edge median +19 rows (too low), range −47…+152, worst
+single frame +179; near edge median −93 (too high), range −493…+46, worst frame −642. The four
+worst near errors are the games whose pitch runs to the bottom of the frame. Within-game scatter
+~15 rows. The five `gamedata`-sourced polygons disagree with the model by 250–530 rows and repeat
+across different games; they look stale, not the model. (b) keypoints within 0.25 px (768×384
+space) of onnxruntime on four games; aarch64/qemu identical to host; 2.3–4.1 s and ~60 MB peak
+(45 MB of it the mapped weights) on desktop x86. The network returns a confident-looking outline
+for a uniform grey or black frame, so the tool adds a grass-colour check (87–93 % on real field
+rows, 0 % on blank frames).
+
+**Conclusion:** feasible. 200 rows of padding above covers every measured far-edge error, and that
+padding is cheap. The near edge is the weak side where the pitch fills the frame. The 14 games were
+likely in the model's training set, so these errors are optimistic; four unseen July games have no
+polygons to score. Nothing has run on the camera: time, free memory and a frame source there are
+all unmeasured.
+
 ## EXP-ENC-03: how much of the stream lands inside the field polygon — about a third (2026-11-27)
 
 **Hypothesis:** most of the bitrate is spent outside the field.

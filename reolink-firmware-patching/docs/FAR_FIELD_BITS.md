@@ -213,6 +213,99 @@ Open from DECISIONS 2026-06-15: `nr3d` off keeps far more fine texture but adds
 noise that costs bits. Worth re-running once levers 1 and 2 have freed some.
 `/proc/kdrv_vdocdc/aq` changes global AQ strength live.
 
+### 4. The 20.5 Mbps ceiling itself — traced 2026-11-27, not yet patched
+
+`SetEnc` accepts 20480 kbps and rejects 21504. The camera works in kbps x 1024,
+so those are 20,971,520 and 22,020,096 bps. **`device` provisions the main
+encode path with a maximum of exactly 20,971,520 (`0x1400000`)**, which is why
+20480 is the last value that works: it equals the provisioned maximum.
+
+Checked with objdump against `app_extracted/device` (non-PIE, file offset =
+VMA - 0x400000):
+
+```
+4983ac  ldr  w2, [x19, #116]       ; which path
+4983b0  mov  w3, #0x800000         ; 8,388,608   (the other paths)
+4983b8  mov  w0, #0x1400000        ; 20,971,520  (main path)
+4983c4  csel w0, w0, w3, eq
+4983dc  stp  w0, w3, [sp, #68]     ; into the config struct
+49840c  mov  w1, #0x2              ; param 2 = PATH_CONFIG
+498414  bl   5cd150                ; hd_videoenc_set
+```
+
+A second load of the same constant at `48c098` is stored to `obj+0x2894`, which
+the trace found feeding the bitstream-buffer sizing.
+
+**What is NOT established:**
+
+- **The rejecting comparison itself was not found.** The value reproduces the
+  boundary exactly, but the instruction that says no (in `device`'s full-config
+  path or behind the ioctl in `kflow_videoenc.ko`) is not located. The
+  bitrate-only setter at `499510` clamps to the maximum rather than rejecting.
+- **Five more loads of `0x1400000`** sit at `55b2a0`, `55b3b4`, `55b438`,
+  `55b498` and `55b4cc`. Not characterised. They may be the same limit, or an
+  unrelated 20 MiB buffer size.
+- **Buffers are sized from this number.** Raising it without the pools that
+  depend on it invites an allocation failure or an overrun.
+
+A patch would change `00 28 a0 52` at file offsets `0x983b8` and `0x8c098` (to
+`00 40 a0 52` for 32768 kbps, a single-instruction value). **Not built.** It
+touches `device`, the process whose death takes the camera off the network, so
+it waits on two no-flash readings first: the `PATH CONFIG` row of
+`/proc/hdal/venc/info`, and `dmesg` straight after a rejected `SetEnc`, which
+should name the check that fired. And EXP-ENC-02 says what it is worth: about
+4 % of any extra bitrate lands on the far band.
+
+## Finding the field on the camera (2026-11-27)
+
+The ROI window must follow the field, and the camera records unattended, so the
+field has to be found on the camera. `fieldroi/` does that with the project's
+existing field-outline model (`training/field_outline`, ResNet18, 10 keypoints),
+rewritten as one dependency-free C file and built static for aarch64.
+
+**The model is accurate enough for rows, with padding.** `field_outline_v2` on
+five frames from each 2026 Reolink game, against the 14 human-verified polygons
+(the model has probably seen most of these games in training, so this flatters
+it):
+
+| edge | median error | range | worst single frame |
+|---|---|---|---|
+| far line (top row) | +19 rows, i.e. too low | -47 to +152 | +179 |
+| near line (bottom row) | -93 rows, i.e. too high | -493 to +46 | -642 |
+
+- **Far edge: pad 200 rows upward and all 14 are covered.** Too low is the
+  dangerous direction, and padding upward is nearly free (that band is ~4 % of
+  the bits).
+- **Near edge: weak when the pitch runs to the bottom of the frame.** The four
+  worst cases (-184 to -493) are games where the true near edge is row 2154.
+  There the model stops short, so the nearest strip of pitch would sit outside
+  the window. Near objects are large, so this is the less harmful miss, but it
+  is a miss.
+- Frame-to-frame scatter is small (far error varies by ~15 rows within a game),
+  so the error is a per-scene bias; averaging more frames will not fix it.
+- On four July games with no polygon to score against, the overlays look right
+  on two inspected by eye (Chili Vortex, Niagara Falls; far line within ~80
+  rows).
+
+**The C port matches the model.** `verify/test_fieldroi.sh`: keypoints within
+0.25 px of onnxruntime on four games, and the aarch64 build under qemu gives the
+same numbers as the host build.
+
+**It refuses blank frames, but only because of a second check.** The network
+always answers: shown a uniformly grey or black frame it returns a tidy outline
+with ordinary scores. So the tool also requires the claimed field rows to be
+grass-coloured (87 to 93 % on real games, 0 % on grey or black).
+
+**Not done, and not known:**
+
+| open | why it matters |
+|---|---|
+| Time on the camera | 2.3 to 4.1 s single-threaded on a desktop x86. The camera's Cortex-A53 will be several times slower; qemu timing says nothing. Must be measured |
+| Memory on the camera | ~20 MB of working memory plus 45 MB of weights mapped read-only from the SD card. Free RAM while `device` runs has not been read |
+| Getting a frame | The tool reads a PPM. On the camera the source is the JPEG snapshot (`cmd=Snap`, measured ~2 s) or a raw frame pull; neither is wired up, and a full 7680x2160 JPEG decodes to 50 MB |
+| When to run | Not designed. Once at recording start is the obvious choice; the camera may still be being aimed then |
+| A window that works at all | Everything here is moot until the ROI window is proven on hardware (levers 2, steps 4 to 7 below) |
+
 ## To test on the camera
 
 **The scene must be rate-limited, or every result is a false negative.** A

@@ -96,6 +96,10 @@ reolink-firmware-patching/
 │       ├── README.md                # how to fetch + build Helix (RPSL, gitignored)
 │       ├── compat/                  # flat-memory stubs so Helix cross-compiles
 │       └── aac_split_test.c         # validates the frame splitter vs ground-truth stsz
+├── fieldroi/                        # find the field ON the camera -> roi.conf (off-camera proven only)
+│   ├── README.md
+│   ├── fieldroi.c                   # field-outline model in plain C, static aarch64
+│   └── export_weights.py            # ONNX -> flat weights file (+ reference output)
 ├── vpe/                             # 2-D warp mesh (VPE DCE) reader/writer
 │   ├── README.md                    # argument layout, liveness gate, on-camera use
 │   ├── lut2d.py                     # parse / validate / selftest the mesh
@@ -124,6 +128,7 @@ reolink-firmware-patching/
     ├── check_recording_default.sh   # gate a pak: must not record on the home network
     ├── roi_qp_heatmap.py            # visualise the encoder's per-region QP
     ├── stream_quality.py            # keyframe share + per-region blockiness/detail; live capture
+    ├── test_fieldroi.sh             # build fieldroi, compare with the real model, check refusals
     └── test_recover_mp4.sh          # build + round-trip-validate the recovery binary
 ```
 

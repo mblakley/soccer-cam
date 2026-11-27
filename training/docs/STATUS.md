@@ -19,7 +19,23 @@
   test order in `FAR_FIELD_BITS.md` starts with that check.
 - **Open, found in passing:** `ReolinkCamera.apply_optimal_settings` sends `gop=40`; the camera
   reports the range as 1–2. Unverified what the camera does with it.
-- **Next:** connect the camera, run `FAR_FIELD_BITS.md` "To test on the camera" steps 1–8.
+- **Where the bits go (EXP-ENC-02/03, x265 proxy, one clip):** stream runs at QP 34–35; the field
+  polygon gets ~36 % of the bits, the foreground below the near touchline ~48 %. A uniform six-QP
+  gain needs 31–41 Mbps; the far band alone needs <1.5 Mbps. One full-width ROI window on the
+  field's rows should take the field to ~60 % of the bits.
+- **The window must be per game** (far row 110–543, near row 1283–2154 across 23 games), and the
+  camera records unattended, so: **`fieldroi/`** — the field-outline model as one dependency-free C
+  file, static aarch64, parity-checked against onnxruntime (EXP-ENC-04). Never run on the camera;
+  cannot fetch a frame there yet.
+- **20.5 Mbps ceiling traced (EXP-ENC-05):** `device` provisions the main path's `PATH_CONFIG` at
+  exactly 20,971,520 bps. The rejecting compare is not located; no patch built.
+- **Also found:** `/proc/hdal/venc/cmd` has `setcbr`/`setvbr`/`setevbr` taking GOP, min/max QP and
+  byte rate — untested, no flash needed. The SoC is NT98539 (NS02302), not NT9856x/NT98530.
+- **Full firmware replacement assessed and not pursued:** no open-firmware path for this SoC; an
+  app replacement is 12–25 weeks (agent's estimate) and does not lift the hardware limits.
+- **Next:** connect the camera, run `FAR_FIELD_BITS.md` "To test on the camera" steps 1–8. On the
+  same session read `/proc/meminfo`, time `fieldroi`, and read `PATH CONFIG` + `dmesg` after a
+  rejected `SetEnc`.
 
 ## 2026-08-17 — NON-UNIFORM CAMERA WARP: assessed, DECLINED for image quality; the mesh READ is the win
 
