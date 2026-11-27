@@ -129,6 +129,8 @@ reolink-firmware-patching/
     ├── roi_qp_heatmap.py            # visualise the encoder's per-region QP
     ├── stream_quality.py            # keyframe share + per-region blockiness/detail; live capture
     ├── test_fieldroi.sh             # build fieldroi, compare with the real model, check refusals
+    ├── test_setroi_patch.sh         # execute a pak's setroi kernel handler under qemu before flashing
+    ├── setroi_harness.c             # the user-space harness that script links the module into
     └── test_recover_mp4.sh          # build + round-trip-validate the recovery binary
 ```
 

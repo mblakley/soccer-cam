@@ -42,6 +42,12 @@ build and touches `rootfs` only.
 |---|---|
 | **`IPC_…4922…_roiqp.pak`** (`057957af…`, CRC `0x978c75ce`) | **Staged 2026-11-27, never flashed.** 4921 + the 26-byte `setroi` format-string fix in `kflow_videoenc.ko` + `/etc/init.d/S37_RoiQp` + a **disabled** `/etc/soccercam_roi.conf.default`. With no `roi.conf` on the card the daemon writes nothing to `/proc`, so the only live change is the patched module. commit `9b94af3`. |
 
+| `IPC_…4923…_roiqp_multiwin.pak` (`30fb9385…`, CRC `0x0d141390`) | **Staged 2026-11-27, never flashed. Flash only after 4922 has proven the window.** 4921 + everything in 4922 + `ROIQP_MULTIWIN=1`: the `setroi` handler honours `RoiIndex` (ten windows) and refuses an index above 9. Twenty instructions and nine relocation entries in `kflow_videoenc.ko`; see `docs/ENCODER_ROI_QP.md` section 4b. `verify/test_setroi_patch.sh <pak> multiwin` executes the handler from this pak under qemu: 20/20. Its `S37_RoiQp` also clears all ten windows on disable. commit `ba02514`. |
+
+Run before flashing either: `bash verify/test_setroi_patch.sh <pak> fix` (4922)
+or `… multiwin` (4923). The same script on 4921 with `stock` reproduces the
+original bug — the kernel's echo reads `QP = 0, QPMode = 0`.
+
 Checked after the build by unpacking both root filesystems and diffing them:
 exactly four differences from 4921 — `S37_RoiQp` added, the default config
 added, `/etc/soccercam_build` updated (`pak=`, `roiqp=` lines), and
