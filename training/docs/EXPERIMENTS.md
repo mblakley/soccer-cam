@@ -4,6 +4,33 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-06: the 20.5 Mbps ceiling fully mapped — enforced in `device`, not the kernel (2026-11-27)
+
+**Hypothesis (from EXP-ENC-05):** the provisioned 20,971,520 is the ceiling; the instruction that
+rejects a higher value is somewhere behind it, probably in the kernel.
+
+**Method:** two subagents in parallel, one on `device`, one on the kernel modules
+(`kflow_videoenc.ko`, `kdrv_h26x.ko`, `nvt_vencrc.ko`, `kdrv_builtin.ko`). Each concluded the
+rejection was on the other's side. Resolved by searching `device`'s strings for bitrate messages
+and following the one that names the rule; decisive lines re-read with objdump.
+
+**Result:** the rejection is in the HDAL library statically linked into `device`: validator
+`5c16b0`, `cmp w4, w3 ; b.ls` at `5c1a50`, RC bitrate (`port+228`) against PATH_CONFIG bitrate
+(`port+28`), error text `"path config bitrate(%lu) must be >= HD_H26XENC_CBR: bitrate(%lu)."`,
+returns −1. `b.ls` passes on equality, which is exactly why 20480 kbps works and 21504 does not.
+The kernel has no bitrate bound: `NMR_VdoEnc_SetCBR` stores and forwards. The provisioned value
+sizes the output bitstream ring (byte rate × buffer ms; ~15.7 MB now) out of a 768 MiB pool; an
+oversized frame is dropped with a log line, not overrun. The five other loads of `0x1400000` in
+`device` are Q20 constants in an unrelated gain table. The `setcbr` debug command parses without
+`setroi`'s overlap bug and reaches the unchecked kernel setter.
+
+**Conclusion:** one number at two instructions (`4983b8`, `48c098`), one comparison (`5c1a50`),
+one buffer. A higher bitrate can be tried with no flash through `setcbr`; raising it properly is a
+two-instruction `device` patch plus the existing `router` cap. Neither tried. The device-side
+agent's statement that userspace has no such comparison was wrong, and the kernel-side agent's
+that it must be in userspace was right; the buffer-length field (6000 ms) and the recorder's
+tolerance of a faster stream are inferred, not verified.
+
 ## EXP-ENC-05: where the 20.5 Mbps ceiling is — `device` provisions the main path at exactly 20,971,520 bps (2026-11-27)
 
 **Hypothesis:** the bitrate ceiling is a provisioned constant, not a hardware limit (the earlier

@@ -236,25 +236,71 @@ VMA - 0x400000):
 A second load of the same constant at `48c098` is stored to `obj+0x2894`, which
 the trace found feeding the bitstream-buffer sizing.
 
-**What is NOT established:**
+**The comparison that rejects** is in the HDAL library linked into `device`,
+not in the kernel. A validator at `5c16b0` (called once, from `5c9cd0`, before
+the encode path starts) compares each rate-control bitrate with the path's
+provisioned bitrate in the per-port shadow config (`port * 0xab8`):
 
-- **The rejecting comparison itself was not found.** The value reproduces the
-  boundary exactly, but the instruction that says no (in `device`'s full-config
-  path or behind the ioctl in `kflow_videoenc.ko`) is not located. The
-  bitrate-only setter at `499510` clamps to the maximum rather than rejecting.
-- **Five more loads of `0x1400000`** sit at `55b2a0`, `55b3b4`, `55b438`,
-  `55b498` and `55b4cc`. Not characterised. They may be the same limit, or an
-  unrelated 20 MiB buffer size.
-- **Buffers are sized from this number.** Raising it without the pools that
-  depend on it invites an allocation failure or an overrun.
+```
+5c1a48  ldr  w3, [x5, #28]         ; PATH_CONFIG bitrate (the provisioned max)
+5c1a4c  ldr  w4, [x5, #228]        ; the CBR bitrate being asked for
+5c1a50  cmp  w4, w3
+5c1a54  b.ls 5c1890                ; asked <= provisioned: fine
+5c1a68  adrp/add x2 -> "HD_VIDEOENC_PARAM_PATH_CONFIG: path config bitrate(%lu)
+                        must be >= HD_H26XENC_CBR: bitrate(%lu)."
+5c1a74  mov  w0, #-1
+```
 
-A patch would change `00 28 a0 52` at file offsets `0x983b8` and `0x8c098` (to
-`00 40 a0 52` for 32768 kbps, a single-instruction value). **Not built.** It
-touches `device`, the process whose death takes the camera off the network, so
-it waits on two no-flash readings first: the `PATH CONFIG` row of
-`/proc/hdal/venc/info`, and `dmesg` straight after a rejected `SetEnc`, which
-should name the check that fired. And EXP-ENC-02 says what it is worth: about
-4 % of any extra bitrate lands on the far band.
+`b.ls` is "lower or same", which is why 20480 kbps passes by equality and 21504
+fails. The VBR, EVBR and CVBR arms beside it are identical.
+
+**The kernel does not check.** `NMR_VdoEnc_SetCBR` in `kflow_videoenc.ko`
+(`.text` 0x10040) stores the byte rate into the per-path object and forwards
+it; its only branches are a NULL guard, a log level, a changed-value test and
+the path number. The same holds for the VBR / EVBR / CVBR setters, and the
+provisioning setter validates resolution and memory range only. (Traced by a
+subagent; the CBR setter re-read by me.)
+
+**What the provisioned number sizes.** The kernel sizes the path's output
+bitstream ring from it, as byte rate times a buffer length in milliseconds. The
+6000 stored next to the bitrate at `4983cc` is very likely that length, giving
+20,971,520 / 8 x 6 s = 15.7 MB today (INFERRED: the field name is not
+confirmed). The ring comes out of the HDAL media pool, which the device tree
+sets at 768 MiB (`hdal-memory/media`, 0x30000000 at 0x10000000). When a frame
+does not fit, the kernel drops it and logs `size not enough, drop frame`; it
+does not overrun.
+
+**The other loads of `0x1400000` are not bitrates.** The five at `55b2a0`…
+`55b4cc` sit in one function that fills a table of Q20 fixed-point constants
+(-80.0, -62.0, -40.0, -20.0, 8.0, 30.0, 48.0, and 20.0 scaled by -0.5); it is
+some gain curve. `obj+0x2894` is read in exactly two places. As a bitrate the
+number lives only at `4983b8` and `48c098`.
+
+So the map is: **one number, provisioned at two instructions in `device`,
+enforced by one comparison in `device`, sizing one buffer in the kernel.**
+
+Two ways to go past it:
+
+1. **No flash: the kernel's own `setcbr`.** The debug command parses cleanly
+   (thirteen `%d` into thirteen 4-byte slots; unlike `setroi` there is no
+   overlap) and reaches the unchecked kernel setter, so a byte rate above
+   2,621,440 will be accepted. The ring stays sized for 20.5 Mbps, which is
+   about 4 s of stream at 30 Mbps instead of 6 s. Unknowns: whether `device`
+   re-applies its own value, and whether the recorder keeps up. This is the
+   first thing to try, because it answers "does more bitrate help the far
+   field" before anything is flashed:
+   `echo vdoenc setcbr 0 1 4 3276800 20 20 35 25 51 35 25 51 0 > /proc/hdal/venc/cmd`
+   (3,276,800 bytes/s is 26.2 Mbps; take StaticTime, GOP and the QP fields from
+   what `/proc/hdal/venc/info` shows at the time rather than from this line).
+2. **Flash: raise the provisioned value.** Change `00 28 a0 52` at file offsets
+   `0x983b8` and `0x8c098` in `device` (to `00 40 a0 52` for 32768 kbps), and
+   the API cap in `router` (`0x6351c`, the existing patch site) to match. Both
+   `device` sites, so the ring is sized for what the path is allowed. **Not
+   built.** It touches `device`, the process whose death takes the camera off
+   the network.
+
+EXP-ENC-02 says what either is worth: about 4 % of any extra bitrate lands on
+the far band.
 
 ## Finding the field on the camera (2026-11-27)
 

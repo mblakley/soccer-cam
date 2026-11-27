@@ -27,8 +27,15 @@
   camera records unattended, so: **`fieldroi/`** — the field-outline model as one dependency-free C
   file, static aarch64, parity-checked against onnxruntime (EXP-ENC-04). Never run on the camera;
   cannot fetch a frame there yet.
-- **20.5 Mbps ceiling traced (EXP-ENC-05):** `device` provisions the main path's `PATH_CONFIG` at
-  exactly 20,971,520 bps. The rejecting compare is not located; no patch built.
+- **20.5 Mbps ceiling fully mapped (EXP-ENC-05/06):** `device` provisions the main path's
+  `PATH_CONFIG` at exactly 20,971,520 bps (two instructions) and its own HDAL validator rejects any
+  rate-control bitrate above that (`cmp`/`b.ls` at `5c1a50`). The kernel has no check, so the
+  `setcbr` debug command can exceed it with no flash. No patch built.
+- **`setroi` has three defects, not one.** Build `4922` fixes the QP parse. Build `4923`
+  (`ROIQP_MULTIWIN=1`) also makes all ten windows addressable and range-checks the index, which
+  otherwise crashes the kernel on a large value. `verify/test_setroi_patch.sh` executes the real
+  handler from a built pak under qemu: it reproduces the bug on 4921 and passes 20/20 on 4923.
+  Flash 4922 first.
 - **Also found:** `/proc/hdal/venc/cmd` has `setcbr`/`setvbr`/`setevbr` taking GOP, min/max QP and
   byte rate — untested, no flash needed. The SoC is NT98539 (NS02302), not NT9856x/NT98530.
 - **Full firmware replacement assessed and not pursued:** no open-firmware path for this SoC; an
