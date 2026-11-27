@@ -582,7 +582,119 @@ def _render_tray_section(storage: Path) -> str:
     )
 
 
-def _render_youtube_section(storage: Path) -> str:
+def _youtube_uploads_enabled(config_path: Path | None) -> bool:
+    """Is [YOUTUBE] enabled in config? False if it cannot be determined."""
+    if config_path is None:
+        return False
+    try:
+        from video_grouper.utils.config import load_config
+
+        return bool(load_config(config_path).youtube.enabled)
+    except Exception as exc:
+        logger.debug("could not read youtube.enabled: %s", exc)
+        return False
+
+
+def _youtube_credentials_problem(storage: Path) -> str | None:
+    """Why the stored credentials cannot be used, or None if they are fine.
+
+    _read_youtube_status only inspects the token *file*, so a refresh token
+    that Google has since expired or revoked still reads as "authorized".
+    This actually attempts the refresh, which is the only way to know.
+    """
+    try:
+        from video_grouper.utils.youtube_upload import ensure_valid_token
+
+        yt_dir = storage / "youtube"
+        ok, message = ensure_valid_token(
+            str(yt_dir / "client_secret.json"), str(yt_dir / "token.json")
+        )
+        return None if ok else message
+    except Exception as exc:
+        return f"Could not validate the stored credentials: {exc}"
+
+
+# The dashboard reloads every 10 s; probing YouTube on every load would spend
+# quota all day for a value that changes about once in a channel's life.
+_LONG_UPLOAD_STATUS_TTL_SECONDS = 15 * 60
+_long_upload_status_cache: dict[str, tuple[float, float, str | None]] = {}
+
+
+def _cached_long_uploads_status(storage: Path) -> str | None:
+    """longUploadsStatus, re-read at most every 15 min or when the token file
+    changes (a re-authorization may be a different channel)."""
+    from video_grouper.utils.youtube_upload import YouTubeUploader
+
+    yt_dir = storage / "youtube"
+    token = yt_dir / "token.json"
+    key = str(token)
+    mtime = token.stat().st_mtime if token.exists() else 0.0
+    hit = _long_upload_status_cache.get(key)
+    if (
+        hit
+        and hit[1] == mtime
+        and time.monotonic() - hit[0] < _LONG_UPLOAD_STATUS_TTL_SECONDS
+    ):
+        return hit[2]
+    state = YouTubeUploader(
+        credentials_file=str(yt_dir / "client_secret.json"),
+        token_file=str(token),
+    ).get_long_uploads_status()
+    # Re-stat: the probe may have refreshed (rewritten) the token file.
+    mtime = token.stat().st_mtime if token.exists() else 0.0
+    _long_upload_status_cache[key] = (time.monotonic(), mtime, state)
+    return state
+
+
+def _render_long_upload_warning(storage: Path) -> str:
+    """Warn if this channel cannot keep a full-length game.
+
+    An unverified channel caps at 15 minutes, and YouTube does not refuse the
+    upload -- it accepts it and then destroys the video. Uploads are held
+    rather than lost (see YouTubeChannelNotVerifiedError), but the user has to
+    know to go and verify, so surface it here rather than only in the log.
+    """
+    try:
+        state = _cached_long_uploads_status(storage)
+    except Exception as exc:  # never break the dashboard over a status probe
+        logger.debug("long-upload status probe failed: %s", exc)
+        return ""
+
+    if state == "allowed":
+        return (
+            '<p class="muted"><span class="status-dot on"></span>'
+            "Channel verified &mdash; full-length games can be uploaded.</p>"
+        )
+    if state is None:
+        return (
+            '<p class="warn"><span class="status-dot bad"></span>'
+            "Could not read this channel&rsquo;s upload limit. If the Google "
+            "account has no YouTube channel, create one at "
+            '<a href="https://www.youtube.com" target="_blank" rel="noopener">'
+            "youtube.com</a> before uploading.</p>"
+        )
+    return (
+        '<p class="warn"><span class="status-dot bad"></span>'
+        "<strong>Error &mdash; channel not verified. Uploads are blocked.</strong> "
+        "YouTube will not accept videos longer than 15 minutes on an unverified "
+        f"channel (<code>{html.escape(state)}</code>). soccer-cam is holding all "
+        "uploads until this is fixed.</p>"
+        "<p>To fix it:</p>"
+        '<ol class="muted" style="line-height:1.7;">'
+        '<li>Open <a href="https://www.youtube.com/verify" target="_blank" '
+        'rel="noopener">youtube.com/verify</a> in a browser.</li>'
+        "<li>Sign in as the <strong>same Google account</strong> this install "
+        "is authorized under.</li>"
+        "<li>Choose text message or voice call, and enter the code you are "
+        "sent.</li>"
+        "</ol>"
+        '<p><a class="btn" href="https://www.youtube.com/verify" target="_blank" '
+        'rel="noopener">Verify this channel</a> &mdash; held uploads resume '
+        "automatically.</p>"
+    )
+
+
+def _render_youtube_section(storage: Path, config_path: Path | None = None) -> str:
     """Render the YouTube auth status block on the dashboard.
 
     Shows three states:
@@ -617,8 +729,26 @@ def _render_youtube_section(storage: Path) -> str:
             f"{_YT_UPLOAD_FORM}"
         )
     ident = html.escape(status.get("identity") or "?")
+    creds_warning = ""
+    channel_note = ""
+    if _youtube_uploads_enabled(config_path):
+        problem = _youtube_credentials_problem(storage)
+        # Only ask YouTube about the channel when uploads are on and the
+        # credentials work: otherwise the probe can only fail (or spend quota
+        # for nothing).
+        if not problem:
+            channel_note = _render_long_upload_warning(storage)
+        if problem:
+            creds_warning = (
+                '<p class="warn"><span class="status-dot bad"></span>'
+                "<strong>Warning &mdash; YouTube uploads are enabled, but the "
+                "stored credentials are not usable.</strong> "
+                f"{html.escape(problem)}</p>"
+                '<p><a class="btn" href="/auth/youtube/start">'
+                "Re-authorize</a></p>"
+            )
     return (
-        '<p><span class="status-dot on"></span>Authorized under '
+        creds_warning + '<p><span class="status-dot on"></span>Authorized under '
         f"<code>{ident}</code>"
         + (
             f" &mdash; token expires {_fmt_ts(status['expires_at'])}."
@@ -626,7 +756,8 @@ def _render_youtube_section(storage: Path) -> str:
             else "."
         )
         + "</p>"
-        '<p><a class="btn btn-ghost" href="/auth/youtube/start">'
+        + channel_note
+        + '<p><a class="btn btn-ghost" href="/auth/youtube/start">'
         "Re-authorize a different account</a></p>"
         f"{_YT_UPLOAD_FORM}"
     )
@@ -965,7 +1096,10 @@ def create_app(
                 "__AUTH_FLAGS_BANNER__", _render_auth_flags_banner(storage)
             )
             .replace("__AUTH_BLOCK__", _render_auth_section(token_file, providers))
-            .replace("__YOUTUBE_BLOCK__", _render_youtube_section(storage))
+            .replace(
+                "__YOUTUBE_BLOCK__",
+                _render_youtube_section(storage, config_path),
+            )
             .replace("__TRAY_BLOCK__", _render_tray_section(storage))
             .replace("__QUEUES_BLOCK__", _render_queues_section(status))
             .replace("__CAMERAS_BLOCK__", _render_cameras_section(status))

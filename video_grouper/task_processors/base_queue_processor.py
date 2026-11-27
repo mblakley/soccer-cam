@@ -283,12 +283,23 @@ class QueueProcessor(ABC):
                         next_try = datetime.now() + timedelta(seconds=wait_seconds)
                         self._quota_blocked_until = time.time() + wait_seconds
 
+                        from video_grouper.utils.youtube_upload import (
+                            YouTubeChannelNotVerifiedError,
+                        )
+
+                        # Same hold mechanism, different cause: say which, so
+                        # nobody waits for a quota reset that will never help.
+                        reason = (
+                            "the YouTube channel is not verified (verify it at "
+                            "https://www.youtube.com/verify)"
+                            if isinstance(e, YouTubeChannelNotVerifiedError)
+                            else "YouTube upload quota exhausted"
+                        )
                         logger.warning(
-                            f"{self.__class__.__name__}: YouTube upload quota "
-                            f"exhausted for {item}. Holding this upload and "
-                            f"re-probing at {next_try.strftime('%H:%M:%S')} "
-                            f"(every {wait_seconds / 60:.0f} min until the "
-                            f"quota frees). [trace_id: {trace_id}]"
+                            f"{self.__class__.__name__}: {reason} for {item}. "
+                            f"Holding this upload and re-probing at "
+                            f"{next_try.strftime('%H:%M:%S')} (every "
+                            f"{wait_seconds / 60:.0f} min). [trace_id: {trace_id}]"
                         )
 
                         # Sleep until quota resets, then requeue
@@ -302,6 +313,25 @@ class QueueProcessor(ABC):
                         logger.info(
                             f"{self.__class__.__name__}: Quota reset, requeued {item} for upload."
                         )
+                        continue
+
+                    from video_grouper.utils.youtube_upload import (
+                        YouTubeUploadRejectedError,
+                    )
+
+                    if isinstance(e, YouTubeUploadRejectedError):
+                        # Permanent: retrying re-sends the whole file for the
+                        # same rejection. Fail it now, loudly.
+                        logger.error(
+                            f"{self.__class__.__name__}: {e} Removing {item} "
+                            f"from the queue. [trace_id: {trace_id}]"
+                        )
+                        self._queue.task_done()
+                        self._in_progress_item = None
+                        self._queued_items.discard(item_key)
+                        self._items_by_key.pop(item_key, None)
+                        self._retry_counts.pop(item_key, None)
+                        await self.save_state()
                         continue
 
                     logger.error(

@@ -25,7 +25,65 @@ class YouTubeQuotaError(Exception):
     pass
 
 
+class YouTubeUploadRejectedError(Exception):
+    """YouTube processed the upload and rejected it (duplicate, copyright,
+    length, ...). Sending the same file again gets the same answer, so this is
+    never retried: the queue fails the item instead of re-uploading a whole
+    game up to three times."""
+
+    pass
+
+
+class YouTubeChannelNotVerifiedError(YouTubeQuotaError):
+    """The channel cannot accept videos longer than 15 minutes.
+
+    YouTube caps unverified channels at 15 minutes, and it does not refuse the
+    upload: videos.insert returns 200 with a real id, the video briefly reports
+    uploadStatus="uploaded", and then it is destroyed. videos.list then returns
+    zero items forever, so there is no rejectionReason left to inspect -- the
+    only trace is a "Deleted video" tombstone in the uploads playlist.
+    (Measured 2026-08-23 on both the multipart and resumable paths.)
+
+    Since a game is 60-90 minutes, an unverified channel loses every game
+    silently. This is raised BEFORE uploading so nothing is lost.
+
+    Subclasses YouTubeQuotaError deliberately: the queue processor already
+    parks on that and re-probes on an interval instead of failing the item, so
+    the upload is held and resumes on its own once the user verifies at
+    https://www.youtube.com/verify -- no new machinery, nothing dropped.
+    """
+
+    pass
+
+
 MAX_RETRIES = 5
+
+# How long to watch a freshly uploaded video before believing it survived.
+# The discarded 16-minute test video still reported uploadStatus="uploaded"
+# at t+10s and was gone by t+20s, so presence alone -- checked early -- reports
+# success for a video that is about to be destroyed.
+# Unverified channels keep videos up to 15 minutes and destroy longer ones
+# after accepting them. Measured 2026-11-27 on an unverified channel: 15 s to
+# 15:30 all reached "processed" and stayed (checked at +38..63 min); 20:00 and
+# 60:00 were accepted and gone within 15 s (16:00 likewise on 2026-08-23).
+LONG_UPLOAD_LIMIT_SECONDS = 15 * 60
+
+
+def _video_duration_seconds(path: str) -> float | None:
+    """Container duration in seconds, or None if it can't be read."""
+    try:
+        import av
+
+        with av.open(path) as container:
+            if container.duration:
+                return container.duration / av.time_base
+    except Exception:
+        return None
+    return None
+
+
+UPLOAD_SETTLE_TIMEOUT_SECONDS = 180
+UPLOAD_SETTLE_POLL_SECONDS = 10
 
 # If modifying these scopes, delete the token.json file.
 SCOPES = [
@@ -386,8 +444,24 @@ class YouTubeUploader:
         """
         self.credentials_file = credentials_file
         self.token_file = token_file
+        self._long_uploads_status: str | None = None
         self.skip_upload = skip_upload
         self.youtube = None
+
+    def _authenticate_headless(self) -> bool:
+        """Load the stored token (refreshing it if needed) without ever opening
+        a browser. Status probes run from web requests and the service, where
+        an interactive sign-in would block the request thread indefinitely."""
+        ok, message = ensure_valid_token(self.credentials_file, self.token_file)
+        if not ok:
+            logger.warning("YouTube status check skipped: %s", message)
+            return False
+        with open(self.token_file) as token:
+            creds = google.oauth2.credentials.Credentials.from_authorized_user_info(
+                json.load(token), SCOPES
+            )
+        self.youtube = build(API_SERVICE_NAME, API_VERSION, credentials=creds)
+        return True
 
     def authenticate(self) -> bool:
         """Authenticate with YouTube API.
@@ -406,6 +480,104 @@ class YouTubeUploader:
             self.youtube = build(API_SERVICE_NAME, API_VERSION, credentials=creds)
             return True
         return False
+
+    def get_long_uploads_status(self) -> str | None:
+        """Whether this channel may upload videos longer than 15 minutes.
+
+        Returns "allowed", "eligible", "disallowed" or None if unknown.
+        "eligible" means the channel *could* be verified but has not been --
+        long uploads are still destroyed. Only "allowed" is safe.
+
+        Only "allowed" is cached (verification is one-way). Anything else is
+        re-read on the next call, so verifying the channel takes effect on the
+        next upload attempt without a restart. Never signs in interactively.
+        """
+        if self._long_uploads_status == "allowed":
+            return "allowed"
+        if not self.youtube and not self._authenticate_headless():
+            return None
+        try:
+            resp = self.youtube.channels().list(part="status", mine=True).execute()
+        except Exception as exc:
+            logger.warning("Could not read channel upload status: %s", exc)
+            return None
+        items = resp.get("items", [])
+        if not items:
+            # 200 with no items means the Google account has no YouTube
+            # channel at all. Sign-in looks healthy; uploads fail later.
+            logger.error(
+                "This Google account has no YouTube channel. "
+                "Create one at https://www.youtube.com before uploading."
+            )
+            return None
+        status = items[0].get("status", {}).get("longUploadsStatus")
+        if status == "allowed":
+            self._long_uploads_status = status
+        return status
+
+    def _confirm_upload_settled(self, video_id: str) -> str:
+        """Watch a freshly uploaded video long enough to trust it.
+
+        Returns "processed", "present" (still transcoding when we stopped
+        watching -- normal for a large game) or "discarded".
+
+        A video that YouTube destroys disappears from videos.list entirely, so
+        disappearance is the signal. Checking rejectionReason cannot work: the
+        video object is gone, so no field survives to carry a reason.
+        """
+        attempts = max(1, UPLOAD_SETTLE_TIMEOUT_SECONDS // UPLOAD_SETTLE_POLL_SECONDS)
+        ever_seen = False
+        any_answer = False  # did any status check actually get a reply?
+        for attempt in range(attempts):
+            if attempt:
+                # Poll immediately first: a small video can already be
+                # processed, and there is no reason to wait to find that out.
+                time.sleep(UPLOAD_SETTLE_POLL_SECONDS)
+            try:
+                resp = self.youtube.videos().list(part="status", id=video_id).execute()
+            except Exception as exc:
+                logger.warning("Could not check upload status: %s", exc)
+                continue
+            if not isinstance(resp, dict):
+                # Not an answer: count it like a failed check.
+                logger.warning(
+                    "Unexpected videos.list response for %s (%s)",
+                    video_id,
+                    type(resp).__name__,
+                )
+                continue
+            any_answer = True
+            items = resp.get("items", [])
+            if not items:
+                if ever_seen:
+                    return "discarded"
+                # Not indexed yet -- there is a propagation window of roughly
+                # 10-20s after insert. Keep waiting.
+                continue
+            ever_seen = True
+            state = items[0].get("status", {}).get("uploadStatus")
+            if state == "processed":
+                return "processed"
+            if state in ("rejected", "failed"):
+                status = items[0].get("status", {})
+                reason = status.get("rejectionReason") or status.get("failureReason")
+                raise YouTubeUploadRejectedError(
+                    f"YouTube {state} video {video_id}: {reason}. Not retrying: "
+                    "the same file would get the same answer."
+                )
+        if ever_seen:
+            return "present"
+        if not any_answer:
+            # Every check failed (network, quota). We cannot tell whether the
+            # video survived; insert returned an id, so keep it rather than
+            # upload the whole game again as a likely duplicate.
+            logger.error(
+                "Could not confirm %s: every status check failed. Keeping it "
+                "as uploaded rather than re-uploading a possible duplicate.",
+                video_id,
+            )
+            return "present"
+        return "discarded"
 
     def upload_video(
         self,
@@ -458,6 +630,28 @@ class YouTubeUploader:
         if not os.path.exists(video_path):
             logger.error(f"Video file not found: {video_path}")
             return None
+
+        # An unverified channel destroys anything over 15 minutes after
+        # accepting it (no refusal, no reason), so a long upload has to be
+        # held BEFORE anything is sent. Shorter videos -- clips, reels -- are
+        # kept, so they go through. A video whose length can't be read is
+        # treated as long. Decided 2026-11-27 on measurements (see
+        # LONG_UPLOAD_LIMIT_SECONDS).
+        duration = _video_duration_seconds(video_path)
+        is_long = duration is None or duration > LONG_UPLOAD_LIMIT_SECONDS
+        status = self.get_long_uploads_status() if is_long else None
+        if status is not None and status != "allowed":
+            raise YouTubeChannelNotVerifiedError(
+                f"Holding {os.path.basename(video_path)}: this YouTube channel "
+                f"is not verified (longUploadsStatus={status}), and YouTube "
+                "deletes videos longer than 15 minutes from unverified "
+                "channels. Clips and other short videos still upload. To fix "
+                "it: open "
+                "https://www.youtube.com/verify, sign in as the Google "
+                "account this install is authorized under, and choose text "
+                "message or voice call to receive a code. Held uploads then "
+                "resume automatically."
+            )
 
         # Get file size for progress tracking
         file_size = os.path.getsize(video_path)
@@ -566,10 +760,31 @@ class YouTubeUploader:
             logger.info("Upload completed")
             if response:
                 video_id = response["id"]
-                logger.info(f"Successfully uploaded video: {title} (ID: {video_id})")
+                logger.info(f"Upload transferred: {title} (ID: {video_id})")
                 logger.info(f"Upload completed in {total_time:.1f}s")
 
-                # Add to playlist if specified
+                # A returned id does not mean the video survived -- YouTube can
+                # accept an upload and then destroy it. Confirm before telling
+                # the caller this game is safely on YouTube.
+                settled = self._confirm_upload_settled(video_id)
+                if settled == "discarded":
+                    logger.error(
+                        "YouTube accepted and then DISCARDED %s (ID: %s). "
+                        "The video no longer exists and was not uploaded. "
+                        "Not recording it; the game will be retried.",
+                        title,
+                        video_id,
+                    )
+                    return None
+                if settled == "present":
+                    logger.warning(
+                        "Video %s still transcoding after %ds; treating as uploaded.",
+                        video_id,
+                        UPLOAD_SETTLE_TIMEOUT_SECONDS,
+                    )
+                logger.info(f"Successfully uploaded video: {title} (ID: {video_id})")
+
+                # Add to playlist only once we believe the video exists.
                 if playlist_id:
                     self.add_video_to_playlist(video_id, playlist_id)
 
@@ -587,6 +802,8 @@ class YouTubeUploader:
             # unaffected by adding 429 detection upstream because the raise
             # never escaped this method.
             raise
+        except YouTubeUploadRejectedError:
+            raise  # permanent: the queue fails the item instead of retrying
         except Exception as e:
             logger.error(f"Error uploading video {video_path}: {e}")
             return None

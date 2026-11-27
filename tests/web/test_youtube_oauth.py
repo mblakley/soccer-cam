@@ -1,6 +1,7 @@
 """Tests for the YouTube OAuth wizard step + dashboard endpoints."""
 
 import json
+import os
 import time
 from urllib.parse import parse_qs, urlparse
 
@@ -291,3 +292,63 @@ def test_wizard_youtube_renders_upload_form_initially(client):
     assert r.status_code == 200
     assert "client_secret.json" in r.text
     assert "/setup/youtube/upload" in r.text
+
+
+# ----- channel status probe (code review of #145, 2026-11-27) ------------------
+
+
+@pytest.fixture
+def probe_counter(monkeypatch):
+    """Counts real channel-status probes; the dashboard reloads every 10 s."""
+    from video_grouper.utils.youtube_upload import YouTubeUploader
+
+    calls = []
+    monkeypatch.setattr(
+        YouTubeUploader,
+        "get_long_uploads_status",
+        lambda self: calls.append(1) or "allowed",
+    )
+    monkeypatch.setattr(auth_server, "_youtube_credentials_problem", lambda s: None)
+    auth_server._long_upload_status_cache.clear()
+    yield calls
+    auth_server._long_upload_status_cache.clear()
+
+
+def test_dashboard_reloads_reuse_one_channel_probe(storage, probe_counter, monkeypatch):
+    monkeypatch.setattr(auth_server, "_youtube_uploads_enabled", lambda p: True)
+    _write_client_secret(storage)
+    _write_token(storage)
+    for _ in range(5):
+        assert "Channel verified" in _render_youtube_section(storage, "cfg.ini")
+    assert len(probe_counter) == 1
+
+
+def test_a_new_token_triggers_a_fresh_probe(storage, probe_counter, monkeypatch):
+    # Re-authorizing may mean a different channel.
+    monkeypatch.setattr(auth_server, "_youtube_uploads_enabled", lambda p: True)
+    _write_client_secret(storage)
+    _write_token(storage)
+    _render_youtube_section(storage, "cfg.ini")
+    token = storage / "youtube" / "token.json"
+    os.utime(token, (time.time() + 5, time.time() + 5))
+    _render_youtube_section(storage, "cfg.ini")
+    assert len(probe_counter) == 2
+
+
+def test_no_probe_when_uploads_are_off(storage, probe_counter, monkeypatch):
+    monkeypatch.setattr(auth_server, "_youtube_uploads_enabled", lambda p: False)
+    _write_client_secret(storage)
+    _write_token(storage)
+    _render_youtube_section(storage, "cfg.ini")
+    assert probe_counter == []
+
+
+def test_no_probe_when_credentials_are_unusable(storage, probe_counter, monkeypatch):
+    monkeypatch.setattr(auth_server, "_youtube_uploads_enabled", lambda p: True)
+    monkeypatch.setattr(
+        auth_server, "_youtube_credentials_problem", lambda s: "refresh revoked"
+    )
+    _write_client_secret(storage)
+    _write_token(storage)
+    assert "Re-authorize" in _render_youtube_section(storage, "cfg.ini")
+    assert probe_counter == []
