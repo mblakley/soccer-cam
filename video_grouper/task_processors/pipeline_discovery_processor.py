@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 
-from video_grouper.utils.config import Config
+from video_grouper.utils.config import Config, sanitize_ttt_conn
 
 from .base_polling_processor import PollingProcessor
 from .tasks.pipeline import PipelineTask
@@ -90,10 +90,12 @@ class PipelineDiscoveryProcessor(PollingProcessor):
             return
 
         team_name = self._read_team_name(group_dir)
-        # Pass the TTT config through when integration is enabled — a step that
-        # acquires a TTT-licensed asset reads credentials from it.
+        # Pass the TTT connection through when integration is enabled -- a step
+        # that acquires a TTT-licensed asset builds a client from it. Without
+        # credentials: the task is persisted to the queue state file, and the
+        # client authenticates with the stored session tokens.
         ttt_dump = (
-            self.config.ttt.model_dump()
+            sanitize_ttt_conn(self.config.ttt.model_dump())
             if getattr(self.config, "ttt", None) and self.config.ttt.enabled
             else None
         )
