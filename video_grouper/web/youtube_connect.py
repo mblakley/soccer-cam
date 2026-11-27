@@ -94,18 +94,14 @@ def youtube_connection(storage: Path) -> dict:
     """Summarise publisher-client connection state for pages to render."""
     from video_grouper.utils.youtube_quota_project import read_quota_project
     from video_grouper.utils.youtube_upload import (
-        is_publisher_token,
+        is_byo_token,
         publisher_client_available,
     )
 
     yt_dir = storage / "youtube"
     token_file = yt_dir / "token.json"
-    publisher = False
-    if token_file.exists():
-        try:
-            publisher = is_publisher_token(json.loads(token_file.read_text("utf-8")))
-        except (OSError, ValueError):
-            publisher = False
+    # Anything that isn't a matching BYO client is the publisher's (fail closed).
+    publisher = token_file.exists() and not is_byo_token(str(token_file))
     quota = read_quota_project(yt_dir) if publisher else None
     prov = _job["provisioner"]
     return {
@@ -131,6 +127,15 @@ def _raw_youtube_credentials(token_file: Path):
     return creds
 
 
+def _reconnect_needed(return_to: str) -> HTMLResponse:
+    back = _safe_return(return_to)
+    return _error(
+        "The YouTube connection has expired or was removed in your Google "
+        "Account. "
+        f"<a href='/auth/youtube/connect?return_to={back}'>Connect YouTube again</a>"
+    )
+
+
 def _account_email(creds) -> str | None:
     from google.auth.transport.requests import AuthorizedSession
 
@@ -143,6 +148,11 @@ def _account_email(creds) -> str | None:
         logger.warning("YOUTUBE_CONNECT: userinfo failed: %s", exc)
     return None
 
+
+_YOUTUBE_SCOPES = (
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube",
+)
 
 _CLOUD_SCOPES = (
     "https://www.googleapis.com/auth/cloudplatformprojects",
@@ -282,11 +292,26 @@ def build_router(storage_path: str) -> APIRouter:
             logger.error("YOUTUBE_CONNECT: token exchange failed: %s", exc)
             return _error(f"Token exchange failed: {html.escape(str(exc))}")
         creds = flow.credentials
+        granted = _granted_scopes(flow)
+        missing_yt = [s for s in _YOUTUBE_SCOPES if s not in granted]
+        if missing_yt:
+            return _error(
+                "Google didn't grant all the YouTube permissions soccer-cam needs "
+                "to upload. On Google's screen, tick <strong>every</strong> box "
+                "(or <em>Select all</em>). "
+                f"<a href='/auth/youtube/connect?return_to={entry['return_to']}'>"
+                "Try again</a>"
+            )
         email = _id_token_email(creds)
         yt_dir = entry["storage"] / "youtube"
         yt_dir.mkdir(parents=True, exist_ok=True)
         (yt_dir / "token.json").write_text(creds.to_json(), encoding="utf-8")
         clear_auth_needed(str(entry["storage"]), "youtube")
+        # An earlier provisioning run belongs to the previous connection; its
+        # "ready" must not be shown for this one.
+        prov = _job["provisioner"]
+        if prov is None or prov.status["done"]:
+            _job["provisioner"] = None
 
         # Reconnecting the same account keeps its project; a different
         # account can't use the old one (403 on every call), so drop it.
@@ -314,7 +339,18 @@ def build_router(storage_path: str) -> APIRouter:
                 f"/auth/youtube/connect?return_to={_safe_return(return_to)}",
                 status_code=303,
             )
-        email = _account_email(_raw_youtube_credentials(token_file))
+        try:
+            email = _account_email(_raw_youtube_credentials(token_file))
+        except Exception as exc:  # noqa: BLE001 -- RefreshError, network
+            logger.warning("YOUTUBE_QUOTA: YouTube token unusable: %s", exc)
+            return _reconnect_needed(return_to)
+        if not email:
+            return _error(
+                "Couldn't confirm which Google account is connected to YouTube "
+                "(Google didn't answer). "
+                f"<a href='/auth/youtube/quota/start?return_to={_safe_return(return_to)}'>"
+                "Try again</a>"
+            )
         callback = _callback_uri(request, "/auth/youtube/quota/callback")
         flow = _yu.make_publisher_flow(callback, SETUP_SCOPES)
         extra = {"login_hint": email} if email else {}
@@ -366,7 +402,7 @@ def build_router(storage_path: str) -> APIRouter:
                 "Try again</a>"
             )
         email = _id_token_email(setup_creds)
-        if entry["email"] and email and email != entry["email"]:
+        if not email or email != entry["email"]:
             return _error(
                 "You picked a different Google account than the one connected "
                 "to YouTube. The quota project has to belong to the same "
@@ -386,10 +422,15 @@ def build_router(storage_path: str) -> APIRouter:
             write_quota_project(yt_dir, project_id, email, has_channel)
             clear_auth_needed(str(storage), "youtube")
 
+        try:
+            yt_session = AuthorizedSession(
+                _raw_youtube_credentials(yt_dir / "token.json")
+            )
+        except Exception as exc:  # noqa: BLE001 -- RefreshError, network
+            logger.warning("YOUTUBE_QUOTA: YouTube token unusable: %s", exc)
+            return _reconnect_needed(entry["return_to"])
         prov = _qp.QuotaProjectProvisioner(
-            AuthorizedSession(setup_creds),
-            AuthorizedSession(_raw_youtube_credentials(yt_dir / "token.json")),
-            _on_ready,
+            AuthorizedSession(setup_creds), yt_session, _on_ready
         )
         _job["provisioner"] = prov
         prov.start()
