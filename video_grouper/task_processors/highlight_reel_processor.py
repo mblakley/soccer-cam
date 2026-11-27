@@ -11,12 +11,13 @@ Per-reel flow:
 2. For each reel, fetch its ordered game-clips. Each clip carries the
    ``recording_group_dir`` of its source recording (joined server-side via
    game_videos → camera_recordings → game_sessions).
-3. Resolve every clip's source ``combined.mp4`` locally. If any source is
-   missing on this install, log + skip the reel WITHOUT claiming — another
-   camera-manager may have it.
+3. Resolve every clip's source video locally (see ``reel_source_for``): the
+   broadcast (ball-following) ``<slug>.mp4``, or the full-field
+   ``<slug>-raw.mp4`` for clips a coach cut from the full-field upload. If any
+   source is missing on this install, log + skip the reel WITHOUT claiming —
+   another camera-manager may have it.
 4. Claim via ``PATCH status='generating'``.
-5. Trim each clip from its local ``combined.mp4`` using the clip's
-   ``start_time``/``end_time``.
+5. Trim each clip from that video using the clip's offsets.
 6. Concatenate via the existing ``HighlightCompilationTask`` (FFmpeg concat
    demuxer).
 7. Upload to YouTube under the user's OAuth (privacy=unlisted).
@@ -37,11 +38,38 @@ from ..utils.config import Config
 from ..utils.ffmpeg_utils import trim_video
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
-from .recording_locator import find_combined_video, resolve_recording_dir
+from .recording_locator import (
+    find_processed_video,
+    find_trimmed_raw_video,
+    resolve_recording_dir,
+)
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
 from .tasks.ttt.highlight_reel_task import HighlightReelTask
 
 logger = logging.getLogger(__name__)
+
+
+def reel_source_for(recording_dir: str, clip: dict) -> str | None:
+    """The local video a reel clip is cut from.
+
+    Decided 2026-11-26 (training/docs/DECISIONS.md): moment clips and reels come
+    from the broadcast (ball-following) view. Both clip kinds carry offsets on
+    the trimmed, game-clock timeline: moment clips are placed from each tag's
+    trimmed offset (ClipDiscoveryProcessor), and game clips are cut by a coach
+    on the uploaded game video. So:
+
+    - a game clip cut from the full-field upload (``video_type == "full"``)
+      comes from the trimmed full-field ``<slug>-raw.mp4``;
+    - everything else comes from the broadcast ``<slug>.mp4``, falling back to
+      ``<slug>-raw.mp4`` (same timeline) before the broadcast has rendered.
+
+    Never ``combined.mp4``: it is untrimmed, so these offsets would land early
+    by the length of the trimmed-off pre-game footage. Reels were cut from it
+    until 2026-11-27.
+    """
+    if clip.get("video_type") == "full":
+        return find_trimmed_raw_video(recording_dir)
+    return find_processed_video(recording_dir) or find_trimmed_raw_video(recording_dir)
 
 
 class HighlightReelProcessor(QueueProcessor):
@@ -234,12 +262,15 @@ class HighlightReelProcessor(QueueProcessor):
                             reason,
                         )
                     return
-                combined = find_combined_video(resolved_dir)
-                if not combined:
+                source = reel_source_for(resolved_dir, clip)
+                if not source:
                     if reel_id not in self._already_skipped:
-                        reason = f"Clip {idx} combined.mp4 not found in {resolved_dir}"
+                        reason = (
+                            f"Clip {idx}: no trimmed game video (<slug>.mp4 or "
+                            f"<slug>-raw.mp4) in {resolved_dir} yet"
+                        )
                         logger.info(
-                            "HIGHLIGHT_REEL: reel %s skipped — clip %d combined.mp4 missing in %s",
+                            "HIGHLIGHT_REEL: reel %s skipped — clip %d has no trimmed game video in %s",
                             reel_id,
                             idx,
                             resolved_dir,
@@ -252,7 +283,7 @@ class HighlightReelProcessor(QueueProcessor):
                             reason,
                         )
                     return
-                resolved_sources.append((clip, combined))
+                resolved_sources.append((clip, source))
 
             # We resolved this reel — clear any prior skip suppression so a
             # future state change re-logs.

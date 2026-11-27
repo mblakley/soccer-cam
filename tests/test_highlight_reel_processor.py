@@ -57,13 +57,31 @@ def _make_processor(tmp_path, *, ttt_client=None, youtube_uploader=None):
     return processor
 
 
-def _stage_recording(storage_path: Path, group_dir: str) -> Path:
-    """Create <storage_path>/<group_dir>/combined.mp4 and return its path."""
+GAME_SLUG = "2026.12.05 - Core Loop vs Rivals (home)"
+
+
+def _stage_recording(
+    storage_path: Path,
+    group_dir: str,
+    *,
+    processed: bool = True,
+    raw: bool = True,
+    combined: bool = True,
+) -> Path:
+    """Stage a recording dir the way the pipeline leaves it: the untrimmed
+    ``combined.mp4`` at the top, and the trimmed full-field ``<slug>-raw.mp4``
+    + broadcast ``<slug>.mp4`` in the game subdirectory. Returns the broadcast
+    path (the file reels should be cut from)."""
     target = storage_path / group_dir
-    target.mkdir(parents=True, exist_ok=True)
-    combined = target / "combined.mp4"
-    combined.write_bytes(b"\x00" * 16)
-    return combined
+    game_dir = target / GAME_SLUG
+    game_dir.mkdir(parents=True, exist_ok=True)
+    if combined:
+        (target / "combined.mp4").write_bytes(b"\x00" * 16)
+    if raw:
+        (game_dir / f"{GAME_SLUG}-raw.mp4").write_bytes(b"\x00" * 16)
+    if processed:
+        (game_dir / f"{GAME_SLUG}.mp4").write_bytes(b"\x00" * 16)
+    return game_dir / f"{GAME_SLUG}.mp4"
 
 
 def _make_clip(idx: int, group_dir: str, start: int = 10, end: int = 20):
@@ -84,8 +102,8 @@ def _make_moment_clip(
 ):
     """A minimal moment-clip dict shaped like get_highlight_moment_clips returns.
 
-    Moment clips use float clip_start_offset/clip_end_offset (absolute
-    offsets into the source combined.mp4) instead of int start_time/end_time.
+    Moment clips use float clip_start_offset/clip_end_offset (offsets on the
+    trimmed game-clock timeline) instead of int start_time/end_time.
     """
     return {
         "id": f"mclip-{idx}",
@@ -735,7 +753,9 @@ async def test_moment_reel_uses_clip_offsets_for_trim(tmp_path, stub_combine_vid
         await asyncio.sleep(0)
 
     assert len(captured) == 1
-    _src, _dst, start_str, duration_str = captured[0]
+    src, _dst, start_str, duration_str = captured[0]
+    # Cut from the broadcast view, not the untrimmed combined.mp4 (decided 2026-11-26).
+    assert src.endswith(f"{GAME_SLUG}.mp4") and not src.endswith("-raw.mp4")
     # 110.123 formatted to 3 decimals.
     assert start_str == "110.123"
     # duration = 140.456 - 110.123 = 30.333
@@ -939,3 +959,69 @@ async def test_moment_reel_empty_clips_skips_without_claim(tmp_path):
     ttt_client.get_highlight_moment_clips.assert_called_once()
     ttt_client.claim_highlight.assert_not_called()
     ttt_client.fail_highlight.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Which video a reel clip is cut from (decided 2026-11-26: the broadcast view)
+# ---------------------------------------------------------------------------
+
+
+def test_reel_source_prefers_the_broadcast_video(tmp_path):
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    broadcast = _stage_recording(tmp_path, "game-A")
+    clip = _make_moment_clip(0, "game-A")
+    assert reel_source_for(str(tmp_path / "game-A"), clip) == str(broadcast)
+
+
+def test_reel_source_falls_back_to_the_trimmed_full_field_video(tmp_path):
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    _stage_recording(tmp_path, "game-A", processed=False)
+    src = reel_source_for(str(tmp_path / "game-A"), _make_moment_clip(0, "game-A"))
+    assert src is not None and src.endswith(f"{GAME_SLUG}-raw.mp4")
+
+
+def test_full_field_game_clips_are_cut_from_the_full_field_video(tmp_path):
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    _stage_recording(tmp_path, "game-A")
+    clip = {**_make_clip(0, "game-A"), "video_type": "full"}
+    src = reel_source_for(str(tmp_path / "game-A"), clip)
+    assert src is not None and src.endswith(f"{GAME_SLUG}-raw.mp4")
+
+
+def test_combined_mp4_alone_is_never_used(tmp_path):
+    # combined.mp4 is untrimmed: clip offsets are on the trimmed timeline, so
+    # cutting from it would land early by the trimmed-off pre-game footage.
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    _stage_recording(tmp_path, "game-A", processed=False, raw=False)
+    clip = _make_moment_clip(0, "game-A")
+    assert reel_source_for(str(tmp_path / "game-A"), clip) is None
+
+
+@pytest.mark.asyncio
+async def test_reel_waits_without_claiming_when_only_combined_exists(
+    tmp_path, stub_trim_video, stub_combine_videos
+):
+    _stage_recording(tmp_path, "game-A", processed=False, raw=False)
+    reel = {"id": "reel-untrimmed", "title": "Untrimmed only", "status": "pending"}
+
+    ttt_client = MagicMock()
+    ttt_client.is_authenticated = MagicMock(return_value=True)
+    ttt_client.get_pending_highlights = MagicMock(return_value=[reel])
+    ttt_client.get_highlight_game_clips = MagicMock(
+        return_value=[_make_clip(0, "game-A")]
+    )
+    ttt_client.claim_highlight = MagicMock(return_value=reel)
+    ttt_client.report_blocker = MagicMock()
+
+    processor = _make_processor(tmp_path, ttt_client=ttt_client)
+    await _poll_and_drain(processor)
+    await asyncio.sleep(0)
+
+    ttt_client.claim_highlight.assert_not_called()
+    stub_trim_video.assert_not_called()
+    ttt_client.report_blocker.assert_called_once()
+    assert "trimmed game video" in ttt_client.report_blocker.call_args[0][2]

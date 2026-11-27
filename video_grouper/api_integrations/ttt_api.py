@@ -476,8 +476,9 @@ class TTTApiClient:
         GET {api_base_url}/api/highlights/{reel_id}/moment-clips
 
         Used when the polled reel has ``source='moment_tagger'``. Each item
-        carries ``clip_start_offset`` / ``clip_end_offset`` (absolute offsets
-        into the source ``combined.mp4``) plus ``recording_group_dir`` so this
+        carries ``clip_start_offset`` / ``clip_end_offset`` (offsets on the
+        trimmed, game-clock timeline, i.e. into ``<slug>.mp4`` /
+        ``<slug>-raw.mp4``, not ``combined.mp4``) plus ``recording_group_dir`` so this
         install can locate the source file. Ordered by the junction
         ``sequence_order``.
         """

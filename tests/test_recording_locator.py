@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from video_grouper.task_processors import recording_locator
 from video_grouper.task_processors.recording_locator import (
     find_combined_video,
     find_processed_video,
@@ -155,3 +156,29 @@ def test_find_processed_video_ignores_combined_only(tmp_path):
 
 def test_find_processed_video_unreadable_dir(tmp_path):
     assert find_processed_video(str(tmp_path / "does-not-exist")) is None
+
+
+def test_broadcast_for_raw_prefers_the_rendered_broadcast(tmp_path):
+    raw = tmp_path / "heat-vs-rivals-home-12-05-2026-raw.mp4"
+    raw.write_bytes(b"0")
+    # Before AutoCam has rendered: clip from the trimmed full-field video.
+    assert recording_locator.broadcast_for_raw(str(raw)) == str(raw)
+    broadcast = tmp_path / "heat-vs-rivals-home-12-05-2026.mp4"
+    broadcast.write_bytes(b"0")
+    # After: from the broadcast view (decided 2026-11-26).
+    assert recording_locator.broadcast_for_raw(str(raw)) == str(broadcast)
+
+
+def test_broadcast_for_raw_leaves_other_paths_alone(tmp_path):
+    other = tmp_path / "combined.mp4"
+    assert recording_locator.broadcast_for_raw(str(other)) == str(other)
+
+
+def test_find_trimmed_raw_video_in_game_subdir(tmp_path):
+    game = tmp_path / "2026.12.05 - Heat vs Rivals (home)"
+    game.mkdir()
+    (tmp_path / "combined.mp4").write_bytes(b"0")
+    raw = game / "heat-vs-rivals-home-12-05-2026-raw.mp4"
+    raw.write_bytes(b"0")
+    assert recording_locator.find_trimmed_raw_video(str(tmp_path)) == str(raw)
+    assert recording_locator.find_trimmed_raw_video(str(game / "missing")) is None

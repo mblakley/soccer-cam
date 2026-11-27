@@ -90,6 +90,52 @@ def _processed_video_in(directory: str) -> str | None:
     return None
 
 
+def _raw_video_in(directory: str) -> str | None:
+    """Return the trimmed full-field ``<slug>-raw.mp4`` in ``directory``."""
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return None
+    for name in names:
+        if name.endswith("-raw.mp4"):
+            return os.path.join(directory, name)
+    return None
+
+
+def find_trimmed_raw_video(recording_dir: str) -> str | None:
+    """Find the trimmed full-field ``<slug>-raw.mp4`` (the AutoCam input).
+
+    Same timeline as the processed broadcast video (game-clock), unlike
+    ``combined.mp4`` (the untrimmed concatenation). Looks directly inside
+    ``recording_dir`` then one level of subdirectory deep.
+    """
+    hit = _raw_video_in(recording_dir)
+    if hit:
+        return hit
+    try:
+        entries = sorted(os.listdir(recording_dir))
+    except OSError:
+        return None
+    for entry in entries:
+        subdir = os.path.join(recording_dir, entry)
+        if os.path.isdir(subdir):
+            hit = _raw_video_in(subdir)
+            if hit:
+                return hit
+    return None
+
+
+def broadcast_for_raw(raw_path: str) -> str:
+    """The broadcast ``<slug>.mp4`` beside a trimmed ``<slug>-raw.mp4`` once it
+    exists, else the raw path itself. Both share the trimmed timeline, so the
+    same clip offsets apply to either."""
+    if raw_path.endswith("-raw.mp4"):
+        processed = raw_path[: -len("-raw.mp4")] + ".mp4"
+        if os.path.isfile(processed):
+            return processed
+    return raw_path
+
+
 def find_processed_video(recording_dir: str) -> str | None:
     """Find the processed (AutoCam) broadcast video in a recording dir tree.
 
