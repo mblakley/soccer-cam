@@ -34,7 +34,10 @@ def build_secure_loader_session(
     against it. Returns the loaded ``InferenceSession``. ``step_name`` only
     scopes the log/error messages.
     """
-    from video_grouper.api_integrations.ttt_api import TTTApiClient
+    from video_grouper.api_integrations.ttt_api import (
+        TTTApiClient,
+        resolve_api_base_url,
+    )
     from video_grouper.ball_tracking.secure_loader import SecureLoader
 
     if not ctx.ttt_config:
@@ -46,9 +49,7 @@ def build_secure_loader_session(
 
     cfg = ctx.ttt_config
     client = TTTApiClient(
-        supabase_url=cfg.get("supabase_url", ""),
-        anon_key=cfg.get("anon_key", ""),
-        api_base_url=cfg.get("api_base_url", ""),
+        api_base_url=resolve_api_base_url(cfg.get("api_base_url", "")),
         storage_path=str(ctx.storage_path),
     )
     public_keys = cfg.get("plugin_signing_public_keys") or []

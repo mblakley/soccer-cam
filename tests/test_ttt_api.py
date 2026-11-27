@@ -23,8 +23,6 @@ class TestTTTApiClient(unittest.TestCase):
 
     def setUp(self):
         self.client = TTTApiClient(
-            supabase_url="https://test.supabase.co",
-            anon_key="test-anon-key",
             api_base_url="https://api.test.com",
             storage_path=tempfile.mkdtemp(),
         )
@@ -609,3 +607,79 @@ class TestTTTApiClient(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ----------------------------------------------------------------------
+# TTT device sign-in (soccer-cam knows only TTT's API URL)
+# ----------------------------------------------------------------------
+
+
+def _client(tmp_path):
+    return TTTApiClient(api_base_url="https://ttt.example/", storage_path=str(tmp_path))
+
+
+def test_begin_sign_in_builds_pkce_start_url(tmp_path):
+    import base64
+    import hashlib
+    from urllib.parse import parse_qs, urlparse
+
+    url, state, verifier = _client(tmp_path).begin_sign_in(
+        "http://127.0.0.1:8765/ttt/callback"
+    )
+    target = urlparse(url)
+    q = parse_qs(target.query)
+    assert f"{target.scheme}://{target.netloc}{target.path}" == (
+        "https://ttt.example/api/device-auth/start"
+    )
+    assert q["state"] == [state]
+    expected = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
+    assert q["code_challenge"] == [expected]
+    assert 43 <= len(verifier) <= 128
+
+
+def test_refresh_goes_through_ttt_not_supabase(tmp_path):
+    from unittest.mock import MagicMock
+
+    c = _client(tmp_path)
+    c._refresh_token_value = "old"
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {
+        "access_token": "a.e30.s",
+        "refresh_token": "new",
+        "expires_in": 3600,
+    }
+    c._http = MagicMock()
+    c._http.post.return_value = resp
+    c.refresh_token()
+    assert (
+        c._http.post.call_args.args[0] == "https://ttt.example/api/device-auth/refresh"
+    )
+    assert c._http.post.call_args.kwargs["json"] == {"refresh_token": "old"}
+    assert c._refresh_token_value == "new"
+
+
+def test_other_instances_pick_up_sign_in_and_sign_out(tmp_path):
+    import json as _json
+    import os as _os
+
+    running = _client(tmp_path)  # e.g. the clip-request processor's client
+    assert not running.has_session()
+    tokens = tmp_path / "ttt" / "tokens.json"
+    tokens.parent.mkdir(parents=True)
+    tokens.write_text(
+        _json.dumps(
+            {
+                "access_token": "a",
+                "refresh_token": "r",
+                "expires_at": time.time() + 3600,
+            }
+        )
+    )
+    _os.utime(tokens, (time.time() + 5, time.time() + 5))
+    assert running.has_session()  # web sign-in reached the running client
+    tokens.unlink()
+    assert not running.has_session()  # and so does sign-out

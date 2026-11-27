@@ -354,8 +354,8 @@ class TestSectionGating:
         body = client.get("/config").text
         # TTT is off by default and has many fields; they must still be in the
         # document so the browser submits them.
-        assert 'name="TTT.supabase_url"' in body
         assert 'name="TTT.api_base_url"' in body
+        assert 'name="TTT.camera_id"' in body
 
     def test_a_section_with_nothing_to_gate_promises_nothing(self, client):
         """TEAMSNAP's remaining fields are dicts, which this editor skips."""

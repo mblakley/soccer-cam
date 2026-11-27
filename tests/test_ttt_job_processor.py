@@ -71,8 +71,6 @@ def ttt_config(ttt_storage):
             enabled=True,
             job_polling_enabled=True,
             machine_name="test-machine",
-            supabase_url="https://test.supabase.co",
-            anon_key="test-key",
             api_base_url="https://ttt.example.com",
         ),
     )

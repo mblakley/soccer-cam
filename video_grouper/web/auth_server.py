@@ -1,25 +1,18 @@
-"""Headless TTT auth web server with a small status dashboard.
+"""Soccer-cam's local web app: dashboard, TTT sign-in, YouTube connect.
 
-Lets a Docker / Linux user sign in to TTT via a browser. The OAuth flow
-mirrors ``video_grouper/tray/onboarding_wizard.py:1820+``: the user is
-redirected to Supabase's hosted ``/auth/v1/authorize`` endpoint with the
-configured provider (Google, etc.); after sign-in Supabase redirects
-back to ``/callback`` with the access token in the URL fragment; a
-small JS snippet on that page reads the fragment and forwards the token
-to ``/receive-token``, which calls
-``TTTApiClient.set_session_from_token`` and writes
-``shared_data/ttt/tokens.json`` for the rest of the pipeline to pick
-up.
+TTT sign-in is TTT's own browser flow; soccer-cam knows only TTT's API URL.
+``/login`` sends the browser to ``{api}/api/device-auth/start`` with a PKCE
+challenge and a loopback ``redirect_uri`` (``/ttt/callback`` on this server).
+The user signs in on TTT's site and approves the device; TTT redirects back
+with a one-time code, which ``/ttt/callback`` redeems for this install's own
+session (``TTTApiClient.complete_sign_in``) and writes
+``shared_data/ttt/tokens.json`` for the rest of the pipeline.
 
 The dashboard at ``/`` shows auth state, pipeline queue sizes, camera
 connectivity, and per-game progress. Live state (queues, cameras) comes
 from a ``status_provider`` callable supplied by the orchestrator;
 per-game state is read directly from disk so the dashboard works in
 unit tests too.
-
-Email / password is not handled here. Users who don't sign in to TTT via
-an OAuth provider can keep using the existing ``[TTT] email + password``
-config.ini path; this server is the alternative for OAuth users.
 
 Trust model: unauthenticated. Default bind is localhost; anyone who can
 reach the port is treated as the signed-in TTT user.
@@ -34,9 +27,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
-from fastapi import Body, FastAPI, Form, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -44,44 +36,13 @@ from video_grouper.api_integrations.ttt_api import (
     TTTApiClient,
     TTTApiError,
     _decode_jwt_payload,
+    resolve_api_base_url,
 )
 from video_grouper.utils.config import TTTConfig
 from video_grouper.web import chrome as _chrome
 from video_grouper.web.auth_status import clear_auth_needed, list_auth_needed
 
 logger = logging.getLogger(__name__)
-
-# TTT infrastructure defaults (not secrets -- Supabase anon keys are public).
-# Mirror of onboarding_wizard.py:60-80; copied rather than imported so this
-# module stays free of PyQt6 (the tray's transitive dep).
-_TTT_DEFAULT_SUPABASE_URL = "https://zmuwmngqqiaectpcqlfj.supabase.co"
-_TTT_DEFAULT_ANON_KEY = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpt"
-    "dXdtbmdxcWlhZWN0cGNxbGZqIiwicm9sZSI6"
-    "ImFub24iLCJpYXQiOjE3NjU1MDE1MDksImV4"
-    "cCI6MjA4MTA3NzUwOX0.UzAKgFWmXSFSN7uu"
-    "JsmCXRR5c_0oSHyFjJYeBxbmzmY"
-)
-_TTT_DEFAULT_API_BASE_URL = "https://team-tech-tools.vercel.app"
-
-try:
-    from video_grouper.utils._ttt_config import (
-        TTT_ANON_KEY,
-        TTT_API_BASE_URL,
-        TTT_SUPABASE_URL,
-    )
-except ImportError:
-    TTT_SUPABASE_URL = _TTT_DEFAULT_SUPABASE_URL
-    TTT_ANON_KEY = _TTT_DEFAULT_ANON_KEY
-    TTT_API_BASE_URL = _TTT_DEFAULT_API_BASE_URL
-
-
-# Default OAuth providers shown on the dashboard. Matches the providers
-# enabled in TTT's Supabase config (auth.external.*). If a provider isn't
-# enabled for a given deployment, clicking it surfaces a Supabase error
-# page rather than a hard failure here.
-_DEFAULT_PROVIDERS = ("google", "discord", "apple", "facebook", "twitter")
 
 # Game group directory format from camera_poller.py / DirectoryState.
 _GAME_DIR_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}$")
@@ -179,50 +140,6 @@ def _capture_state(status: dict | None) -> str:
     return "idle"
 
 
-_CALLBACK_JS = """(function() {
-    var hash = window.location.hash.substring(1);
-    if (!hash) {
-        document.getElementById('status').textContent =
-            'Error: no authentication data received from the identity provider.';
-        return;
-    }
-    var params = new URLSearchParams(hash);
-    // POST to /receive-token so the existing same-origin Origin/Referer
-    // CSRF middleware applies. A GET endpoint would be reachable via
-    // <img src=...> from any page; POST + same-origin enforcement isn't.
-    var body = {
-        access_token: params.get('access_token') || null,
-        error: params.get('error') || null,
-        error_description: params.get('error_description') || null
-    };
-    fetch('/receive-token', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify(body)
-    }).then(function(resp) {
-        return resp.text();
-    }).then(function(text) {
-        // Replace the page with the server-rendered success/error page so
-        // its own redirect can return the user to the status page.
-        document.open();
-        document.write(text);
-        document.close();
-    }).catch(function(err) {
-        document.getElementById('status').textContent =
-            'Error contacting local server: ' + err;
-    });
-})();
-"""
-
-_CALLBACK_PAGE = _chrome.notice_page(
-    "Signing in",
-    "Completing sign-in",
-    '<p class="muted" id="status">Talking to the identity provider&hellip;</p>',
-    extra_js=_CALLBACK_JS,
-)
-
-
 _SUCCESS_PAGE = _chrome.notice_page(
     "Signed in",
     "Signed in to Team Tech Tools",
@@ -232,9 +149,6 @@ _SUCCESS_PAGE = _chrome.notice_page(
     tone="ok",
     extra_js='setTimeout(function(){location.href="/";}, 2000);',
 )
-
-
-_RETURN_COOKIE = "sc_login_return"
 
 
 def _success_page(storage: Path, return_to: str | None) -> str:
@@ -271,7 +185,7 @@ def _success_page(storage: Path, return_to: str | None) -> str:
     return _SUCCESS_PAGE
 
 
-_MAGIC_LINK_SENT_PAGE = _chrome.notice_page(
+MAGIC_LINK_SENT_PAGE = _chrome.notice_page(
     "Magic link sent",
     "Magic link sent",
     '<p class="muted">Check <code>__EMAIL__</code> for a sign-in link from '
@@ -350,6 +264,17 @@ def auto_claim_camera_manager(client: TTTApiClient) -> None:
 # attempts and prevent stale state-token replay.
 _YT_STATE_TTL_SECONDS = 600
 _yt_oauth_states: dict[str, dict] = {}
+
+
+# TTT sign-in attempts: ``state`` -> PKCE verifier, redirect URI and where to
+# land afterwards. Same TTL as the YouTube flow.
+_ttt_sign_in_states: dict[str, dict] = {}
+
+
+def _ttt_states_gc() -> None:
+    cutoff = time.time() - _YT_STATE_TTL_SECONDS
+    for k in [k for k, v in _ttt_sign_in_states.items() if v["created_at"] < cutoff]:
+        _ttt_sign_in_states.pop(k, None)
 
 
 def _yt_states_gc() -> None:
@@ -731,7 +656,7 @@ def _render_byo_youtube_section(storage: Path) -> str:
     )
 
 
-def _render_auth_section(token_file: Path, providers: tuple[str, ...]) -> str:
+def _render_auth_section(token_file: Path) -> str:
     s = _read_status(token_file)
     if s["authenticated"]:
         ident = html.escape(s["identity"] or "?")
@@ -742,39 +667,17 @@ def _render_auth_section(token_file: Path, providers: tuple[str, ...]) -> str:
             '<button type="submit" class="btn btn-ghost">Sign out</button></form>'
         )
     if s["expires_at"]:
-        # Token present but expired. Surface that, then offer re-sign-in.
         prefix = (
-            f'<p class="warn"><span class="status-dot bad"></span>Token expired '
+            f'<p class="warn"><span class="status-dot bad"></span>Session expired '
             f"on {_fmt_ts(s['expires_at'])}.</p>"
         )
     else:
         prefix = '<p><span class="status-dot off"></span>Not signed in.</p>'
-    oauth_buttons = " ".join(
-        f'<a class="btn" href="/login?provider={p}">{p.title()}</a>' for p in providers
+    return (
+        prefix + '<p><a class="btn" href="/login">Sign in to Team Tech Tools</a></p>'
+        '<p class="muted">Opens Team Tech Tools in your browser. Sign in there '
+        "however you normally do, then approve this camera.</p>"
     )
-    oauth_block = (
-        f'<p class="muted">Sign in with an OAuth provider:</p><p>{oauth_buttons}</p>'
-    )
-    password_form = """
-<details class="auth-details">
-<summary>Or sign in with email and password</summary>
-<form method="post" action="/login/password" class="auth-form">
-<label>Email <input name="email" type="email" autocomplete="username" required></label>
-<label>Password <input name="password" type="password" autocomplete="current-password" required></label>
-<button type="submit" class="btn">Sign in</button>
-</form>
-</details>
-"""
-    magic_form = """
-<details class="auth-details">
-<summary>Or get a magic link by email</summary>
-<form method="post" action="/login/magic" class="auth-form">
-<label>Email <input name="email" type="email" autocomplete="email" required></label>
-<button type="submit" class="btn">Send magic link</button>
-</form>
-</details>
-"""
-    return prefix + oauth_block + password_form + magic_form
 
 
 def _render_queues_section(status: dict | None) -> str:
@@ -901,17 +804,16 @@ def create_app(
     ttt_config: TTTConfig,
     storage_path: str,
     status_provider: Callable[[], dict[str, Any]] | None = None,
-    providers: tuple[str, ...] = _DEFAULT_PROVIDERS,
     config_path: Path | None = None,
     node_role: str = "standalone",
     update_processor: Any | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for the headless auth server.
 
-    Backend URL resolution: ``[TTT].supabase_url`` etc. when set, otherwise
-    the build-time ``_ttt_config`` constants, otherwise the production
-    fallbacks above. The documented user path is "leave [TTT] URLs blank";
-    overrides are a dev escape hatch.
+    TTT URL resolution: ``[TTT].api_base_url`` when set, otherwise the
+    build-time ``_ttt_config.TTT_API_BASE_URL``, otherwise the fallback above.
+    The documented user path is "leave it blank"; the override is for dev and
+    self-hosted TTT.
 
     ``status_provider``: called on each dashboard render to surface live
     state from the orchestrator. Returns a dict with optional keys
@@ -919,20 +821,8 @@ def create_app(
     ``{name, ip, connected}``). The dashboard renders ``—`` /
     "not available" when ``None`` (used by tests and standalone runs).
     """
-    supabase_url = _resolve_url(ttt_config.supabase_url, TTT_SUPABASE_URL)
-    # supabase_url is the browser-facing URL emitted in OAuth redirects.
-    # supabase_internal_url is what HTTP clients inside the container use
-    # (e.g., a docker-network container name when Supabase runs as a
-    # sibling container). Falls back to supabase_url when blank, which is
-    # the right thing for production where one URL serves both legs.
-    supabase_internal_url = _resolve_url(ttt_config.supabase_internal_url, supabase_url)
-    anon_key = _resolve_url(ttt_config.anon_key, TTT_ANON_KEY)
-    api_base_url = _resolve_url(ttt_config.api_base_url, TTT_API_BASE_URL)
-
     client = TTTApiClient(
-        supabase_url=supabase_internal_url,
-        anon_key=anon_key,
-        api_base_url=api_base_url,
+        api_base_url=resolve_api_base_url(ttt_config.api_base_url),
         storage_path=storage_path,
     )
     storage = Path(storage_path)
@@ -1000,12 +890,11 @@ def create_app(
     #   1. DNS rebinding — `evil.com` resolves to 127.0.0.1 and the
     #      victim's browser issues requests to localhost. Defense:
     #      validate the Host header against an allowlist.
-    #   2. CSRF on state-changing endpoints — a malicious page can drive
-    #      `<img src="http://localhost:8765/receive-token?access_token=...">`
-    #      to silently sign the local pipeline into the attacker's TTT
-    #      account. Defense: state-changing endpoints (including
-    #      /receive-token) only accept POST, and POSTs must have a
-    #      same-origin Origin or Referer.
+    #   2. CSRF on state-changing endpoints — a malicious page could try to
+    #      sign the local pipeline into the attacker's TTT account. Defense:
+    #      state-changing endpoints only accept POST with a same-origin
+    #      Origin or Referer, and /ttt/callback (a GET, by OAuth design) only
+    #      accepts a ``state`` this server just issued for its own /login.
     bind = (ttt_config.auth_server_bind or "127.0.0.1").strip()
     allowed_hosts = set(_LOOPBACK_HOSTS)
     if bind and bind not in {"0.0.0.0", "127.0.0.1", "::1", "[::1]", "localhost"}:
@@ -1069,7 +958,7 @@ def create_app(
             _DASHBOARD_BODY.replace(
                 "__AUTH_FLAGS_BANNER__", _render_auth_flags_banner(storage)
             )
-            .replace("__AUTH_BLOCK__", _render_auth_section(token_file, providers))
+            .replace("__AUTH_BLOCK__", _render_auth_section(token_file))
             .replace("__YOUTUBE_BLOCK__", _render_youtube_section(storage))
             .replace("__TRAY_BLOCK__", _render_tray_section(storage))
             .replace("__QUEUES_BLOCK__", _render_queues_section(status))
@@ -1086,122 +975,57 @@ def create_app(
             )
         )
 
-    def _redirect_uri(request: Request) -> str:
-        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
-        host = request.headers.get("host") or request.url.netloc
-        return f"{proto}://{host}/callback"
-
-    def _with_return_cookie(resp: Response, return_to: str) -> Response:
-        # Supabase's redirect_to allow-list is exact, so the wizard's landing
-        # page rides in a short-lived cookie instead of the callback URL.
+    @app.get("/login")
+    def login(request: Request, return_to: str = "") -> Response:
+        """Start TTT sign-in: hand the browser to TTT with a PKCE challenge."""
         from video_grouper.web.youtube_connect import _safe_return
 
-        if return_to:
-            resp.set_cookie(
-                _RETURN_COOKIE,
-                _safe_return(return_to),
-                max_age=600,
-                httponly=True,
-                samesite="lax",
-            )
-        return resp
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        host = request.headers.get("host") or request.url.netloc
+        redirect_uri = f"{proto}://{host}/ttt/callback"
+        url, state, verifier = client.begin_sign_in(redirect_uri)
+        _ttt_states_gc()
+        _ttt_sign_in_states[state] = {
+            "verifier": verifier,
+            "redirect_uri": redirect_uri,
+            "return_to": _safe_return(return_to) if return_to else None,
+            "created_at": time.time(),
+        }
+        logger.info("Starting TTT sign-in")
+        return RedirectResponse(url=url, status_code=302)
 
-    @app.get("/login")
-    def login(
-        request: Request, provider: str = "google", return_to: str = ""
-    ) -> Response:
-        return _with_return_cookie(_login_redirect(request, provider), return_to)
-
-    def _login_redirect(request: Request, provider: str) -> RedirectResponse:
-        # Do NOT pass `state` to Supabase. GoTrue treats client-supplied
-        # state as authoritative for the redirect to Google but never
-        # creates a flow_state row for it, so /auth/v1/callback rejects
-        # with "OAuth state parameter is invalid". CSRF for /receive-token
-        # is handled by POST + same-origin Origin/Referer enforcement
-        # (see the host_and_origin_check middleware).
-        params = urlencode(
-            {
-                "provider": provider,
-                "redirect_to": _redirect_uri(request),
-            }
-        )
-        authorize_url = f"{supabase_url}/auth/v1/authorize?{params}"
-        logger.info("Redirecting to OAuth authorize: provider=%s", provider)
-        return RedirectResponse(url=authorize_url, status_code=302)
-
-    @app.post("/login/password")
-    def login_password(
-        email: str = Form(...), password: str = Form(...), return_to: str = Form("")
-    ) -> Response:
-        try:
-            client.login(email, password)
-        except TTTApiError as exc:
-            return HTMLResponse(
-                _error_page(message=html.escape(str(exc))),
-                status_code=401,
-            )
-        logger.info("Password sign-in complete for %s", email)
-        auto_claim_camera_manager(client)
-        from video_grouper.web.youtube_connect import _safe_return, youtube_connection
-
-        if return_to:
-            return RedirectResponse(url=_safe_return(return_to), status_code=303)
-        conn = youtube_connection(storage)
-        if conn["available"] and not conn["connected"]:
-            return HTMLResponse(_success_page(storage, None))
-        return RedirectResponse(url="/", status_code=303)
-
-    @app.post("/login/magic")
-    def login_magic(
-        request: Request, email: str = Form(...), return_to: str = Form("")
-    ) -> Response:
-        try:
-            client.send_magic_link(email, _redirect_uri(request))
-        except TTTApiError as exc:
-            return HTMLResponse(
-                _error_page(message=html.escape(str(exc))),
-                status_code=400,
-            )
-        return _with_return_cookie(
-            HTMLResponse(
-                _MAGIC_LINK_SENT_PAGE.replace("__EMAIL__", html.escape(email))
-            ),
-            return_to,
-        )
-
-    @app.get("/callback", response_class=HTMLResponse)
-    def callback() -> HTMLResponse:
-        return HTMLResponse(_CALLBACK_PAGE)
-
-    @app.post("/receive-token", response_class=HTMLResponse)
-    def receive_token(
-        request: Request, payload: dict[str, Any] = Body(default={})
+    @app.get("/ttt/callback", response_class=HTMLResponse)
+    def ttt_callback(
+        code: str | None = None, state: str | None = None, error: str | None = None
     ) -> HTMLResponse:
-        # POST + same-origin Origin/Referer (enforced by middleware) is
-        # the CSRF defense for this endpoint; <img>/<script> attacks can
-        # only do GET, and cross-origin form/fetch POSTs fail the
-        # middleware check.
-        access_token = payload.get("access_token")
-        error = payload.get("error")
-        error_description = payload.get("error_description")
-
-        if not access_token:
-            msg = error_description or error or "No access token returned."
-            return HTMLResponse(_error_page(message=html.escape(msg)), status_code=400)
-        try:
-            client.set_session_from_token(access_token)
-        except (ValueError, KeyError) as exc:
-            logger.error("Failed to persist OAuth token: %s", exc)
+        """TTT sends the browser back here with a one-time code."""
+        _ttt_states_gc()
+        entry = _ttt_sign_in_states.pop(state or "", None)
+        if error == "access_denied":
             return HTMLResponse(
-                _error_page(message=f"Token rejected: {html.escape(str(exc))}"),
+                _error_page(message="Sign-in was cancelled. Nothing was changed."),
                 status_code=400,
             )
-        logger.info("OAuth sign-in complete; tokens persisted")
+        if error or not code or entry is None:
+            return HTMLResponse(
+                _error_page(
+                    message=(
+                        "This sign-in attempt expired or didn't come from this "
+                        'camera. Start again from the <a href="/">dashboard</a>.'
+                    )
+                ),
+                status_code=400,
+            )
+        try:
+            client.complete_sign_in(code, entry["verifier"], entry["redirect_uri"])
+        except TTTApiError as exc:
+            logger.error("TTT sign-in failed: %s", exc)
+            return HTMLResponse(
+                _error_page(message="Team Tech Tools didn't accept the sign-in."),
+                status_code=400,
+            )
         auto_claim_camera_manager(client)
-        resp = HTMLResponse(_success_page(storage, request.cookies.get(_RETURN_COOKIE)))
-        if _RETURN_COOKIE in request.cookies:
-            resp.delete_cookie(_RETURN_COOKIE)
-        return resp
+        return HTMLResponse(_success_page(storage, entry["return_to"]))
 
     @app.post("/auth/youtube/upload-credentials", response_class=HTMLResponse)
     async def youtube_upload_credentials(
@@ -1480,9 +1304,7 @@ def create_app(
                 raise HTTPException(
                     status_code=500, detail="Could not delete tokens"
                 ) from exc
-        client._access_token = None
-        client._refresh_token_value = None
-        client._expires_at = None
+        client.clear_session()
         # Send the user back to the dashboard so the new state is visible.
         return RedirectResponse(url="/", status_code=303)
 

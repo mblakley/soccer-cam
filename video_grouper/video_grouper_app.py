@@ -333,32 +333,29 @@ class VideoGrouperApp:
         self.highlight_reel_processor = None
         if self.config.ttt.enabled:
             try:
-                from video_grouper.api_integrations.ttt_api import TTTApiClient
+                from video_grouper.api_integrations.ttt_api import (
+                    TTTApiClient,
+                    resolve_api_base_url,
+                )
                 from video_grouper.utils.google_drive_upload import GoogleDriveUploader
 
                 ttt_client = TTTApiClient(
-                    supabase_url=self.config.ttt.supabase_url,
-                    anon_key=self.config.ttt.anon_key,
-                    api_base_url=self.config.ttt.api_base_url,
+                    api_base_url=resolve_api_base_url(self.config.ttt.api_base_url),
                     storage_path=self.storage_path,
                 )
-                # Login with stored credentials
-                if self.config.ttt.email and self.config.ttt.password:
-                    try:
-                        ttt_client.login(
-                            self.config.ttt.email, self.config.ttt.password
-                        )
-                        logger.info("TTT API client authenticated")
-                    except Exception as e:
-                        logger.error(f"TTT login failed: {e}")
-                    else:
-                        # Auto-claim camera-manager rows for every team the
-                        # signed-in user is on. Best-effort; never blocks startup.
-                        from video_grouper.web.auth_server import (
-                            auto_claim_camera_manager,
-                        )
+                if ttt_client.has_session():
+                    # Auto-claim camera-manager rows for every team the
+                    # signed-in user is on. Best-effort; never blocks startup.
+                    from video_grouper.web.auth_server import (
+                        auto_claim_camera_manager,
+                    )
 
-                        auto_claim_camera_manager(ttt_client)
+                    auto_claim_camera_manager(ttt_client)
+                else:
+                    logger.warning(
+                        "TTT: not signed in. Use 'Sign in to Team Tech Tools' on "
+                        "the dashboard (config email/password is no longer used)."
+                    )
 
                 # Initialize plugin manager
                 try:
@@ -558,27 +555,21 @@ class VideoGrouperApp:
             try:
                 ttt_client = getattr(self, "_ttt_client", None)
                 if not ttt_client:
-                    from video_grouper.api_integrations.ttt_api import TTTApiClient
+                    from video_grouper.api_integrations.ttt_api import (
+                        TTTApiClient,
+                        resolve_api_base_url,
+                    )
 
                     ttt_client = TTTApiClient(
-                        supabase_url=self.config.ttt.supabase_url,
-                        anon_key=self.config.ttt.anon_key,
-                        api_base_url=self.config.ttt.api_base_url,
+                        api_base_url=resolve_api_base_url(self.config.ttt.api_base_url),
                         storage_path=self.storage_path,
                     )
-                    if self.config.ttt.email and self.config.ttt.password:
-                        try:
-                            ttt_client.login(
-                                self.config.ttt.email, self.config.ttt.password
-                            )
-                        except Exception as e:
-                            logger.error(f"TTT login failed: {e}")
-                        else:
-                            from video_grouper.web.auth_server import (
-                                auto_claim_camera_manager,
-                            )
+                    if ttt_client.has_session():
+                        from video_grouper.web.auth_server import (
+                            auto_claim_camera_manager,
+                        )
 
-                            auto_claim_camera_manager(ttt_client)
+                        auto_claim_camera_manager(ttt_client)
                     self._ttt_client = ttt_client
 
                 # Job processor is only initialized when TTT job polling is on.

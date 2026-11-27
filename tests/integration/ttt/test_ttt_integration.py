@@ -21,12 +21,9 @@ from .conftest import (
     GAME_SESSION_ID,
     MOMENT_TAG_1_ID,
     PENDING_CLIP_REQUEST_ID,
-    SUPABASE_ANON_KEY,
-    SUPABASE_URL,
     TEAM_ID,
-    TEST_EMAIL,
-    TEST_PASSWORD,
     TTT_API_URL,
+    seed_session,
 )
 
 pytestmark = [pytest.mark.integration]
@@ -40,16 +37,14 @@ pytestmark = [pytest.mark.integration]
 class TestOnboardingWorkflow:
     """First-time setup sequence: login -> team discovery -> device config."""
 
-    def test_01_login_to_supabase(self, tmp_path):
-        """Fresh client can authenticate with Supabase email/password."""
+    def test_01_session_persists(self, tmp_path):
+        """A signed-in client persists its session to disk."""
         client = TTTApiClient(
-            supabase_url=SUPABASE_URL,
-            anon_key=SUPABASE_ANON_KEY,
             api_base_url=TTT_API_URL,
             storage_path=str(tmp_path),
         )
         assert not client.is_authenticated()
-        client.login(TEST_EMAIL, TEST_PASSWORD)
+        seed_session(client)
         assert client.is_authenticated()
         # Tokens persisted to disk
         token_file = tmp_path / "ttt" / "tokens.json"
@@ -1161,38 +1156,22 @@ class TestIntegrationValueAdd:
 class TestAuthEdgeCases:
     """Authentication edge cases."""
 
-    def test_login_bad_credentials(self, ttt_backend_available, tmp_path):
-        """Wrong password raises TTTApiError."""
-        client = TTTApiClient(
-            supabase_url=SUPABASE_URL,
-            anon_key=SUPABASE_ANON_KEY,
-            api_base_url=TTT_API_URL,
-            storage_path=str(tmp_path),
-        )
-        with pytest.raises(TTTApiError) as exc_info:
-            client.login(TEST_EMAIL, "wrong_password_123")
-        assert exc_info.value.status_code == 400
-
     def test_unauthenticated_call_raises(self, ttt_backend_available, tmp_path):
         """API call without login raises TTTApiError."""
         client = TTTApiClient(
-            supabase_url=SUPABASE_URL,
-            anon_key=SUPABASE_ANON_KEY,
             api_base_url=TTT_API_URL,
             storage_path=str(tmp_path),
         )
-        with pytest.raises(TTTApiError, match="Not authenticated"):
+        with pytest.raises(TTTApiError, match="Not signed in"):
             client.get_team_assignments()
 
     def test_refresh_token_after_login(self, ttt_backend_available, tmp_path):
         """Token refresh succeeds after login."""
         client = TTTApiClient(
-            supabase_url=SUPABASE_URL,
-            anon_key=SUPABASE_ANON_KEY,
             api_base_url=TTT_API_URL,
             storage_path=str(tmp_path),
         )
-        client.login(TEST_EMAIL, TEST_PASSWORD)
+        seed_session(client)
         assert client.is_authenticated()
         client.refresh_token()
         assert client.is_authenticated()
@@ -1201,18 +1180,14 @@ class TestAuthEdgeCases:
         """Tokens persist to disk and can be loaded by a new client."""
         storage = str(tmp_path)
         client1 = TTTApiClient(
-            supabase_url=SUPABASE_URL,
-            anon_key=SUPABASE_ANON_KEY,
             api_base_url=TTT_API_URL,
             storage_path=storage,
         )
-        client1.login(TEST_EMAIL, TEST_PASSWORD)
+        seed_session(client1)
         assert client1.is_authenticated()
 
         # New client pointed at same storage should load tokens
         client2 = TTTApiClient(
-            supabase_url=SUPABASE_URL,
-            anon_key=SUPABASE_ANON_KEY,
             api_base_url=TTT_API_URL,
             storage_path=storage,
         )

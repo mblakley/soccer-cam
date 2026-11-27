@@ -418,8 +418,7 @@ class TTTConfig(BaseModel):
     """Configuration for Team Tech Tools integration (clip request automation)."""
 
     enabled: bool = False
-    supabase_url: str = ""
-    anon_key: str = ""
+    # TTT's API URL, the only TTT address soccer-cam uses. Blank = the build's.
     api_base_url: str = ""
     email: str = ""
     password: str = ""
@@ -444,10 +443,6 @@ class TTTConfig(BaseModel):
     auth_server_enabled: bool = True
     auth_server_bind: str = "127.0.0.1"
     auth_server_port: int = 8765
-    # Optional: container-side Supabase URL used by HTTP clients inside the
-    # container, while supabase_url stays as the browser-facing URL emitted
-    # in OAuth redirects. Leave blank to use supabase_url for both legs.
-    supabase_internal_url: str = ""
 
     @field_validator("plugin_signing_public_keys", mode="before")
     @classmethod

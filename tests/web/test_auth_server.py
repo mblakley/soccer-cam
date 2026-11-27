@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
-from video_grouper.api_integrations.ttt_api import TTTApiClient, TTTApiError
+from video_grouper.api_integrations.ttt_api import TTTApiError
 from video_grouper.utils.config import TTTConfig
 from video_grouper.web import auth_server
 from video_grouper.web.auth_server import create_app
@@ -88,26 +88,6 @@ _SAME_ORIGIN = {"origin": "http://localhost:8765"}
 # ---------------------------------------------------------------------------
 
 
-def test_dashboard_unauthenticated_shows_all_signin_methods(client):
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert resp.headers["content-type"].startswith("text/html")
-    body = resp.text
-    assert "Soccer-Cam" in body
-    assert "Not signed in" in body
-
-    # OAuth provider buttons for all enabled providers.
-    for provider in ("google", "discord", "apple", "facebook", "twitter"):
-        assert f'href="/login?provider={provider}"' in body, f"missing {provider}"
-
-    # Email/password form.
-    assert 'action="/login/password"' in body
-    assert 'name="password"' in body
-
-    # Magic link form.
-    assert 'action="/login/magic"' in body
-
-
 def test_dashboard_authenticated_shows_email_when_present(storage, client):
     exp = int(time.time()) + 3600
     _write_tokens(
@@ -143,9 +123,9 @@ def test_dashboard_expired_token_surfaces_warning(storage, client):
         storage, jwt=_make_jwt(sub="user-xyz", exp=past), expires_at=float(past)
     )
     body = client.get("/").text
-    assert "Token expired" in body
-    # Re-sign-in still offered (sign-in widgets present).
-    assert 'action="/login/password"' in body
+    assert "Session expired" in body
+    # Re-sign-in still offered.
+    assert 'href="/login"' in body
 
 
 def test_dashboard_includes_pipeline_status_from_provider(storage):
@@ -474,160 +454,6 @@ def test_dashboard_renders_when_onboarding_completed(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_login_redirects_to_supabase_authorize(client):
-    resp = client.get(
-        "/login?provider=google",
-        follow_redirects=False,
-        headers={"host": "localhost:8765"},
-    )
-    assert resp.status_code == 302
-    location = resp.headers["location"]
-    parsed = urlparse(location)
-
-    assert location.startswith(auth_server.TTT_SUPABASE_URL)
-    assert parsed.path == "/auth/v1/authorize"
-    qs = parse_qs(parsed.query)
-    assert qs["provider"] == ["google"]
-    assert qs["redirect_to"] == ["http://localhost:8765/callback"]
-    # GoTrue manages OAuth state itself; our /login must NOT inject one
-    # or GoTrue's /callback rejects with "OAuth state parameter is invalid".
-    assert "state" not in qs
-    assert "set-cookie" not in {k.lower() for k in resp.headers.keys()}
-
-
-def test_login_uses_request_host_for_redirect_uri(storage):
-    """User signing in via a non-localhost name needs that name on the
-    Host allowlist (configured via auth_server_bind) AND in the redirect."""
-    cfg = _ttt_config(auth_server_bind="nas.local")
-    app = create_app(cfg, str(storage))
-    with TestClient(app, base_url="http://nas.local:8765") as c:
-        resp = c.get("/login?provider=google", follow_redirects=False)
-    assert resp.status_code == 302
-    qs = parse_qs(urlparse(resp.headers["location"]).query)
-    assert qs["redirect_to"] == ["http://nas.local:8765/callback"]
-
-
-def test_login_respects_x_forwarded_proto(storage):
-    cfg = _ttt_config(auth_server_bind="auth.example.com")
-    app = create_app(cfg, str(storage))
-    with TestClient(app, base_url="http://auth.example.com") as c:
-        resp = c.get(
-            "/login?provider=google",
-            follow_redirects=False,
-            headers={"x-forwarded-proto": "https"},
-        )
-    assert resp.status_code == 302
-    qs = parse_qs(urlparse(resp.headers["location"]).query)
-    assert qs["redirect_to"] == ["https://auth.example.com/callback"]
-
-
-def test_callback_serves_fragment_extraction_page(client):
-    resp = client.get("/callback")
-    assert resp.status_code == 200
-    body = resp.text
-    # Reads the OAuth response from the URL fragment.
-    assert "window.location.hash" in body
-    # POSTs (not GETs) to /receive-token so the same-origin middleware
-    # applies; an <img>/<script> attack can only do GET.
-    assert "/receive-token" in body
-    assert "method: 'POST'" in body
-    assert "access_token" in body
-    # Should no longer build a GET URL with query-string params.
-    assert "window.location.replace" not in body
-
-
-def test_receive_token_persists_tokens_and_returns_success(storage, client):
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-abc", exp=exp)
-
-    # Stub get_team_assignments so auto-claim doesn't try real network I/O.
-    # Returning a non-empty list also skips the register POST.
-    with patch.object(
-        TTTApiClient,
-        "get_team_assignments",
-        autospec=True,
-        return_value=[{"camera_manager_id": "cm-1", "team_id": "t-1"}],
-    ):
-        resp = client.post(
-            "/receive-token",
-            json={"access_token": jwt},
-            headers=_SAME_ORIGIN,
-        )
-    assert resp.status_code == 200
-    assert "Signed in" in resp.text
-
-    token_file = storage / "ttt" / "tokens.json"
-    assert token_file.exists()
-    saved = json.loads(token_file.read_text(encoding="utf-8"))
-    assert saved["access_token"] == jwt
-    assert saved["refresh_token"] is None
-    assert int(float(saved["expires_at"])) == exp
-
-
-def test_receive_token_with_error_returns_400_page(client):
-    resp = client.post(
-        "/receive-token",
-        json={"error": "access_denied", "error_description": "User canceled"},
-        headers=_SAME_ORIGIN,
-    )
-    assert resp.status_code == 400
-    assert "User canceled" in resp.text
-
-
-def test_receive_token_missing_token_returns_400(client):
-    resp = client.post(
-        "/receive-token",
-        json={},
-        headers=_SAME_ORIGIN,
-    )
-    assert resp.status_code == 400
-    assert "No access token returned" in resp.text
-
-
-def test_receive_token_get_returns_405(client):
-    """Replaces the old state-cookie defense: <img src=/receive-token?...>
-    can't drive sign-in because GET is no longer accepted."""
-    resp = client.get("/receive-token?access_token=fake")
-    assert resp.status_code == 405
-
-
-def test_receive_token_post_rejects_no_origin_or_referer(client):
-    """Curl-style POST with no Origin or Referer is now rejected; the
-    middleware fails closed for state-changing methods."""
-    resp = client.post("/receive-token", json={"access_token": "fake"})
-    assert resp.status_code == 403
-
-
-def test_receive_token_post_rejects_cross_origin(client):
-    resp = client.post(
-        "/receive-token",
-        json={"access_token": "fake"},
-        headers={"origin": "https://evil.com"},
-    )
-    assert resp.status_code == 403
-
-
-def test_receive_token_post_accepts_same_origin_referer(storage, client):
-    """Referer-only is sufficient — some browsers strip Origin on
-    same-origin navigations and we accept either signal."""
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-ref", exp=exp)
-    # Stub auto-claim's GET so it doesn't try real network.
-    with patch.object(
-        TTTApiClient,
-        "get_team_assignments",
-        autospec=True,
-        return_value=[{"camera_manager_id": "cm-1"}],
-    ):
-        resp = client.post(
-            "/receive-token",
-            json={"access_token": jwt},
-            headers={"referer": "http://localhost:8765/callback"},
-        )
-    assert resp.status_code == 200
-    assert (storage / "ttt" / "tokens.json").exists()
-
-
 # ---------------------------------------------------------------------------
 # Local-web-app hardening: DNS rebinding + Origin/Referer
 # ---------------------------------------------------------------------------
@@ -679,16 +505,6 @@ def test_post_logout_accepts_same_origin(client, storage):
     )
     assert resp.status_code == 303
     assert not (storage / "ttt" / "tokens.json").exists()
-
-
-def test_post_login_password_rejects_cross_origin(client):
-    resp = client.post(
-        "/login/password",
-        headers={"origin": "https://evil.com"},
-        data={"email": "x@y.com", "password": "x"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -755,102 +571,6 @@ def test_list_auth_needed_collects_multiple_flags(storage):
     assert providers == {"youtube", "ttt"}
 
 
-def test_login_password_success_persists_tokens_and_redirects(storage, client):
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-pw", exp=exp, email="pw@example.com")
-
-    def fake_login(self, email, password):
-        assert email == "pw@example.com"
-        assert password == "hunter2"
-        self._access_token = jwt
-        self._refresh_token_value = "refresh-pw"
-        self._expires_at = float(exp)
-        self._save_tokens()
-
-    # Auto-claim runs after sign-in succeeds and would otherwise hit the
-    # network for /api/device-link/me. Stub it to return a pre-existing
-    # assignment so register_as_camera_manager is skipped entirely; this
-    # test only cares about token persistence.
-    with (
-        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
-        patch.object(
-            TTTApiClient,
-            "get_team_assignments",
-            autospec=True,
-            return_value=[{"camera_manager_id": "cm-1", "team_id": "t-1"}],
-        ),
-    ):
-        resp = client.post(
-            "/login/password",
-            data={"email": "pw@example.com", "password": "hunter2"},
-            headers=_SAME_ORIGIN,
-            follow_redirects=False,
-        )
-
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/"
-    saved = json.loads((storage / "ttt" / "tokens.json").read_text(encoding="utf-8"))
-    assert saved["access_token"] == jwt
-
-
-def test_login_password_failure_returns_401(client):
-    with patch.object(
-        TTTApiClient,
-        "login",
-        autospec=True,
-        side_effect=TTTApiError("Invalid login credentials", status_code=400),
-    ):
-        resp = client.post(
-            "/login/password",
-            data={"email": "x@y.com", "password": "wrong"},
-            headers=_SAME_ORIGIN,
-            follow_redirects=False,
-        )
-    assert resp.status_code == 401
-    assert "Invalid login credentials" in resp.text
-
-
-def test_login_magic_calls_supabase_with_correct_redirect_to(client):
-    captured = {}
-
-    def fake_send(self, email, redirect_to):
-        captured["email"] = email
-        captured["redirect_to"] = redirect_to
-
-    with patch.object(
-        TTTApiClient, "send_magic_link", autospec=True, side_effect=fake_send
-    ):
-        resp = client.post(
-            "/login/magic",
-            data={"email": "user@example.com"},
-            headers={"host": "localhost:8765", **_SAME_ORIGIN},
-            follow_redirects=False,
-        )
-
-    assert resp.status_code == 200
-    assert "Magic link sent" in resp.text
-    assert "user@example.com" in resp.text
-    assert captured["email"] == "user@example.com"
-    assert captured["redirect_to"] == "http://localhost:8765/callback"
-
-
-def test_login_magic_failure_returns_400(client):
-    with patch.object(
-        TTTApiClient,
-        "send_magic_link",
-        autospec=True,
-        side_effect=TTTApiError("rate limited", status_code=429),
-    ):
-        resp = client.post(
-            "/login/magic",
-            data={"email": "x@y.com"},
-            headers=_SAME_ORIGIN,
-            follow_redirects=False,
-        )
-    assert resp.status_code == 400
-    assert "rate limited" in resp.text
-
-
 def test_logout_redirects_to_dashboard_and_is_idempotent(storage, client):
     exp = int(time.time()) + 60
     _write_tokens(storage, jwt=_make_jwt(exp=exp), expires_at=float(exp))
@@ -869,96 +589,6 @@ def test_logout_redirects_to_dashboard_and_is_idempotent(storage, client):
 # ---------------------------------------------------------------------------
 # URL resolution (single field + split internal/external)
 # ---------------------------------------------------------------------------
-
-
-def test_url_resolution_uses_build_time_defaults_when_blank(storage):
-    captured = {}
-    real_init = TTTApiClient.__init__
-
-    def capture_init(self, supabase_url, anon_key, api_base_url, storage_path):
-        captured["supabase_url"] = supabase_url
-        captured["anon_key"] = anon_key
-        captured["api_base_url"] = api_base_url
-        real_init(self, supabase_url, anon_key, api_base_url, storage_path)
-
-    with patch.object(TTTApiClient, "__init__", capture_init):
-        create_app(_ttt_config(), str(storage))
-
-    assert captured["supabase_url"] == auth_server.TTT_SUPABASE_URL
-    assert captured["anon_key"] == auth_server.TTT_ANON_KEY
-    assert captured["api_base_url"] == auth_server.TTT_API_BASE_URL
-
-
-def test_url_resolution_dev_override_wins(storage):
-    captured = {}
-    real_init = TTTApiClient.__init__
-
-    def capture_init(self, supabase_url, anon_key, api_base_url, storage_path):
-        captured["supabase_url"] = supabase_url
-        captured["anon_key"] = anon_key
-        captured["api_base_url"] = api_base_url
-        real_init(self, supabase_url, anon_key, api_base_url, storage_path)
-
-    cfg = _ttt_config(
-        supabase_url="http://override.local",
-        anon_key="override-key",
-        api_base_url="http://override.api",
-    )
-    with patch.object(TTTApiClient, "__init__", capture_init):
-        create_app(cfg, str(storage))
-
-    assert captured["supabase_url"] == "http://override.local"
-    assert captured["anon_key"] == "override-key"
-    assert captured["api_base_url"] == "http://override.api"
-
-
-def test_supabase_internal_url_used_for_client_external_used_for_redirect(storage):
-    """When [TTT].supabase_internal_url is set, the TTTApiClient uses it for
-    outbound HTTP, while the /login redirect keeps emitting [TTT].supabase_url."""
-    captured = {}
-    real_init = TTTApiClient.__init__
-
-    def capture_init(self, supabase_url, anon_key, api_base_url, storage_path):
-        captured["supabase_url"] = supabase_url
-        real_init(self, supabase_url, anon_key, api_base_url, storage_path)
-
-    cfg = _ttt_config(
-        supabase_url="http://localhost:54321",
-        supabase_internal_url="http://supabase_kong_local:8000",
-        anon_key="k",
-        api_base_url="http://api.local",
-    )
-    with patch.object(TTTApiClient, "__init__", capture_init):
-        app = create_app(cfg, str(storage))
-
-    assert captured["supabase_url"] == "http://supabase_kong_local:8000"
-
-    with TestClient(app) as c:
-        resp = c.get(
-            "/login?provider=google",
-            follow_redirects=False,
-            headers={"host": "localhost:8765"},
-        )
-    assert resp.status_code == 302
-    assert resp.headers["location"].startswith(
-        "http://localhost:54321/auth/v1/authorize"
-    )
-    assert "supabase_kong_local" not in resp.headers["location"]
-
-
-def test_supabase_internal_url_blank_falls_back_to_external(storage):
-    captured = {}
-    real_init = TTTApiClient.__init__
-
-    def capture_init(self, supabase_url, anon_key, api_base_url, storage_path):
-        captured["supabase_url"] = supabase_url
-        real_init(self, supabase_url, anon_key, api_base_url, storage_path)
-
-    cfg = _ttt_config(supabase_url="http://prod.example.com")
-    with patch.object(TTTApiClient, "__init__", capture_init):
-        create_app(cfg, str(storage))
-
-    assert captured["supabase_url"] == "http://prod.example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -1086,195 +716,6 @@ def test_auto_claim_swallows_arbitrary_exceptions(storage):
     auto_claim_camera_manager(Fake())
 
 
-def test_login_password_triggers_auto_claim_when_no_assignments(storage, client):
-    """End-to-end: POST /login/password runs auth, then auto_claim fires:
-    GET /api/device-link/me returns [] → POST register-camera-manager fires once."""
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-pw", exp=exp, email="pw@example.com")
-
-    def fake_login(self, email, password):
-        self._access_token = jwt
-        self._refresh_token_value = "r"
-        self._expires_at = float(exp)
-        self._save_tokens()
-
-    calls = {"get": 0, "register": 0}
-
-    def fake_get(self):
-        calls["get"] += 1
-        return []
-
-    def fake_register(self):
-        calls["register"] += 1
-        return [{"id": "cm-1", "team_id": "team-1"}]
-
-    with (
-        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
-        patch.object(
-            TTTApiClient, "get_team_assignments", autospec=True, side_effect=fake_get
-        ),
-        patch.object(
-            TTTApiClient,
-            "register_as_camera_manager",
-            autospec=True,
-            side_effect=fake_register,
-        ),
-    ):
-        resp = client.post(
-            "/login/password",
-            data={"email": "pw@example.com", "password": "hunter2"},
-            headers=_SAME_ORIGIN,
-            follow_redirects=False,
-        )
-
-    assert resp.status_code == 303
-    assert calls == {"get": 1, "register": 1}
-
-
-def test_login_password_skips_auto_claim_when_assignments_present(storage, client):
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-pw", exp=exp)
-
-    def fake_login(self, email, password):
-        self._access_token = jwt
-        self._refresh_token_value = "r"
-        self._expires_at = float(exp)
-        self._save_tokens()
-
-    calls = {"get": 0, "register": 0}
-
-    def fake_get(self):
-        calls["get"] += 1
-        return [{"camera_manager_id": "cm-1", "team_id": "team-1"}]
-
-    def fake_register(self):
-        calls["register"] += 1
-        return []
-
-    with (
-        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
-        patch.object(
-            TTTApiClient, "get_team_assignments", autospec=True, side_effect=fake_get
-        ),
-        patch.object(
-            TTTApiClient,
-            "register_as_camera_manager",
-            autospec=True,
-            side_effect=fake_register,
-        ),
-    ):
-        resp = client.post(
-            "/login/password",
-            data={"email": "pw@example.com", "password": "hunter2"},
-            headers=_SAME_ORIGIN,
-            follow_redirects=False,
-        )
-
-    assert resp.status_code == 303
-    assert calls == {"get": 1, "register": 0}
-
-
-def test_login_password_completes_when_auto_claim_raises(storage, client):
-    """Sign-in must succeed even if both auto_claim probes blow up."""
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-pw", exp=exp)
-
-    def fake_login(self, email, password):
-        self._access_token = jwt
-        self._refresh_token_value = "r"
-        self._expires_at = float(exp)
-        self._save_tokens()
-
-    with (
-        patch.object(TTTApiClient, "login", autospec=True, side_effect=fake_login),
-        patch.object(
-            TTTApiClient,
-            "get_team_assignments",
-            autospec=True,
-            side_effect=TTTApiError("boom"),
-        ),
-        patch.object(
-            TTTApiClient,
-            "register_as_camera_manager",
-            autospec=True,
-            side_effect=TTTApiError("also boom"),
-        ),
-    ):
-        resp = client.post(
-            "/login/password",
-            data={"email": "pw@example.com", "password": "hunter2"},
-            headers=_SAME_ORIGIN,
-            follow_redirects=False,
-        )
-
-    # 303 = sign-in succeeded; auto_claim failure didn't propagate.
-    assert resp.status_code == 303
-    # Tokens still persisted.
-    saved = json.loads((storage / "ttt" / "tokens.json").read_text(encoding="utf-8"))
-    assert saved["access_token"] == jwt
-
-
-def test_receive_token_triggers_auto_claim_when_no_assignments(storage, client):
-    """OAuth flow (/receive-token) also auto-claims camera-manager."""
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-oauth", exp=exp)
-
-    calls = {"get": 0, "register": 0}
-
-    def fake_get(self):
-        calls["get"] += 1
-        return []
-
-    def fake_register(self):
-        calls["register"] += 1
-        return [{"id": "cm-1", "team_id": "team-oauth"}]
-
-    with (
-        patch.object(
-            TTTApiClient, "get_team_assignments", autospec=True, side_effect=fake_get
-        ),
-        patch.object(
-            TTTApiClient,
-            "register_as_camera_manager",
-            autospec=True,
-            side_effect=fake_register,
-        ),
-    ):
-        resp = client.post(
-            "/receive-token",
-            json={"access_token": jwt},
-            headers=_SAME_ORIGIN,
-        )
-
-    assert resp.status_code == 200
-    assert "Signed in" in resp.text
-    assert calls == {"get": 1, "register": 1}
-
-
-def test_receive_token_completes_when_auto_claim_raises(storage, client):
-    """OAuth sign-in must not fail because of an auto-claim error."""
-    exp = int(time.time()) + 3600
-    jwt = _make_jwt(sub="user-oauth", exp=exp)
-
-    with patch.object(
-        TTTApiClient,
-        "get_team_assignments",
-        autospec=True,
-        side_effect=TTTApiError("network reset"),
-    ):
-        resp = client.post(
-            "/receive-token",
-            json={"access_token": jwt},
-            headers=_SAME_ORIGIN,
-        )
-
-    assert resp.status_code == 200
-    assert "Signed in" in resp.text
-    # Token still persisted.
-    saved = json.loads((storage / "ttt" / "tokens.json").read_text(encoding="utf-8"))
-    assert saved["access_token"] == jwt
-
-
 # ---------------------------------------------------------------------------
 # CSRF guard vs. the tray's own POST (regression: 2026-08-03)
 # ---------------------------------------------------------------------------
@@ -1317,3 +758,128 @@ def test_update_apply_403s_without_origin_but_accepts_the_trays_own(storage):
         with_origin = c.post("/api/update/apply", headers=_SAME_ORIGIN)
         assert with_origin.status_code == 202
         assert with_origin.json()["status"] == "spawned"
+
+
+# ---------------------------------------------------------------------------
+# TTT sign-in: TTT's device-auth flow (soccer-cam knows only TTT's API URL)
+# ---------------------------------------------------------------------------
+
+
+def _start_login(client, path="/login", **headers):
+    resp = client.get(path, follow_redirects=False, headers=headers or None)
+    assert resp.status_code == 302
+    target = urlparse(resp.headers["location"])
+    return target, parse_qs(target.query)
+
+
+def test_dashboard_unauthenticated_offers_one_ttt_sign_in(client):
+    body = client.get("/").text
+    assert 'href="/login"' in body
+    assert "Sign in to Team Tech Tools" in body
+    for gone in ("/login/password", "/login/magic", "supabase"):
+        assert gone not in body
+
+
+def test_login_sends_browser_to_ttt_device_auth_with_pkce(storage):
+    app = create_app(_ttt_config(api_base_url="https://ttt.example"), str(storage))
+    with TestClient(app, base_url="http://localhost:8765") as c:
+        target, q = _start_login(c)
+    assert f"{target.scheme}://{target.netloc}{target.path}" == (
+        "https://ttt.example/api/device-auth/start"
+    )
+    assert q["redirect_uri"] == ["http://localhost:8765/ttt/callback"]
+    assert len(q["code_challenge"][0]) == 43  # S256, unpadded
+    assert q["state"][0] in auth_server._ttt_sign_in_states
+
+
+def test_login_respects_x_forwarded_proto(storage):
+    app = create_app(_ttt_config(api_base_url="https://ttt.example"), str(storage))
+    with TestClient(app, base_url="http://localhost:8765") as c:
+        _, q = _start_login(c, **{"x-forwarded-proto": "https"})
+    assert q["redirect_uri"] == ["https://localhost:8765/ttt/callback"]
+
+
+def test_api_url_resolution(storage, monkeypatch):
+    from video_grouper.api_integrations import ttt_api
+
+    assert ttt_api.resolve_api_base_url("https://dev.example/") == "https://dev.example"
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "video_grouper.utils._ttt_config",
+        type("M", (), {"TTT_API_BASE_URL": "https://built.example"}),
+    )
+    assert ttt_api.resolve_api_base_url("") == "https://built.example"
+
+
+def _redeem(client, storage, *, auto_claim=None, token_status=200):
+    """Run /login then /ttt/callback with TTT's token endpoint stubbed."""
+    _, q = _start_login(client)
+    state = q["state"][0]
+    exp = int(time.time()) + 3600
+    tokens = {
+        "access_token": _make_jwt(sub="user-dev", exp=exp, email="m@example.com"),
+        "refresh_token": "device-refresh",
+        "expires_in": 3600,
+    }
+    seen = {}
+
+    def fake_post(self, url, json=None, **kw):
+        seen["url"], seen["json"] = url, json
+        body = tokens if token_status == 200 else {"detail": "invalid_grant"}
+        return type(
+            "R", (), {"status_code": token_status, "json": lambda s: body, "text": ""}
+        )()
+
+    with (
+        patch("httpx.Client.post", fake_post),
+        patch.object(
+            auth_server, "auto_claim_camera_manager", side_effect=auto_claim
+        ) as claim,
+    ):
+        resp = client.get(f"/ttt/callback?code=one-time&state={state}")
+    return resp, seen, claim
+
+
+def test_callback_redeems_code_and_stores_refreshable_session(storage, client):
+    resp, seen, claim = _redeem(client, storage)
+    assert resp.status_code == 200 and "Signed in" in resp.text
+    assert seen["url"].endswith("/api/device-auth/token")
+    assert seen["json"]["code"] == "one-time"
+    assert seen["json"]["redirect_uri"] == "http://localhost:8765/ttt/callback"
+    assert len(seen["json"]["code_verifier"]) >= 43
+    stored = json.loads((storage / "ttt" / "tokens.json").read_text())
+    # The old OAuth path dropped this, so sessions died after an hour.
+    assert stored["refresh_token"] == "device-refresh"
+    claim.assert_called_once()
+
+
+def test_callback_state_is_single_use(storage, client):
+    _, q = _start_login(client)
+    state = q["state"][0]
+    auth_server._ttt_sign_in_states.pop(state)
+    resp = client.get(f"/ttt/callback?code=x&state={state}")
+    assert resp.status_code == 400
+
+
+def test_callback_rejects_forged_state(client):
+    resp = client.get("/ttt/callback?code=x&state=forged")
+    assert resp.status_code == 400
+
+
+def test_callback_cancelled_by_user(client):
+    _, q = _start_login(client)
+    resp = client.get(f"/ttt/callback?error=access_denied&state={q['state'][0]}")
+    assert resp.status_code == 400
+    assert "cancelled" in resp.text
+
+
+def test_callback_surfaces_rejected_code(storage, client):
+    resp, _, claim = _redeem(client, storage, token_status=403)
+    assert resp.status_code == 400
+    assert not (storage / "ttt" / "tokens.json").exists()
+    claim.assert_not_called()
+
+
+def test_login_from_wizard_returns_there(storage, client):
+    _, q = _start_login(client, path="/login?return_to=/setup/ttt")
+    assert auth_server._ttt_sign_in_states[q["state"][0]]["return_to"] == "/setup/ttt"

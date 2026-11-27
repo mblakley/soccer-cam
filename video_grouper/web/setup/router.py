@@ -618,32 +618,15 @@ def _render_ttt_body(status: dict) -> str:
             "<p class='muted'>Next you can connect the YouTube account your "
             "games should go to.</p>" + nav
         )
-    providers = " ".join(
-        f'<a class="btn" href="/login?provider={p}&amp;return_to=/setup/ttt">'
-        f"{p.title()}</a>"
-        for p in ("google", "apple", "facebook", "discord")
-    )
     return (
         "<p>Sign in to <strong>Team Tech Tools</strong> to link this camera to "
         "your team. That also lets soccer-cam upload to YouTube without you "
         "setting up anything in Google Cloud yourself.</p>"
-        f"<p>{providers}</p>"
-        '<details class="auth-details"><summary>Or sign in with email and '
-        "password</summary>"
-        '<form method="post" action="/login/password" class="auth-form">'
-        '<input type="hidden" name="return_to" value="/setup/ttt">'
-        '<label>Email <input name="email" type="email" autocomplete="username" '
-        "required></label>"
-        '<label>Password <input name="password" type="password" '
-        'autocomplete="current-password" required></label>'
-        '<button type="submit" class="btn">Sign in</button></form></details>'
-        '<details class="auth-details"><summary>Or get a magic link by email'
-        "</summary>"
-        '<form method="post" action="/login/magic" class="auth-form">'
-        '<input type="hidden" name="return_to" value="/setup/ttt">'
-        '<label>Email <input name="email" type="email" autocomplete="email" '
-        "required></label>"
-        '<button type="submit" class="btn">Send magic link</button></form></details>'
+        '<p><a class="btn" href="/login?return_to=/setup/ttt">'
+        "Sign in to Team Tech Tools</a></p>"
+        "<p class='muted'>Opens Team Tech Tools in your browser. Sign in there "
+        "however you normally do, approve this camera, and you'll come back "
+        "here.</p>"
         '<div class="row">'
         '<a class="btn-ghost btn" href="/setup/camera">Back</a>'
         '<a class="btn-ghost btn" href="/setup/youtube">Skip &mdash; sign in later</a>'

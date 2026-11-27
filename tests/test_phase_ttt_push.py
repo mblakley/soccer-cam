@@ -113,18 +113,15 @@ def test_push_updates_session_with_offset_fields(MockClient):
 
 
 @patch("video_grouper.api_integrations.ttt_api.TTTApiClient")
-def test_push_logs_in_when_not_authenticated(MockClient):
+def test_push_skips_when_not_signed_in(MockClient):
+    """No password fallback any more: sign-in happens only in the browser."""
     client = MockClient.return_value
-    client.is_authenticated.side_effect = [
-        False,
-        True,
-    ]  # not auth'd, then auth'd post-login
-    client.get_game_session_by_dir.return_value = {"id": "sess-2"}
+    client.has_session.return_value = False
 
     ok = push_phases_to_ttt(TTT_CFG, "grp", _payload(kickoff=1.0), "/s")
 
-    assert ok is True
-    client.login.assert_called_once_with("e@x", "p")
+    assert ok is False
+    client.get_game_session_by_dir.assert_not_called()
 
 
 @patch("video_grouper.api_integrations.ttt_api.TTTApiClient")
@@ -142,7 +139,7 @@ def test_push_skips_when_no_session(MockClient):
 @patch("video_grouper.api_integrations.ttt_api.TTTApiClient")
 def test_push_skips_when_unauthenticated_no_creds(MockClient):
     client = MockClient.return_value
-    client.is_authenticated.return_value = False  # stays false; no login possible
+    client.has_session.return_value = False
     cfg = {**TTT_CFG, "email": "", "password": ""}
 
     ok = push_phases_to_ttt(cfg, "grp", _payload(kickoff=1.0), "/s")

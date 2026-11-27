@@ -298,14 +298,6 @@ def test_ttt_success_from_wizard_returns_there(tmp_path, publisher):
     assert 'location.href="/setup/ttt"' in page
 
 
-def test_login_remembers_wizard_return(client):
-    resp = client.get(
-        "/login?provider=google&return_to=/setup/ttt", follow_redirects=False
-    )
-    assert "/setup/ttt" in resp.headers.get("set-cookie", "")
-    assert client.cookies.get("sc_login_return") in ("/setup/ttt", '"/setup/ttt"')
-
-
 def test_quota_page_explains_before_asking(client, publisher, tmp_path):
     _write_publisher_token(tmp_path)
     resp = client.get("/auth/youtube/quota")
@@ -326,8 +318,7 @@ def test_wizard_youtube_step_leads_with_connect(client, publisher, tmp_path):
 
 def test_wizard_ttt_step_offers_sign_in_with_return(client):
     resp = client.get("/setup/ttt")
-    assert "return_to=/setup/ttt" in resp.text
-    assert 'name="return_to" value="/setup/ttt"' in resp.text
+    assert 'href="/login?return_to=/setup/ttt"' in resp.text
 
 
 def test_carry_ttt_tokens(tmp_path):

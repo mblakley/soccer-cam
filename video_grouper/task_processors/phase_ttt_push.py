@@ -137,19 +137,16 @@ def _authed_client_and_session(
     if not ttt_config or not ttt_config.get("enabled", True):
         return None, None
     try:
-        from video_grouper.api_integrations.ttt_api import TTTApiClient
+        from video_grouper.api_integrations.ttt_api import (
+            TTTApiClient,
+            resolve_api_base_url,
+        )
 
         client = TTTApiClient(
-            supabase_url=ttt_config.get("supabase_url", ""),
-            anon_key=ttt_config.get("anon_key", ""),
-            api_base_url=ttt_config.get("api_base_url", ""),
+            api_base_url=resolve_api_base_url(ttt_config.get("api_base_url", "")),
             storage_path=str(storage_path),
         )
-        if not client.is_authenticated():
-            email, password = ttt_config.get("email"), ttt_config.get("password")
-            if email and password:
-                client.login(email, password)
-        if not client.is_authenticated():
+        if not client.has_session():
             logger.info("phase TTT: not authenticated; skipping (phases stay local)")
             return None, None
         session = client.get_game_session_by_dir(recording_group_dir)
