@@ -78,7 +78,14 @@ def _write_publisher_token(storage, client_id=PUBLISHER_ID):
 class _FakeFlow:
     """Stands in for InstalledAppFlow on the callback leg."""
 
-    def __init__(self, email):
+    ALL = (
+        "openid https://www.googleapis.com/auth/userinfo.email "
+        "https://www.googleapis.com/auth/cloudplatformprojects "
+        "https://www.googleapis.com/auth/service.management"
+    )
+
+    def __init__(self, email, scope=ALL):
+        self.oauth2session = type("S", (), {"token": {"scope": scope}})()
         self.credentials = type(
             "C",
             (),
@@ -349,3 +356,23 @@ def test_no_channel_is_surfaced_not_hidden(tmp_path, publisher):
     assert "youtube.com/create_channel" in _render_youtube_section(tmp_path)
     write_quota_project(tmp_path / "youtube", "soccer-cam-abc12345", "a@x.com", True)
     assert "create_channel" not in _render_youtube_section(tmp_path)
+
+
+def test_quota_callback_requires_both_cloud_permissions(
+    client, publisher, tmp_path, monkeypatch
+):
+    """Granular consent: a parent can untick one box (seen live 2026-11-27)."""
+    _write_publisher_token(tmp_path)
+    monkeypatch.setattr(youtube_connect, "_account_email", lambda creds: "a@x.com")
+    resp = client.get("/auth/youtube/quota/start", follow_redirects=False)
+    state = parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
+    only_projects = "openid https://www.googleapis.com/auth/cloudplatformprojects"
+    monkeypatch.setattr(
+        youtube_upload,
+        "make_publisher_flow",
+        lambda *a, **k: _FakeFlow("a@x.com", scope=only_projects),
+    )
+    resp = client.get(f"/auth/youtube/quota/callback?code=the-code&state={state}")
+    assert resp.status_code == 400
+    assert "tick" in resp.text and "both" in resp.text
+    assert youtube_connect._job["provisioner"] is None
