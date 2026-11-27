@@ -49,7 +49,13 @@
 # Usage:
 #   bash build_roi_qp.sh <base.pak> <out.pak> [roi.conf]
 # where [roi.conf] is an optional file baked in as the default window; if
-# omitted, ../runtime/roiqp/roi.conf.example is used.
+# omitted, ../runtime/roiqp/roi.conf.default is used. That default is DISABLED:
+# the rectangle is per-field, so the pak is a no-op until a roi.conf is dropped
+# on the SD card.
+#
+# The output must not record on the home network (verify/check_recording_default.sh),
+# so the base has to carry S99_NetState. To build a minimal test image on a
+# stock base anyway, say so: ROIQP_ALLOW_RECORD_AT_HOME=1.
 #
 # NOTE: <out.pak> MUST be named to the Reolink pattern or the camera rejects it
 # on upload:
@@ -61,7 +67,7 @@ OUT="${2:?usage: $0 <base.pak> <out.pak> [roi.conf]}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PAK_DIR="$(cd "$HERE/../pak" && pwd)"
 RT="$HERE/../runtime/roiqp"
-CONF_SRC="${3:-$RT/roi.conf.example}"
+CONF_SRC="${3:-$RT/roi.conf.default}"
 INIT_SRC="$RT/S37_RoiQp"
 KO_REL="lib/modules/5.10.168/hdal/kflow_videoenc/unit/kflow_videoenc.ko"
 
@@ -118,11 +124,34 @@ install -m 0755 "$INIT_SRC" rootfs_unpacked/etc/init.d/S37_RoiQp
 install -m 0644 "$CONF_SRC" rootfs_unpacked/etc/soccercam_roi.conf.default
 echo "   /etc/init.d/S37_RoiQp + /etc/soccercam_roi.conf.default"
 
+echo "==> 3b) record this layer in the build manifest (/etc/soccercam_build)"
+# Every pak reports the same stock version string, so build.txt is the only way
+# to tell from the network which firmware a camera is running -- and therefore
+# the only way to tell that THIS flash took. Inherit the base's manifest and
+# overwrite the lines this layer owns.
+COMMIT="${SOCCERCAM_COMMIT:-$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+MAN=rootfs_unpacked/etc/soccercam_build
+touch "$MAN"
+grep -vE '^(pak|roiqp|roiqp_default|roiqp_commit)=' "$MAN" > "$MAN.new" || true
+{
+    cat "$MAN.new"
+    echo "pak=$(basename "$OUT")"
+    echo "roiqp=S37+kflow_videoenc_setroi_fix"
+    echo "roiqp_default=$(grep -E '^enable=' "$CONF_SRC" | head -1 | tr -d '\r')"
+    echo "roiqp_commit=$COMMIT"
+} > "$MAN"
+rm -f "$MAN.new"
+chmod 644 "$MAN"
+sed 's/^/   /' "$MAN"
+
 echo "==> 4) repack rootfs squashfs"
 mksquashfs rootfs_unpacked rootfs_new.bin \
     -comp xz -b 262144 -noappend -no-progress \
     -no-exports -all-root -mkfs-time 0 -all-time 0 \
     >/dev/null
+ROOTFS_SZ=$(stat -c %s rootfs_new.bin)
+echo "   rootfs $ROOTFS_SZ bytes"
+[[ "$ROOTFS_SZ" -lt $((8*1024*1024)) ]] || { echo "ERROR: rootfs exceeds its 8 MiB partition"; exit 1; }
 
 echo "==> 5) pre-flight: boot-chain sections must be handed through untouched"
 # This runs BEFORE any CRC is computed. It asserts that the only replacement
@@ -195,6 +224,15 @@ if base["rootfs"] == new["rootfs"]:
 print("   rootfs  replaced as intended")
 PY
 
+echo "==> 7b) GATE: this pak must not record at home"
+# Runs on the finished pak and before it is moved into place, so a failure
+# leaves no output file behind to be flashed by mistake.
+if [[ "${ROIQP_ALLOW_RECORD_AT_HOME:-0}" == "1" ]]; then
+    echo "   SKIPPED: ROIQP_ALLOW_RECORD_AT_HOME=1 (this pak may record on the home network)"
+else
+    bash "$HERE/../verify/check_recording_default.sh" "$WORK/out.pak"
+fi
+
 mv "$WORK/out.pak" "$OUT"
 
 echo "==> 8) verify CRC"
@@ -207,6 +245,7 @@ echo "  - kflow_videoenc.ko setroi format string: fixed (26 B, in place)"
 echo "  - /etc/init.d/S37_RoiQp:                  installed"
 echo "  - /etc/soccercam_roi.conf.default:        $(basename "$CONF_SRC")"
 echo "  - loader/fdt/atf/uboot/kernel/ai/app:     byte-identical to base"
+echo "  - /etc/soccercam_build:                   pak= and roiqp= lines updated"
 echo
 echo " NOT VERIFIED ON HARDWARE. First checks after flashing (see"
 echo " docs/ENCODER_ROI_QP.md section 7, 'Prove-out'):"

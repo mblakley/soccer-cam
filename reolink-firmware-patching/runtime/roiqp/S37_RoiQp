@@ -196,9 +196,18 @@ run() {
                 if [ "$C_ENABLE" -eq 1 ]; then
                     write_roi "$C_PATH" 1 "$C_QP" "$C_MODE" \
                               "$C_X" "$C_Y" "$C_W" "$C_H" && APPLIED=1
-                else
+                elif [ $APPLIED -eq 1 ]; then
                     log "config disables the window"
                     disable_roi "$C_PATH"
+                elif [ "$SIG" != "$LAST_SIG" ]; then
+                    # Nothing of ours is in the encoder, so there is nothing to
+                    # undo. Writing a disable anyway would poke the codec's
+                    # "ROI changed" callback every REAPPLY_INTERVAL for the
+                    # whole life of a camera that never asked for a window.
+                    # With enable=0 this daemon must be a true no-op: that is
+                    # what lets a pak carry it safely before the window has
+                    # been proven on hardware.
+                    log "config disables the window; none applied, encoder untouched"
                 fi
             else
                 log "REJECTED $SRC: $REASON"

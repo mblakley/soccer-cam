@@ -4,6 +4,39 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-01: where the Reolink main stream's bits go on game footage — keyframes take a third (2026-11-27)
+
+**Hypothesis:** far-field blockiness is bit starvation, and the stream is at its cap during
+games, so only moving bits can help.
+
+**Method:** `reolink-firmware-patching/verify/stream_quality.py` on archived raw segments
+(`F:\Heat_2012s\2026.06.10 - vs Lakefront SC (away)` segment 19:21, `…2026.07.12 - vs Niagara
+Falls…` segment 10:00). Packet sizes for the keyframe split (exact, no decode); 100 decoded frames
+from 2:00 for per-region blockiness (step energy on the 8/16/32/64 px coding grid over step energy
+off it) and detail (mean |Laplacian|), regions taken inside the confirmed field polygon. Offline;
+camera disconnected.
+
+**Result:**
+
+| | Lakefront | Niagara Falls |
+|---|---|---|
+| video bitrate | 20.71 Mbps | 20.57 Mbps |
+| keyframe interval | 20 frames | 20 frames |
+| keyframe share of bits | 34.1 % | 39.0 % |
+| mean keyframe / other frame | 894 / 90.9 KB | 1023 / 84.1 KB |
+
+Lakefront far band: detail 8.70 on keyframes → 7.36 on the last frame of the cycle (−15 %); near
+band 34.0 → 32.0 (−6 %). Far-band blockiness excess on the 8/16 px grid is ~2× the near band's
+(0.049/0.078 vs 0.025/0.033). The HEVC decoder exports no per-block QP (`export_side_data
+venc_params` returns nothing for hevc), so QP is not read directly.
+
+**Conclusion:** hypothesis holds — the stream is at the cap, so levers must move bits. The
+largest single consumer is the 1 s keyframe cadence, which is a setting (`gop`, API range 1–2),
+not firmware. Try `gop=2` before the ROI window. Both are untested on hardware; the on-camera
+protocol, including the rate-limited-scene precondition, is in
+`reolink-firmware-patching/docs/FAR_FIELD_BITS.md`. Two games, one segment each: enough to rank
+the levers, not a distribution.
+
 ## EXP-DIST-72: PHASE 2 COMPOSED VERDICT — three-arm multi-geometry decisive experiment (2026-07-24)
 
 **CLOCK PROVENANCE ((r).1):** the fleet ran ~2.2 h slow through 07-24; the laptop was

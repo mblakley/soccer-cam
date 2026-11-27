@@ -22,6 +22,15 @@ What *is* verified, off-camera:
   attempt, each range violation, absent file). All 14 behave as specified and
   report a precise reason.
 
+**Update 2026-11-27.** Still nothing run on the camera, but two things changed.
+The builder now layers on the current build (`4921`) and bakes a *disabled*
+default, so the pak is a no-op until a `roi.conf` is on the card: the daemon
+does not write to `/proc` at all while disabled. And the claim below that the
+stream is bit-starved was checked against game footage and holds; the numbers,
+a cheaper lever to try first (keyframe interval) and a test order that avoids a
+false negative on an indoor scene are in `FAR_FIELD_BITS.md`. Where section 7
+names the `4906` base or a baked-in enabled window, that document supersedes it.
+
 What is **not** verified: everything that requires the camera — whether the
 `.ko` loads, whether `/proc/hdal/venc/cmd` accepts a write, whether the ROI
 reaches the encoder, and what the coordinates mean. §7 is how to find out.

@@ -1,6 +1,25 @@
 # Current Status
 
-*Last updated: 2026-08-17 — non-uniform camera warp assessed and declined*
+*Last updated: 2026-11-27 — far-field bits: baseline measured on game footage, camera test staged*
+
+## 2026-11-27 — FAR-FIELD BITS: a third of the stream is keyframes; ROI pak staged; NOTHING run on camera yet
+
+- Goal (Mark): less blockiness in the far field. Camera was disconnected this session, so this is
+  the offline half. Record: `reolink-firmware-patching/docs/FAR_FIELD_BITS.md`; EXP-ENC-01.
+- **Measured on two archived away games** (Lakefront 06-10, Niagara Falls 07-12, full 5-min
+  segments): the main stream sits AT the cap (20.6–20.7 Mbps), a keyframe arrives every 20 frames,
+  and **keyframes take 34–39 % of all bits**. Far-field detail drops 15 % across each 1 s keyframe
+  cycle (near field: 6 %).
+- **New first lever, no flash:** `gop=2` (the API allows 1–2; we run 1). Upper bound +26–32 % bits
+  for the frames between keyframes. Untested.
+- **ROI lever staged:** build `4922` = 4921 + the `setroi` `.ko` fix + `S37_RoiQp`, default
+  DISABLED (daemon writes nothing to `/proc` while disabled). All gates pass. Not flashed.
+- **Trap recorded before it bites:** an indoor scene encodes at ~1.2 Mbps against a 20 Mbps cap, so
+  any bit-moving A/B at home reads as "no effect" unless the scene is made rate-limited first. The
+  test order in `FAR_FIELD_BITS.md` starts with that check.
+- **Open, found in passing:** `ReolinkCamera.apply_optimal_settings` sends `gop=40`; the camera
+  reports the range as 1–2. Unverified what the camera does with it.
+- **Next:** connect the camera, run `FAR_FIELD_BITS.md` "To test on the camera" steps 1–8.
 
 ## 2026-08-17 — NON-UNIFORM CAMERA WARP: assessed, DECLINED for image quality; the mesh READ is the win
 
