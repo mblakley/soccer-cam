@@ -122,7 +122,7 @@ def _build_license_response(
 def _make_ttt_client(license_response: dict, user_id: str = USER_ID):
     """Mock TTT client that returns the prepared license."""
     ttt = MagicMock()
-    ttt.is_authenticated.return_value = True
+    ttt.has_session.return_value = True
     ttt.current_user_id.return_value = user_id
     ttt.acquire_model_license.return_value = license_response
     return ttt
@@ -371,7 +371,7 @@ class TestArtifactTampering:
 class TestAuthAndTransport:
     def test_unauthenticated_client_raises(self, monkeypatch):
         ttt = MagicMock()
-        ttt.is_authenticated.return_value = False
+        ttt.has_session.return_value = False
         loader = SecureLoader(ttt, ["abcd"], http_client=MagicMock())
 
         with pytest.raises(SecureLoaderError, match="authenticated"):
@@ -379,7 +379,7 @@ class TestAuthAndTransport:
 
     def test_ttt_error_propagates_as_loader_error(self, monkeypatch):
         ttt = MagicMock()
-        ttt.is_authenticated.return_value = True
+        ttt.has_session.return_value = True
         ttt.current_user_id.return_value = USER_ID
         ttt.acquire_model_license.side_effect = RuntimeError("403 not entitled")
 

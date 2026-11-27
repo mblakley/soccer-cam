@@ -118,9 +118,13 @@ def test_dashboard_authenticated_falls_back_to_sub_when_no_email(storage, client
 
 
 def test_dashboard_expired_token_surfaces_warning(storage, client):
+    """Expired access token AND no refresh token: genuinely signed out."""
     past = int(time.time()) - 60
     _write_tokens(
-        storage, jwt=_make_jwt(sub="user-xyz", exp=past), expires_at=float(past)
+        storage,
+        jwt=_make_jwt(sub="user-xyz", exp=past),
+        refresh="",
+        expires_at=float(past),
     )
     body = client.get("/").text
     assert "Session expired" in body
@@ -604,7 +608,7 @@ def test_auto_claim_skipped_when_not_authenticated(storage):
         "FakeClient",
         (),
         {
-            "is_authenticated": lambda self: False,
+            "has_session": lambda self: False,
             "get_team_assignments": lambda self: pytest.fail(
                 "get_team_assignments must not be called when not authenticated"
             ),
@@ -622,7 +626,7 @@ def test_auto_claim_calls_register_when_assignments_empty(storage):
     calls: dict[str, int] = {"get": 0, "register": 0}
 
     class Fake:
-        def is_authenticated(self):
+        def has_session(self):
             return True
 
         def get_team_assignments(self):
@@ -643,7 +647,7 @@ def test_auto_claim_skips_register_when_assignments_present(storage):
     calls: dict[str, int] = {"get": 0, "register": 0}
 
     class Fake:
-        def is_authenticated(self):
+        def has_session(self):
             return True
 
         def get_team_assignments(self):
@@ -666,7 +670,7 @@ def test_auto_claim_swallows_get_failure(storage):
     calls = {"register": 0}
 
     class Fake:
-        def is_authenticated(self):
+        def has_session(self):
             return True
 
         def get_team_assignments(self):
@@ -685,7 +689,7 @@ def test_auto_claim_swallows_register_failure(storage):
     from video_grouper.web.auth_server import auto_claim_camera_manager
 
     class Fake:
-        def is_authenticated(self):
+        def has_session(self):
             return True
 
         def get_team_assignments(self):
@@ -704,7 +708,7 @@ def test_auto_claim_swallows_arbitrary_exceptions(storage):
     from video_grouper.web.auth_server import auto_claim_camera_manager
 
     class Fake:
-        def is_authenticated(self):
+        def has_session(self):
             return True
 
         def get_team_assignments(self):
@@ -883,3 +887,25 @@ def test_callback_surfaces_rejected_code(storage, client):
 def test_login_from_wizard_returns_there(storage, client):
     _, q = _start_login(client, path="/login?return_to=/setup/ttt")
     assert auth_server._ttt_sign_in_states[q["state"][0]]["return_to"] == "/setup/ttt"
+
+
+def test_dashboard_stays_signed_in_on_refresh_token(storage, client):
+    """An hour-old access token with a refresh token is still signed in
+    (review finding: it used to read 'Session expired')."""
+    past = int(time.time()) - 3600
+    _write_tokens(
+        storage,
+        jwt=_make_jwt(sub="user-xyz", exp=past, email="m@example.com"),
+        refresh="device-refresh",
+        expires_at=float(past),
+    )
+    body = client.get("/").text
+    assert "Signed in as" in body and "Session expired" not in body
+
+
+def test_login_from_a_lan_address_explains_instead_of_failing(storage):
+    app = create_app(_ttt_config(auth_server_bind="192.168.1.20"), str(storage))
+    with TestClient(app, base_url="http://192.168.1.20:8765") as c:
+        resp = c.get("/login", follow_redirects=False)
+    assert resp.status_code == 400
+    assert "localhost:8765" in resp.text

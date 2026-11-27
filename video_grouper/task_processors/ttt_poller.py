@@ -96,7 +96,7 @@ class TTTPoller(PollingProcessor):
         ttt_cfg = getattr(self.config, "ttt", None)
         if ttt_cfg is None or not getattr(ttt_cfg, "enabled", False):
             return
-        if not self.ttt_client.is_authenticated():
+        if not self.ttt_client.has_session():
             logger.debug("TTTPoller: TTT client not authenticated, skipping tick")
             return
 

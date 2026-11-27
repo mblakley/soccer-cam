@@ -185,16 +185,6 @@ def _success_page(storage: Path, return_to: str | None) -> str:
     return _SUCCESS_PAGE
 
 
-MAGIC_LINK_SENT_PAGE = _chrome.notice_page(
-    "Magic link sent",
-    "Magic link sent",
-    '<p class="muted">Check <code>__EMAIL__</code> for a sign-in link from '
-    "Team Tech Tools. Opening it returns you here and finishes sign-in.</p>"
-    '<p><a href="/">Back to status</a></p>',
-    tone="ok",
-)
-
-
 def _error_page(message: str) -> str:
     """Render a sign-in failure. ``message`` is escaped by the caller."""
     return _chrome.notice_page(
@@ -203,10 +193,6 @@ def _error_page(message: str) -> str:
         f'<p class="muted">{message}</p><p><a href="/">Back to status</a></p>',
         tone="bad",
     )
-
-
-def _resolve_url(override: str, fallback: str) -> str:
-    return override.strip() if override and override.strip() else fallback
 
 
 def auto_claim_camera_manager(client: TTTApiClient) -> None:
@@ -223,7 +209,7 @@ def auto_claim_camera_manager(client: TTTApiClient) -> None:
     network call sits inline with sign-in (no polling loop, per the
     inline-pipeline-push convention).
     """
-    if not client.is_authenticated():
+    if not client.has_session():
         logger.debug("Skipping camera-manager auto-claim: client not authenticated")
         return
     try:
@@ -361,7 +347,9 @@ def _read_status(token_file: Path) -> dict:
     except (ValueError, KeyError) as exc:
         logger.warning("Failed to decode tokens.json JWT: %s", exc)
 
-    authenticated = time.time() < float(expires_at)
+    # The access token lives an hour; a stored refresh token keeps the install
+    # signed in (the client refreshes on its next call).
+    authenticated = bool(data.get("refresh_token")) or time.time() < float(expires_at)
     return {
         "authenticated": authenticated,
         "user_id": user_id,
@@ -982,6 +970,24 @@ def create_app(
 
         proto = request.headers.get("x-forwarded-proto") or request.url.scheme
         host = request.headers.get("host") or request.url.netloc
+        hostname = (request.url.hostname or host.split(":")[0]).strip("[]").lower()
+        if hostname not in _LOOPBACK_HOSTS and not hostname.startswith("127."):
+            # TTT only returns sign-in codes to a loopback address on the
+            # camera's own machine, so a dashboard opened over the LAN can't
+            # finish sign-in. Say so instead of failing on TTT's side.
+            port = request.url.port or 8765
+            return HTMLResponse(
+                _error_page(
+                    message=(
+                        "Sign in from the computer soccer-cam runs on: open "
+                        f"<code>http://localhost:{port}/</code> there (or tunnel "
+                        f"the port: <code>ssh -L {port}:localhost:{port} ...</code>). "
+                        "Team Tech Tools only sends sign-in codes back to that "
+                        "computer's own address."
+                    )
+                ),
+                status_code=400,
+            )
         redirect_uri = f"{proto}://{host}/ttt/callback"
         url, state, verifier = client.begin_sign_in(redirect_uri)
         _ttt_states_gc()

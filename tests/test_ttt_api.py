@@ -709,3 +709,38 @@ def test_mock_auto_match_uses_the_reported_game_id():
     assert client.auto_match_video("t", "u", "r", game_id="g-2")["game_id"] == "g-2"
     assert client.auto_match_video("t", "u", "r")["game_id"] == "g-1"
     assert client.auto_match_video("t", "u", "r", game_id="gone")["game_id"] == "g-1"
+
+
+def test_second_client_adopts_a_refresh_instead_of_reusing_the_token(tmp_path):
+    """Review finding: clients sharing tokens.json must not both spend the
+    same refresh token (a rotated-out token is rejected and can revoke)."""
+    import json as _json
+    import os as _os
+    from unittest.mock import MagicMock
+
+    tokens = tmp_path / "ttt" / "tokens.json"
+    tokens.parent.mkdir(parents=True)
+    tokens.write_text(
+        _json.dumps(
+            {
+                "access_token": "old",
+                "refresh_token": "r1",
+                "expires_at": time.time() - 5,
+            }
+        )
+    )
+    a, b = _client(tmp_path), _client(tmp_path)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {
+        "access_token": "a.e30.s",
+        "refresh_token": "r2",
+        "expires_in": 3600,
+    }
+    a._http = MagicMock()
+    a._http.post.return_value = resp
+    b._http = MagicMock()
+    a.refresh_token()
+    _os.utime(tokens, (time.time() + 5, time.time() + 5))
+    b.refresh_token()  # b still holds r1 in memory
+    b._http.post.assert_not_called()
+    assert b._refresh_token_value == "r2"

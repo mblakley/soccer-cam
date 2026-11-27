@@ -235,7 +235,30 @@ class TTTApiClient:
         logger.info("TTT sign-in complete")
 
     def refresh_token(self) -> None:
-        """Swap the stored refresh token for a new session via TTT."""
+        """Swap the stored refresh token for a new session via TTT.
+
+        Several clients share tokens.json (app, web server, per-step clients).
+        Refresh under a file lock and re-read first: if another instance already
+        refreshed, adopt its tokens instead of spending the same refresh token
+        twice (a rotated-out refresh token is rejected, and reuse can revoke
+        the session).
+        """
+        from video_grouper.utils.locking import FileLock
+
+        self._token_dir.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(self._token_file), timeout=30):
+            stale = self._refresh_token_value
+            self._sync_from_disk()
+            if (
+                self._refresh_token_value != stale
+                and self._expires_at
+                and time.time() < self._expires_at - 60
+            ):
+                logger.debug("TTT token already refreshed by another client")
+                return
+            self._refresh_locked()
+
+    def _refresh_locked(self) -> None:
         if not self._refresh_token_value:
             raise TTTApiError("No refresh token available; sign in to TTT first")
         resp = self._http.post(
@@ -252,7 +275,12 @@ class TTTApiClient:
         logger.debug("TTT token refreshed successfully")
 
     def is_authenticated(self) -> bool:
-        """Return True if we have tokens that are not yet expired."""
+        """True when the access token is present and unexpired (no refresh).
+
+        Gate "is this install signed in?" on :meth:`has_session` instead; this
+        is false for an hour-old token that a refresh would revive.
+        """
+        self._sync_from_disk()
         if not self._access_token or not self._expires_at:
             return False
         return time.time() < self._expires_at

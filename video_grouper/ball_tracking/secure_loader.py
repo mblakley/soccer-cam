@@ -276,7 +276,7 @@ class SecureLoader:
         channel: str | None = None,
         pipeline_version: str | None = None,
     ) -> LoadedModel:
-        if not self._ttt.is_authenticated():
+        if not self._ttt.has_session():
             raise SecureLoaderError("TTT client is not authenticated")
 
         try:

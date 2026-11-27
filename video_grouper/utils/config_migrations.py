@@ -201,8 +201,6 @@ def _v2_per_team_sections_to_team(
     return raw
 
 
-# Ordered, contiguous from 1. Append only — never renumber or edit a shipped
-# migration, or configs part-way through the sequence will skip it.
 def _v3_drop_ttt_supabase_settings(
     raw: dict[str, dict[str, str]],
 ) -> dict[str, dict[str, str]]:
@@ -218,6 +216,8 @@ def _v3_drop_ttt_supabase_settings(
     return raw
 
 
+# Ordered, contiguous from 1. Append only — never renumber or edit a shipped
+# migration, or configs part-way through the sequence will skip it.
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
