@@ -88,9 +88,18 @@ class E2ETestRunner:
         self.test_data_path = self.project_root / "tests/e2e/test_data"
         self.test_logs_path = self.project_root / "tests/e2e/test_logs"
 
-        # Log file paths for monitoring
+        # Log file paths for monitoring.
+        #
+        # [LOGGING] log_dir is a RELATIVE path, and the app resolves it against
+        # its storage path (it chdirs there on startup so relative paths work
+        # from a Windows service). Resolving it against project_root instead
+        # pointed this at a file that never existed, so the monitor read "" for
+        # the application log on every poll and reported every stage PENDING
+        # while the pipeline was in fact completing.
         self.video_grouper_log_path = (
-            self.test_logs_path / f"{self.config.logging.app_name}.log"
+            self.test_data_path
+            / self.config.logging.log_dir
+            / f"{self.config.logging.app_name}.log"
         )
         self.tray_log_path = self.test_logs_path / "tray_app.log"
 
@@ -136,8 +145,18 @@ class E2ETestRunner:
             "trims_completed": [
                 "VIDEO: Successfully completed task: TrimTask",
             ],
+            # Emitted by pipeline.runner once the step actually returns True.
+            # The old marker, "AUTOCAM: Successfully completed task", was from
+            # the BallTrackingProcessor that the step pipeline replaced -- it
+            # appears nowhere in the codebase any more, so this count sat at
+            # 0/2 through runs where both games rendered perfectly and the
+            # suite failed on a stall timeout with no idea why.
+            #
+            # Deliberately NOT "PipelineProcessor: Successfully completed
+            # processing item": that one means the queue item was handled and
+            # is logged for FAILED steps too.
             "autocams_completed": [
-                "AUTOCAM: Successfully completed task",
+                "pipeline: step autocam complete",
             ],
             "uploads_completed": [
                 "UPLOAD: Successfully completed task",
@@ -752,6 +771,11 @@ class E2ETestRunner:
             # Set up environment variables for mock services
             env = os.environ.copy()
             # Environment variables are already set by setup_e2e_environment, just copy them
+            # Unbuffered: stdout redirected to a file is block-buffered, so the
+            # child's output only lands when a 8KB block fills or it exits. The
+            # monitor polls that file while the run is in flight, so buffered
+            # output is invisible to it -- and to anyone tailing a stuck run.
+            env["PYTHONUNBUFFERED"] = "1"
 
             # Start the process with logging to file
             with open(subprocess_log_path, "w") as log_file:
@@ -1206,12 +1230,21 @@ class E2ETestRunner:
 
         Returns True if any count increased (resets inactivity timeout).
         """
+        # Count distinct lines, not raw substring hits. The app's stdout
+        # capture and its own file handler record the same events, and
+        # `all_logs` concatenates both -- so every count came out at exactly
+        # twice the truth (uploads_completed sat at 7/2, then 16/2, for four
+        # actual uploads). Inflated counts sail past their >= threshold, which
+        # means a stage that never ran would still read as complete. Log lines
+        # carry a timestamp, so two genuine occurrences never collapse.
+        unique_lines = set(log_content.splitlines())
+
         changed = False
         for key, patterns in self.multi_group_patterns.items():
             # Count total occurrences of any pattern for this key
             count = 0
             for pattern in patterns:
-                count += log_content.count(pattern)
+                count += sum(1 for line in unique_lines if pattern in line)
             if count > self.multi_group_counts[key]:
                 old = self.multi_group_counts[key]
                 self.multi_group_counts[key] = count

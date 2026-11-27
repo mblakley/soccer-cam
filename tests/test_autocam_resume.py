@@ -19,10 +19,12 @@ import pytest
 
 from video_grouper.models.directory_state import DirectoryState
 from video_grouper.tray.autocam_automation import (
+    _autocam_still_writing,
     _execute_autocam_gui_automation,
     _find_autocam_gui_pids,
     _live_autocam_pids,
     _parse_wmi_datetime,
+    _run_console,
 )
 
 
@@ -84,6 +86,36 @@ class TestSetClearAutocamRun:
         assert DirectoryState(group_dir).get_youtube_playlist_name() == "Heat 2012s"
 
 
+class TestRelativeGroupDirsResolveToOnePlace:
+    """A relative group_dir must not repeat the storage path inside itself.
+
+    The tray is handed the group directory as configured -- and
+    ``[STORAGE] path`` is allowed to be relative. Deriving the storage path
+    from an un-anchored directory_path made the two disagree, so state.json
+    was looked for at <storage>/<storage>/<group>/ and every read and write
+    failed with ENOENT while logging and continuing.
+    """
+
+    def test_state_file_lands_inside_the_group_dir(self, group_dir, monkeypatch):
+        monkeypatch.chdir(os.path.dirname(group_dir))
+        state = DirectoryState(os.path.basename(group_dir))
+
+        assert os.path.dirname(state.state_file_path) == os.path.abspath(group_dir)
+
+    def test_a_marker_written_relatively_is_readable_absolutely(
+        self, group_dir, monkeypatch
+    ):
+        monkeypatch.chdir(os.path.dirname(group_dir))
+        DirectoryState(os.path.basename(group_dir)).set_autocam_run(
+            {"input_path": "C:/in.mp4", "gui_pids": [7]}
+        )
+
+        assert DirectoryState(group_dir).get_autocam_run() == {
+            "input_path": "C:/in.mp4",
+            "gui_pids": [7],
+        }
+
+
 class TestLiveAutocamPids:
     def test_returns_only_alive_gui_exe(self):
         # _live_autocam_pids makes a single tasklist call filtered on
@@ -100,6 +132,87 @@ class TestLiveAutocamPids:
 
     def test_empty_input_returns_empty(self):
         assert _live_autocam_pids([]) == []
+
+
+class TestAnUnanswerableProbeIsNotADeadProcess:
+    """The distinction that keeps a healthy render alive.
+
+    ``tasklist`` timed out under load on 2026-08-23 while AutoCam was 5% into
+    a 7680x2160 render. The empty result read as "AutoCam exited", the
+    part-written output failed validation, and the step deleted it and gave
+    up on a job that was working. "I could not check" and "it is gone" have
+    to be different answers.
+    """
+
+    def test_a_failed_probe_reports_unknown_not_empty(self):
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value=None,
+        ):
+            assert _live_autocam_pids([1, 2]) is None
+
+    def test_liveness_is_one_call_so_it_cannot_half_succeed(self):
+        """The reason the first attempt at this fix did not hold.
+
+        With one `tasklist` per image name, a run on 2026-08-23 had the
+        GUI.exe probe succeed and the AutocamGUI.exe probe time out. Some
+        probe had run, so the empty intersection was taken as authoritative
+        and the live render was failed again -- from exactly the ignorance
+        the fix was meant to catch. One call cannot half-answer.
+        """
+        calls = []
+
+        def record(cmd, timeout=10.0):
+            calls.append(cmd)
+            return "INFO: No tasks are running which match the criteria.\n"
+
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            side_effect=record,
+        ):
+            _live_autocam_pids([1, 2])
+
+        assert len(calls) == 1, f"one probe per poll, got {calls}"
+        assert "/FI" not in calls[0], (
+            "an image-name filter reintroduces the per-name calls that could "
+            "partly fail"
+        )
+
+    def test_a_pid_found_alive_is_believed_even_on_a_shaky_probe(self):
+        """Positive evidence needs no corroboration; only a negative does."""
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value='"AutocamGUI.exe","4242","Console","1","2,345 K"\n',
+        ):
+            assert _live_autocam_pids([4242, 7]) == [4242]
+
+    def test_a_successful_probe_that_matches_nothing_still_means_gone(self):
+        """The genuine exit case must keep working, or nothing ever completes."""
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value="INFO: No tasks are running which match the criteria.\n",
+        ):
+            assert _live_autocam_pids([1, 2]) == []
+
+    def test_still_writing_assumes_live_when_it_cannot_check(self, group_dir):
+        """Guarding a delete: a wrong 'no' corrupts an in-flight render."""
+        state = DirectoryState(group_dir)
+        state.set_autocam_run({"input_path": "C:/in.mp4", "gui_pids": [4242]})
+
+        with patch(
+            "video_grouper.tray.autocam_automation._run_console",
+            return_value=None,
+        ):
+            assert _autocam_still_writing(state, "C:/in.mp4") is True
+
+    def test_run_console_distinguishes_timeout_from_no_output(self):
+        import subprocess as sp
+
+        with patch(
+            "video_grouper.tray.autocam_automation.subprocess.run",
+            side_effect=sp.TimeoutExpired(cmd="tasklist", timeout=10),
+        ):
+            assert _run_console(["tasklist"]) is None
 
 
 class TestFindAutocamGuiPids:
@@ -425,3 +538,105 @@ class TestResumeBranch:
         new_run = state.get_autocam_run()
         assert new_run is not None
         assert new_run["launcher_pid"] == 9999
+
+
+class TestWaitingForTheWindowIsBoundedByLivenessNotAClock:
+    """A slow start and a dead start must not look the same.
+
+    A flat 35s deadline failed a game on 2026-08-23 because AutoCam's cold
+    start took 59 seconds under load -- Docker, the test suite and a previous
+    render's teardown all on the box. The very next game on the same machine
+    drew its window in 14s. No fixed number is right; what actually
+    distinguishes "still coming up" from "never coming up" is whether AutoCam
+    is still there.
+    """
+
+    @pytest.fixture
+    def patches(self, group_dir):
+        with (
+            patch("video_grouper.tray.autocam_automation.subprocess") as sub,
+            patch("video_grouper.tray.autocam_automation.Desktop") as desktop_cls,
+            patch(
+                "video_grouper.tray.autocam_automation._find_autocam_hwnd"
+            ) as find_hwnd,
+            patch(
+                "video_grouper.tray.autocam_automation._running_autocam_pids"
+            ) as gui_pids,
+            patch(
+                "video_grouper.tray.autocam_automation._wait_for_completion_and_cleanup"
+            ) as wait_complete,
+            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            patch("video_grouper.tray.autocam_automation.win32gui") as wg,
+            patch(
+                "video_grouper.tray.autocam_automation._read_autocam_status",
+                return_value=_RUNNING_STATUS,
+            ),
+        ):
+            wg.EnumWindows = MagicMock()
+            wg.IsWindowVisible = MagicMock(return_value=False)
+            desktop_cls.return_value.window.return_value = MagicMock()
+            wait_complete.return_value = True
+            # Alive by default; tests that care set returncode themselves.
+            sub.Popen.return_value.pid = 4242
+            sub.Popen.return_value.poll.return_value = None
+            yield {
+                "sub": sub,
+                "find_hwnd": find_hwnd,
+                "gui_pids": gui_pids,
+                "wait_complete": wait_complete,
+                "group_dir": group_dir,
+            }
+
+    def _input(self, gd):
+        p = Path(gd) / "video" / "in-raw.mp4"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+        return str(p)
+
+    def test_a_window_that_takes_a_minute_still_gets_used(self, patches):
+        """The 2026-08-23 failure: 59s to draw, given 35."""
+        gd = patches["group_dir"]
+        # No window for the first 60 polls (one per second in production),
+        # then it appears.
+        patches["find_hwnd"].side_effect = [None] * 60 + [0xCAFE] * 10
+
+        _execute_autocam_gui_automation(
+            "fake.exe", self._input(gd), os.path.join(gd, "video", "out.mp4")
+        )
+
+        patches["wait_complete"].assert_called_once()
+
+    def test_a_dead_launcher_with_no_autocam_left_fails_immediately(self, patches):
+        """The genuine crash: don't sit out the backstop for a corpse."""
+        gd = patches["group_dir"]
+        patches["find_hwnd"].return_value = None
+        patches["sub"].Popen.return_value.poll.return_value = 1
+        patches["sub"].Popen.return_value.returncode = 1
+        patches["gui_pids"].return_value = (set(), True)
+
+        result = _execute_autocam_gui_automation(
+            "fake.exe", self._input(gd), os.path.join(gd, "video", "out.mp4")
+        )
+
+        assert result is False
+        # Bailed on the liveness check, never reached completion polling.
+        patches["wait_complete"].assert_not_called()
+        assert patches["find_hwnd"].call_count < 10
+
+    def test_a_launcher_that_hands_off_and_exits_keeps_waiting(self, patches):
+        """AutoCam 3.x's launcher exits once the real GUI process is up.
+
+        Treating the launcher's own exit as failure would abort every
+        normal run, so a surviving AutoCam process overrides it.
+        """
+        gd = patches["group_dir"]
+        patches["sub"].Popen.return_value.poll.return_value = 0
+        patches["sub"].Popen.return_value.returncode = 0
+        patches["gui_pids"].return_value = ({9999}, True)
+        patches["find_hwnd"].side_effect = [None] * 40 + [0xCAFE] * 10
+
+        _execute_autocam_gui_automation(
+            "fake.exe", self._input(gd), os.path.join(gd, "video", "out.mp4")
+        )
+
+        patches["wait_complete"].assert_called_once()

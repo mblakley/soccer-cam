@@ -980,3 +980,89 @@ class TestEnsureAutocamLicence:
                 mod.ensure_autocam_licence(str(exe_dir / "AutocamGUI.exe"), "KEY-123")
                 is False
             )
+
+
+class TestNeedsAttentionIsNotAWaitingState:
+    """AutoCam refusing to run must fail immediately, and say why.
+
+    Observed verbatim on 3.1.1 while an E2E run sat there:
+
+        Autocam status: 'Please update Autocam or contact support.'
+
+    That text matches none of the success/error branches, so the poll loop
+    treated it as "still working" and spent the whole 5-minute startup guard
+    before reporting "did not start processing -- a reboot may be required".
+    Wrong cause, no mention of the real one, and five minutes burned per game
+    on a condition no amount of waiting resolves.
+    """
+
+    def _poll_with_status(self, status_text):
+        """Run the wait loop against a fixed status; return (raised, polls)."""
+        import video_grouper.tray.autocam_automation as mod
+
+        notification = MagicMock()
+        notification.window_text.side_effect = lambda: status_text
+        mw = MagicMock()
+        mw.child_window.return_value = notification
+
+        start = datetime.datetime(2026, 8, 23, 8, 45, 0)
+        clock = [start]
+        polls = [0]
+
+        def counted_sleep(_seconds):
+            polls[0] += 1
+            clock[0] = clock[0] + datetime.timedelta(seconds=30)
+            if polls[0] >= 20:
+                clock[0] = start + datetime.timedelta(days=2)
+
+        raised = None
+        with (
+            patch.object(mod.datetime, "datetime", wraps=datetime.datetime) as fake_dt,
+            patch.object(mod, "_live_autocam_pids", return_value=[999]),
+            patch(
+                "video_grouper.tray.autocam_automation.time.sleep",
+                side_effect=counted_sleep,
+            ),
+            patch("video_grouper.tray.autocam_automation.subprocess.run"),
+            patch(
+                "video_grouper.tray.autocam_automation.os.path.isfile",
+                return_value=False,
+            ),
+        ):
+            fake_dt.now = MagicMock(side_effect=lambda: clock[0])
+            try:
+                mod._wait_for_completion_and_cleanup(
+                    mw, state=None, output_path=None, tracked_pids=[999]
+                )
+            except mod.AutocamNeedsAttentionError as exc:
+                raised = exc
+        return raised, polls[0]
+
+    def test_update_prompt_raises_on_the_first_poll(self):
+        raised, polls = self._poll_with_status(
+            "Please update Autocam or contact support."
+        )
+
+        assert raised is not None, "the update prompt was treated as a waiting state"
+        assert polls == 0, f"should abort before sleeping, slept {polls} times"
+
+    def test_the_message_names_the_vendor_text_and_the_blast_radius(self):
+        """A log line an operator can act on without reading the code."""
+        raised, _ = self._poll_with_status("Please update Autocam or contact support.")
+
+        message = str(raised)
+        assert "Please update Autocam or contact support." in message
+        assert "every game" in message.lower()
+
+    def test_an_expired_licence_is_the_same_class_of_problem(self):
+        raised, polls = self._poll_with_status("Your license has expired.")
+        assert raised is not None
+        assert polls == 0
+
+    def test_a_normal_running_status_is_untouched(self):
+        """The guard must not abort healthy renders."""
+        raised, polls = self._poll_with_status(
+            "Status: | Running | Processed: | 1234 | ETA: | 00:12:00"
+        )
+        assert raised is None
+        assert polls > 0, "a running render should keep polling"
