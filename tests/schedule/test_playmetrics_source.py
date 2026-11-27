@@ -40,6 +40,7 @@ class TestPlayMetricsSource:
             "location": "Away",
             "date": "2026-06-01",
             "time": "11:00",
+            "ttt_game_id": "",
         }
 
     def test_without_is_home_keeps_the_location_text(self):

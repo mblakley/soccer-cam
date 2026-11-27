@@ -1,7 +1,8 @@
 """Team Tech Tools' schedule (``ScheduleService``, the local cache of TTT games).
 
 Authoritative: a TTT team's TeamSnap / PlayMetrics / calendar games are already
-in TTT, so a TTT match ends the search. Location as TTT gives it; no date/time.
+in TTT, so a TTT match ends the search. Location as TTT gives it; no date/time;
+the TTT game id, so the recording is reported against that game.
 """
 
 from __future__ import annotations
@@ -29,5 +30,6 @@ class TTTScheduleSource(ServiceBackedSource):
             team_name=game.get("team_name", ""),
             opponent=game.get("opponent_name", ""),
             location=game.get("location", ""),
+            ttt_game_id=str(game.get("game_id") or ""),
             raw=game,
         )

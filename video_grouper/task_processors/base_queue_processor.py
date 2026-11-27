@@ -57,6 +57,9 @@ class QueueProcessor(ABC):
         self._processor_task = None
         self._shutdown_event = asyncio.Event()
         self._max_retries = 3  # Maximum number of retry attempts
+        # How long _run waits on an empty queue before re-checking shutdown.
+        # An attribute (not a literal) so tests can shorten it.
+        self._queue_poll_timeout = 5.0
         self._retry_counts = {}  # Track retry counts for each item
         self._in_progress_item: BaseTask | None = None  # Currently processing item
         self._sequence = 0
@@ -178,7 +181,7 @@ class QueueProcessor(ABC):
                 # Get the next item from the queue
                 try:
                     priority, seq, item = await asyncio.wait_for(
-                        self._queue.get(), timeout=5.0
+                        self._queue.get(), timeout=self._queue_poll_timeout
                     )
                 except TimeoutError:
                     # Timeout - check if we should continue or exit

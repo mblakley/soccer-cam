@@ -31,7 +31,7 @@ import json
 import logging
 from pathlib import Path
 
-from video_grouper.utils.config import Config
+from video_grouper.utils.config import Config, sanitize_ttt_conn
 
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
@@ -140,7 +140,7 @@ class PipelineProcessor(QueueProcessor):
                 # Discovery may not have stamped it (e.g. recovery path); fall
                 # back to the live config the same way the legacy path did.
                 ttt_dump = (
-                    self.config.ttt.model_dump()
+                    sanitize_ttt_conn(self.config.ttt.model_dump())
                     if getattr(self.config, "ttt", None) and self.config.ttt.enabled
                     else None
                 )

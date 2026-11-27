@@ -29,6 +29,9 @@ class MatchInfo:
     start_time_offset: str = ""
     total_duration: str = ""
     date: datetime | None = None
+    # The TTT game this recording was matched to (TTT schedule source only). Reported back to
+    # TTT so the video attaches to that game instead of TTT re-matching on time.
+    ttt_game_id: str = ""
 
     def __hash__(self):
         """Make MatchInfo hashable so it can be used in sets and as dictionary keys."""
@@ -76,6 +79,7 @@ class MatchInfo:
                 location=config.get("MATCH", "location", fallback=""),
                 start_time_offset=config.get("MATCH", "start_time_offset", fallback=""),
                 total_duration=config.get("MATCH", "total_duration", fallback=""),
+                ttt_game_id=config.get("MATCH", "ttt_game_id", fallback=""),
             )
         except (configparser.Error, KeyError) as e:
             logger.error(f"Error creating MatchInfo from config: {e}")
@@ -200,6 +204,14 @@ class MatchInfo:
                 logger.info(
                     f"Updated match_info.ini with location: {team_info['location']}"
                 )
+
+            # A schedule match always states its TTT game ("" = none), so a
+            # re-match to a non-TTT game clears an id from an earlier match.
+            if "ttt_game_id" in team_info:
+                if team_info["ttt_game_id"]:
+                    config["MATCH"]["ttt_game_id"] = team_info["ttt_game_id"]
+                else:
+                    config["MATCH"].pop("ttt_game_id", None)
 
         # Ensure required fields exist with default values if not set
         if "my_team_name" not in config["MATCH"]:
@@ -392,14 +404,25 @@ class MatchInfo:
             logger.warning("Cannot save MatchInfo: no group_dir available")
             return
 
+        # Update the fields this object owns and keep every other key already in
+        # the file (date/time, ttt_game_id, ...): rebuilding the section from a
+        # fixed list silently dropped whatever the schedule match had written.
         config = configparser.ConfigParser()
-        config["MATCH"] = {
-            "my_team_name": self.my_team_name,
-            "opponent_team_name": self.opponent_team_name,
-            "location": self.location,
-            "start_time_offset": self.start_time_offset,
-            "total_duration": self.total_duration,
-        }
+        if os.path.exists(match_info_path):
+            config.read(match_info_path)
+        if "MATCH" not in config:
+            config["MATCH"] = {}
+        config["MATCH"].update(
+            {
+                "my_team_name": self.my_team_name,
+                "opponent_team_name": self.opponent_team_name,
+                "location": self.location,
+                "start_time_offset": self.start_time_offset,
+                "total_duration": self.total_duration,
+            }
+        )
+        if self.ttt_game_id:
+            config["MATCH"]["ttt_game_id"] = self.ttt_game_id
 
         with open(match_info_path, "w") as f:
             config.write(f)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -39,6 +40,29 @@ def group_dir():
         d = Path(tmp) / "2026.05.07-18.28.00"
         d.mkdir()
         yield str(d)
+
+
+class _FakeClock:
+    """Stands in for the ``time`` module inside autocam_automation.
+
+    ``sleep`` advances ``time()`` instead of blocking, so the automation's
+    ``deadline = time.time() + N`` polling loops run their real logic --
+    including timing out -- in microseconds of wall time. Patching ``sleep``
+    alone is not enough: the loops then busy-spin against the real clock
+    until each deadline passes (15 s per fresh-launch test).
+    """
+
+    def __init__(self) -> None:
+        self.now = time.time()
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
 
 
 class TestSetClearAutocamRun:
@@ -214,9 +238,10 @@ class TestResumeBranch:
                 "video_grouper.tray.autocam_automation._wait_for_completion_and_cleanup"
             ) as wait_complete,
             # The production code does time.sleep(5)/sleep(1) to let AutoCam
-            # spin up; in the test, every dependency is already patched so
-            # those sleeps just slow the suite down.
-            patch("video_grouper.tray.autocam_automation.time.sleep"),
+            # spin up and polls for windows against time.time() deadlines; in
+            # the test every dependency is already patched, so run those
+            # waits on a fake clock instead of the wall clock.
+            patch("video_grouper.tray.autocam_automation.time", _FakeClock()),
             # _execute_autocam_gui_automation defines an inner helper
             # _find_settings_hwnd that calls win32gui.EnumWindows on the
             # real desktop; without patching it, the fresh-launch test

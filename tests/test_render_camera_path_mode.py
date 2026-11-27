@@ -38,7 +38,17 @@ _POLY = np.asarray(
 )
 
 
-def _geom(cfg: RenderStepConfig):
+def _geom(cfg: RenderStepConfig, *, with_pano: bool = False):
+    """Resolve the view geometry for ``cfg``.
+
+    Unless ``with_pano``, resolve with the pinhole projection: world-up leveling
+    and the mount tilt are derived exactly as for the cylindrical default (they
+    come before the projection branch), but the full-source leveled pano --
+    ~10 s of numpy at 7680x2160, and never read by _frame_view -- is not built.
+    Tests that inspect the pano itself pass ``with_pano=True``.
+    """
+    if not with_pano:
+        cfg = cfg.model_copy(update={"render_projection": "pinhole"})
     return _resolve_geometry(_SRC_W, _SRC_H, cfg, _POLY)
 
 
@@ -95,7 +105,7 @@ def test_crop_box_never_truncates_at_extreme_pans():
     from video_grouper.pipeline.steps.render import _command_for  # noqa: F401
 
     cfg = RenderStepConfig(render_zoom_scale=1.0)
-    geom = _geom(cfg)
+    geom = _geom(cfg, with_pano=True)
     assert geom.leveled_pano is not None
     pano = geom.leveled_pano
     ph, pw = pano.map_x.shape

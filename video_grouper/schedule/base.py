@@ -36,6 +36,10 @@ class ScheduledGame:
     opponent: str
     location: str = ""
     kickoff: datetime | None = None
+    # The Team Tech Tools game this is, when the source knows it. Written to
+    # match_info.ini and reported to TTT with the recording, so the video
+    # attaches to that game instead of TTT re-matching on time.
+    ttt_game_id: str = ""
     raw: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     def to_match_info(self) -> dict[str, str]:
@@ -48,6 +52,9 @@ class ScheduledGame:
         if self.kickoff is not None:
             info["date"] = self.kickoff.strftime("%Y-%m-%d")
             info["time"] = self.kickoff.strftime("%H:%M")
+        # Always present: "" means "not a TTT game", which clears an id left by
+        # an earlier match of the same recording.
+        info["ttt_game_id"] = self.ttt_game_id
         return info
 
 
