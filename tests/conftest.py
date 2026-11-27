@@ -69,6 +69,7 @@ def fake_integrations():
 
     from video_grouper import integrations
     from video_grouper.integrations.entitlements.fake import FakeEntitlements
+    from video_grouper.integrations.phase_hints.fake import FakePhaseHintSource
     from video_grouper.integrations.recordings.fake import FakeRecordingSink
     from video_grouper.integrations.registry import IntegrationContext
     from video_grouper.integrations.work.fake import FakeWorkSource
@@ -78,6 +79,7 @@ def fake_integrations():
         entitlements=FakeEntitlements(),
         recordings=FakeRecordingSink(),
         work=FakeWorkSource(),
+        phase_hints=FakePhaseHintSource(),
         context=IntegrationContext(
             SimpleNamespace(ttt=SimpleNamespace(enabled=False)), "."
         ),

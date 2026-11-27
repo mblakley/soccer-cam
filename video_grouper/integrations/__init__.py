@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from .entitlements import IEntitlements
+from .phase_hints import IPhaseHintSource
 from .recordings import IRecordingSink
 from .registry import IntegrationContext, build_port
 from .work import IWorkSource
@@ -31,6 +32,7 @@ class Integrations:
     entitlements: IEntitlements
     recordings: IRecordingSink
     work: IWorkSource
+    phase_hints: IPhaseHintSource
     context: IntegrationContext
 
     def shared_ttt_client(self) -> Any:
@@ -50,6 +52,7 @@ def build_integrations(config: Any, storage_path: str, **services: Any) -> Integ
         entitlements=build_port(IEntitlements, context),
         recordings=build_port(IRecordingSink, context),
         work=build_port(IWorkSource, context),
+        phase_hints=build_port(IPhaseHintSource, context),
         context=context,
     )
 

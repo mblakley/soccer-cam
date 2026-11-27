@@ -94,6 +94,7 @@ def test_every_built_in_port_resolves_with_ttt_off():
     assert integrations.entitlements.available is False
     assert isinstance(integrations.recordings, IRecordingSink)
     assert integrations.recordings.name == "none"
+    assert integrations.phase_hints.name == "none"
     assert isinstance(integrations.work, IWorkSource)
     assert integrations.work.name == "none"
 
@@ -108,6 +109,7 @@ def test_ttt_on_shares_one_client_across_ports():
     assert integrations.shared_ttt_client() is client
     assert integrations.entitlements.name == "ttt"
     assert integrations.recordings.name == "ttt"
+    assert integrations.phase_hints.name == "ttt"
     assert integrations.work.name == "ttt"
     assert integrations.work._client is client
 
