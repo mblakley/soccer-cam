@@ -256,6 +256,7 @@ class VideoGrouperApp:
 
         self.ntfy_processor = None
         if self.config.ntfy.enabled:
+            from video_grouper.schedule import build_schedule_sources
             from video_grouper.task_processors.services.match_info_service import (
                 MatchInfoService,
             )
@@ -297,8 +298,12 @@ class VideoGrouperApp:
 
             # Create match info service
             match_info_service = MatchInfoService(
-                teamsnap_service=teamsnap_service,
-                playmetrics_service=playmetrics_service,
+                build_schedule_sources(
+                    self.config,
+                    teamsnap=teamsnap_service,
+                    playmetrics=playmetrics_service,
+                    ttt_schedule=getattr(self, "_schedule_service", None),
+                ),
                 ntfy_service=ntfy_service,
             )
 
@@ -484,8 +489,12 @@ class VideoGrouperApp:
                         and getattr(self.ntfy_processor, "match_info_service", None)
                         is not None
                     ):
-                        self.ntfy_processor.match_info_service.schedule_service = (
-                            schedule_service
+                        from video_grouper.schedule.sources.ttt import (
+                            TTTScheduleSource,
+                        )
+
+                        self.ntfy_processor.match_info_service.add_source(
+                            TTTScheduleSource(schedule_service)
                         )
                 except Exception:
                     logger.warning(

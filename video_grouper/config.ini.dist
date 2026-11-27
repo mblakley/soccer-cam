@@ -252,6 +252,11 @@ capabilities =
 # match_info.ini. Matching is case-insensitive and falls back to substring, so
 # a short `aliases` entry resolves a longer real name.
 #
+# `calendar_url` is an optional calendar feed with the team's schedule (Byga,
+# Google Calendar: the iCal / webcal "subscribe" address). A club member's feed
+# mixes every group they belong to; this team's games are the events whose team
+# label (e.g. "Game: BU14 - Guzzetta vs Fairport") matches `name`/`aliases`.
+#
 # `pipeline` is an optional comma-separated list of step ids from the
 # [PIPELINE.<step_id>] sections above. Set it to run a different subset or
 # order for this team's games; leave it blank to use [PIPELINE] steps.
@@ -262,5 +267,6 @@ capabilities =
 # enabled = true
 # teamsnap_team_id = 10198718
 # playmetrics_team_id =
+# calendar_url = webcal://club.example.byga.net/cal/your-calendar.ics
 # youtube_playlist = Hilton Heat 2012s
 # pipeline = stitch, render

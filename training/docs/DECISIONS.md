@@ -2187,3 +2187,30 @@ merges second reconciles; the framework makes that a one-migration change.
 `video_grouper/service/main.py`, `video_grouper/config.ini.dist`,
 `tests/test_config_migrations.py`, `tests/test_onboarding.py`,
 `tests/web/test_config_editor.py`
+
+## Decision: schedule sources are one interface with self-registering implementations (2026-11-27)
+
+**Context.** `MatchInfoService` hard-wired TeamSnap, PlayMetrics and the TTT schedule: each returned a
+differently shaped dict (`opponent_name` vs `opponent`, `location_name` vs `is_home`) and each needed
+its own branch in four places, so adding the calendar feed (2026-11-26 decision) meant editing all
+of them again. Mark: "clear, generic interfaces, so we can support various different implementations
+without making a ton of changes throughout the entire app".
+
+**Decided.** `video_grouper.schedule.IScheduleSource` (`find_game(start, end) -> ScheduledGame | None`,
+`priority`, `authoritative`, `from_context`). Implementations live one per module in
+`video_grouper/schedule/sources/` and register themselves with `@register_schedule_source`; the
+package imports every module there. `build_schedule_sources(config, **services)` asks each
+registered class for its instances; `MatchInfoService` takes the resulting list and never names a
+provider. `ScheduledGame.to_match_info()` is the one place a game becomes `[MATCH]` fields.
+**Adding a source is one new module**, plus a config field if it needs one.
+
+Behaviour is unchanged: the TTT source is authoritative, TeamSnap (priority 10) beats PlayMetrics
+(20), and each provider writes the same `[MATCH]` fields as before. Tests follow the same split:
+`MatchInfoService` and the registry are tested only against the interface (fake sources); each
+implementation has its own test module under `tests/schedule/`.
+
+**Calendar feeds** are the first new source: `[TEAM.<key>] calendar_url` (Byga / Google Calendar
+iCal). A club member's Byga feed mixes every group they belong to (Hilton Heat's, read 2026-11-27:
+team events titled `<Type>: <team> (<location>)`, practices only during the indoor offseason); a
+team's games are the events whose team label its `name`/`aliases` match. Game-title parsing
+(`Game: <team> vs|@ <opponent>`) must be re-checked once Byga posts real games.

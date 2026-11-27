@@ -118,6 +118,10 @@ class TeamConfig(BaseModel):
 
     teamsnap_team_id: str = ""
     playmetrics_team_id: str = ""
+    # A calendar feed with this team's schedule (Byga, Google Calendar: the
+    # iCal / webcal address). A member's feed may mix club groups; this team's
+    # events are the ones whose team label ``name``/``aliases`` match.
+    calendar_url: str = ""
     youtube_playlist: str = ""
     # Pipeline preset or step-list override for this team's games.
     pipeline: str = ""
