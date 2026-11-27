@@ -1,9 +1,9 @@
 """End-to-end test for the clip-request flow: TTT polling → extract → resumable upload → fulfill.
 
-Wires ClipRequestProcessor, resumable_upload, and a mocked TTT client together so
-the only things stubbed are the TTT HTTP client and Google's upload endpoint. Everything
-in between — extraction dispatch, compilation, the resumable PUT, the fulfilled-URL
-round-trip — runs for real.
+Wires ClipRequestProcessor, the TTT work source, resumable_upload, and a mocked TTT
+client together so the only things stubbed are the TTT HTTP client and Google's upload
+endpoint. Everything in between — the work-source mapping, extraction dispatch,
+compilation, the resumable PUT, the fulfilled-URL round-trip — runs for real.
 
 Marked `e2e` so it doesn't run in the regular unit sweep. Use:
     uv run pytest tests/e2e/test_clip_request_e2e.py -m e2e -v
@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from video_grouper.integrations.work.sources.ttt import TTTWorkSource
 from video_grouper.task_processors.clip_request_processor import ClipRequestProcessor
 from video_grouper.task_processors.tasks.clip.clip_request_task import ClipRequestTask
 
@@ -99,10 +100,11 @@ class TestClipRequestEndToEnd:
         ttt.fulfill_clip_request = MagicMock()
 
         # 4) Build the processor with real uploaders in the chain.
+        config = _make_config()
         proc = ClipRequestProcessor(
             storage_path=str(tmp_path),
-            config=_make_config(),
-            ttt_client=ttt,
+            config=config,
+            work=TTTWorkSource(ttt, config.ttt),
             drive_uploader=MagicMock(),  # legacy path; must NOT be used
             ntfy_service=None,
             youtube_uploader=None,
@@ -187,10 +189,11 @@ class TestClipRequestEndToEnd:
         ntfy = MagicMock()
         ntfy.send_notification = AsyncMock()
 
+        config = _make_config()
         proc = ClipRequestProcessor(
             storage_path=str(tmp_path),
-            config=_make_config(),
-            ttt_client=ttt,
+            config=config,
+            work=TTTWorkSource(ttt, config.ttt),
             drive_uploader=MagicMock(),
             ntfy_service=ntfy,
             youtube_uploader=None,

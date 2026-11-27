@@ -350,7 +350,6 @@ class VideoGrouperApp:
         self.highlight_reel_processor = None
         if self.config.ttt.enabled:
             try:
-                from video_grouper.api_integrations.ttt_api import TTTApiClient
                 from video_grouper.utils.google_drive_upload import GoogleDriveUploader
 
                 # The integrations' shared session -- not a second client.
@@ -445,7 +444,7 @@ class VideoGrouperApp:
                 self.clip_request_processor = ClipRequestProcessor(
                     storage_path=self.storage_path,
                     config=self.config,
-                    ttt_client=ttt_client,
+                    work=self.integrations.work,
                     drive_uploader=drive_uploader,
                     ntfy_service=ntfy_service,
                     youtube_uploader=youtube_uploader,
@@ -461,7 +460,7 @@ class VideoGrouperApp:
                     self.highlight_reel_processor = HighlightReelProcessor(
                         storage_path=self.storage_path,
                         config=self.config,
-                        ttt_client=ttt_client,
+                        work=self.integrations.work,
                         youtube_uploader=youtube_uploader,
                         resource_manager=self.resource_manager,
                     )
@@ -472,7 +471,7 @@ class VideoGrouperApp:
                 self.reprocess_request_processor = ReprocessRequestProcessor(
                     storage_path=self.storage_path,
                     config=self.config,
-                    ttt_client=ttt_client,
+                    work=self.integrations.work,
                     resource_manager=self.resource_manager,
                     # S3: a verify_phases request starts the NTFY verify-loop.
                     on_verify_phases=(
@@ -571,14 +570,8 @@ class VideoGrouperApp:
             try:
                 ttt_client = getattr(self, "_ttt_client", None)
                 if not ttt_client:
-                    from video_grouper.api_integrations.ttt_api import TTTApiClient
-
-                    ttt_client = TTTApiClient(
-                        supabase_url=self.config.ttt.supabase_url,
-                        anon_key=self.config.ttt.anon_key,
-                        api_base_url=self.config.ttt.api_base_url,
-                        storage_path=self.storage_path,
-                    )
+                    # The integrations' shared session -- not a second client.
+                    ttt_client = self.integrations.shared_ttt_client()
                     if self.config.ttt.email and self.config.ttt.password:
                         try:
                             ttt_client.login(
@@ -603,7 +596,7 @@ class VideoGrouperApp:
                     self.ttt_job_processor = TTTJobProcessor(
                         storage_path=self.storage_path,
                         config=self.config,
-                        ttt_client=ttt_client,
+                        work=self.integrations.work,
                         camera=self.camera,
                         download_processor=self.download_processor,
                         video_processor=self.video_processor,
@@ -612,8 +605,10 @@ class VideoGrouperApp:
                     )
                     logger.info("TTT JobProcessor initialized")
 
-                # Single TTTPoller polls TTT and enqueues onto each
-                # feature processor.
+                # Single TTTPoller polls the work source and enqueues onto
+                # each kind's processor. It keeps the TTT client only for
+                # service register / heartbeat and the schedule refresh
+                # (IDeviceLink, plan phase 5).
                 has_any = any(
                     p is not None
                     for p in (
@@ -630,6 +625,7 @@ class VideoGrouperApp:
                         storage_path=self.storage_path,
                         config=self.config,
                         ttt_client=ttt_client,
+                        work=self.integrations.work,
                         clip_request_processor=self.clip_request_processor,
                         highlight_reel_processor=self.highlight_reel_processor,
                         ttt_job_processor=self.ttt_job_processor,

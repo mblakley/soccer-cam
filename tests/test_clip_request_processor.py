@@ -1,10 +1,14 @@
-"""Tests for ClipRequestProcessor."""
+"""Tests for ClipRequestProcessor, against the work-source interface
+(FakeWorkSource). The TTT mapping of claim / complete is tested in
+tests/integrations/work/test_ttt_work_source.py."""
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from video_grouper.integrations.work import CLIP
+from video_grouper.integrations.work.fake import FakeWorkSource, WorkCall
 from video_grouper.task_processors.clip_request_processor import ClipRequestProcessor
 
 # ---------------------------------------------------------------------------
@@ -24,24 +28,18 @@ def _make_config(folder_id: str | None = "folder-abc"):
 def _make_processor(
     tmp_path,
     *,
-    ttt_client=None,
+    work=None,
     drive_uploader=None,
     youtube_uploader=None,
     ntfy_service=None,
     folder_id: str | None = "folder-abc",
 ):
-    """Returns ``(handler, ttt_client)``. The handler no longer holds
-    its own TTT client — the TTTPoller passes it into :py:meth:`poll`
-    and the worker captures it per item. Tests that need to verify
-    TTT calls inspect the returned client."""
-    if ttt_client is None:
-        ttt_client = MagicMock()
-        ttt_client.is_authenticated = MagicMock(return_value=True)
+    """A processor reporting to ``work`` (a FakeWorkSource by default)."""
     drive_uploader = drive_uploader or MagicMock()
     processor = ClipRequestProcessor(
         storage_path=str(tmp_path),
         config=_make_config(folder_id=folder_id),
-        ttt_client=ttt_client,
+        work=work if work is not None else FakeWorkSource(),
         drive_uploader=drive_uploader,
         ntfy_service=ntfy_service,
         youtube_uploader=youtube_uploader,
@@ -242,15 +240,12 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
-        ttt.start_clip_request = MagicMock()
-        ttt.fulfill_clip_request = MagicMock()
+        work = FakeWorkSource()
 
         drive = MagicMock()
         drive.upload_and_share = MagicMock(return_value="https://drive.example/view/1")
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(
             delivery_method="external_storage",
             recording_group_dir="game-x",
@@ -261,14 +256,23 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
-        ttt.start_clip_request.assert_called_once_with(req["id"])
+        assert work.calls == [
+            WorkCall("claim", CLIP, req["id"]),
+            WorkCall(
+                "complete",
+                CLIP,
+                req["id"],
+                (
+                    {
+                        "url": "https://drive.example/view/1",
+                        "notes": "1 clip(s) extracted and uploaded",
+                    },
+                ),
+            ),
+        ]
         drive.upload_and_share.assert_called_once()
-        ttt.fulfill_clip_request.assert_called_once()
-        assert (
-            ttt.fulfill_clip_request.call_args.args[1] == "https://drive.example/view/1"
-        )
 
     @pytest.mark.asyncio
     async def test_external_storage_compilation(self, tmp_path):
@@ -277,14 +281,13 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         drive = MagicMock()
         drive.upload_and_share = MagicMock(
             return_value="https://drive.example/view/comp"
         )
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(
             delivery_method="external_storage",
             recording_group_dir="game-x",
@@ -306,12 +309,12 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="compiled"),
             ) as mock_compile,
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         mock_compile.assert_awaited_once()
         # Single upload after compilation
         assert drive.upload_and_share.call_count == 1
-        ttt.fulfill_clip_request.assert_called_once()
+        assert len(work.called("complete")) == 1
 
     @pytest.mark.asyncio
     async def test_external_storage_multi_no_compilation(self, tmp_path):
@@ -320,13 +323,12 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         drive = MagicMock()
         urls = iter(["u1", "u2"])
         drive.upload_and_share = MagicMock(side_effect=lambda *a, **k: next(urls))
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(
             delivery_method="external_storage",
             recording_group_dir="game-x",
@@ -341,10 +343,10 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         assert drive.upload_and_share.call_count == 2
-        fulfilled_url = ttt.fulfill_clip_request.call_args.args[1]
+        fulfilled_url = work.called("complete")[0].args[0]["url"]
         assert fulfilled_url == "u1, u2"
 
     @pytest.mark.asyncio
@@ -354,12 +356,11 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         yt = MagicMock()
         yt.upload_video = MagicMock(return_value="abc123")
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, youtube_uploader=yt)
+        proc = _make_processor(tmp_path, work=work, youtube_uploader=yt)
         req = _make_request(
             delivery_method="youtube",
             recording_group_dir="game-x",
@@ -380,11 +381,11 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="compiled"),
             ) as mock_compile,
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         mock_compile.assert_awaited_once()
         yt.upload_video.assert_called_once()
-        fulfilled_url = ttt.fulfill_clip_request.call_args.args[1]
+        fulfilled_url = work.called("complete")[0].args[0]["url"]
         assert fulfilled_url == "https://youtu.be/abc123"
 
     @pytest.mark.asyncio
@@ -394,12 +395,11 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         yt = MagicMock()
         yt.upload_video = MagicMock(return_value="xyz999")
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, youtube_uploader=yt)
+        proc = _make_processor(tmp_path, work=work, youtube_uploader=yt)
         req = _make_request(
             delivery_method="youtube",
             recording_group_dir="game-x",
@@ -416,11 +416,11 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="compiled"),
             ) as mock_compile,
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         mock_compile.assert_not_awaited()
         yt.upload_video.assert_called_once()
-        assert ttt.fulfill_clip_request.call_args.args[1] == "https://youtu.be/xyz999"
+        assert work.called("complete")[0].args[0]["url"] == "https://youtu.be/xyz999"
 
     @pytest.mark.asyncio
     async def test_youtube_without_uploader_fails_cleanly(self, tmp_path):
@@ -429,66 +429,105 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, youtube_uploader=None)
+        proc = _make_processor(tmp_path, work=work, youtube_uploader=None)
         req = _make_request(delivery_method="youtube", recording_group_dir="game-x")
 
         with patch(
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
-        ttt.fulfill_clip_request.assert_not_called()
+        assert work.called("complete") == []
 
     @pytest.mark.asyncio
     async def test_missing_footage_notifies(self, tmp_path):
         """No combined.mp4 → ntfy notify, no TTT state change."""
         (tmp_path / "game-x").mkdir()  # dir exists but no combined.mp4
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         ntfy = MagicMock()
         ntfy.send_notification = AsyncMock()
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, ntfy_service=ntfy)
+        proc = _make_processor(tmp_path, work=work, ntfy_service=ntfy)
         req = _make_request(recording_group_dir="game-x")
 
-        await proc._process_request(proc.ttt_client, req)
+        await proc._process_request(req)
 
-        ttt.start_clip_request.assert_not_called()
-        ttt.fulfill_clip_request.assert_not_called()
+        assert work.called("claim") == []
+        assert work.called("complete") == []
         # Let the background notification task run
         await asyncio.sleep(0)
         ntfy.send_notification.assert_called()
 
     @pytest.mark.asyncio
-    async def test_already_in_progress_continues(self, tmp_path):
-        """If start_clip_request says 'Cannot start' (already in_progress), processing continues."""
+    async def test_claim_error_stops_the_request(self, tmp_path):
+        """A claim the work source refuses -> no extraction, no complete."""
         game_dir = tmp_path / "game-x"
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
-        ttt.start_clip_request = MagicMock(
-            side_effect=RuntimeError("Cannot start: already in_progress")
-        )
+        work = FakeWorkSource(errors={"claim": RuntimeError("500 from server")})
         drive = MagicMock()
-        drive.upload_and_share = MagicMock(return_value="https://drive.example/view/1")
-
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(recording_group_dir="game-x")
 
         with patch(
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
-        ):
-            await proc._process_request(proc.ttt_client, req)
+        ) as mock_extract:
+            await proc._process_request(req)
 
-        ttt.fulfill_clip_request.assert_called_once()
+        mock_extract.assert_not_awaited()
+        drive.upload_and_share.assert_not_called()
+        assert work.called("complete") == []
+
+    @pytest.mark.asyncio
+    async def test_lost_claim_skips_the_request(self, tmp_path):
+        """Another worker has the request -> skip it without extracting."""
+        game_dir = tmp_path / "game-x"
+        game_dir.mkdir()
+        (game_dir / "combined.mp4").write_bytes(b"\x00")
+
+        req = _make_request(recording_group_dir="game-x")
+        work = FakeWorkSource(claims={req["id"]: None})
+        proc = _make_processor(tmp_path, work=work)
+
+        with patch(
+            "video_grouper.utils.ffmpeg_utils.extract_clip",
+            new=AsyncMock(return_value="ok"),
+        ) as mock_extract:
+            await proc._process_request(req)
+
+        mock_extract.assert_not_awaited()
+        assert work.called("complete") == []
+
+    @pytest.mark.asyncio
+    async def test_complete_error_is_logged_not_raised(self, tmp_path):
+        """A failed complete report leaves the request for retry; no crash."""
+        game_dir = tmp_path / "game-x"
+        game_dir.mkdir()
+        (game_dir / "combined.mp4").write_bytes(b"\x00")
+
+        work = FakeWorkSource(errors={"complete": RuntimeError("502")})
+        ntfy = MagicMock()
+        ntfy.send_notification = AsyncMock()
+        drive = MagicMock()
+        drive.upload_and_share = MagicMock(return_value="https://drive.example/view/1")
+        proc = _make_processor(
+            tmp_path, work=work, drive_uploader=drive, ntfy_service=ntfy
+        )
+
+        with patch(
+            "video_grouper.utils.ffmpeg_utils.extract_clip",
+            new=AsyncMock(return_value="ok"),
+        ):
+            await proc._process_request(_make_request(recording_group_dir="game-x"))
+
+        assert len(work.called("complete")) == 1
+        ntfy.send_notification.assert_not_called()  # success not announced
 
     @pytest.mark.asyncio
     async def test_upload_failure_no_fulfill(self, tmp_path):
@@ -497,21 +536,20 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         drive = MagicMock()
         drive.upload_and_share = MagicMock(side_effect=RuntimeError("drive boom"))
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(recording_group_dir="game-x")
 
         with patch(
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
-        ttt.fulfill_clip_request.assert_not_called()
+        assert work.called("complete") == []
 
     @pytest.mark.asyncio
     async def test_external_storage_with_upload_block_uses_resumable_url(
@@ -522,13 +560,12 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         # drive_uploader should NOT be used on this path
         drive = MagicMock()
         drive.upload_and_share = MagicMock()
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(
             delivery_method="external_storage",
             recording_group_dir="game-x",
@@ -558,14 +595,14 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(return_value="https://drive.google.com/file/d/abc/view"),
             ) as mock_upload,
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         mock_upload.assert_awaited_once()
         # Legacy Drive SDK path must not be used when resumable URL is present
         drive.upload_and_share.assert_not_called()
-        ttt.fulfill_clip_request.assert_called_once()
+        assert len(work.called("complete")) == 1
         assert (
-            ttt.fulfill_clip_request.call_args.args[1]
+            work.called("complete")[0].args[0]["url"]
             == "https://drive.google.com/file/d/abc/view"
         )
 
@@ -578,11 +615,10 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         drive = MagicMock()
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(
             delivery_method="external_storage", recording_group_dir="game-x"
         )
@@ -603,9 +639,9 @@ class TestProcessRequestDispatch:
                 new=AsyncMock(side_effect=ResumableUploadError("403 forbidden")),
             ),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
-        ttt.fulfill_clip_request.assert_not_called()
+        assert work.called("complete") == []
 
     @pytest.mark.asyncio
     async def test_external_storage_credential_error_logs_and_skips(
@@ -620,11 +656,10 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         drive = MagicMock()  # legacy SDK path must NOT be called
 
-        proc = _make_processor(tmp_path, ttt_client=ttt, drive_uploader=drive)
+        proc = _make_processor(tmp_path, work=work, drive_uploader=drive)
         req = _make_request(
             delivery_method="external_storage", recording_group_dir="game-x"
         )
@@ -639,7 +674,7 @@ class TestProcessRequestDispatch:
             ),
             caplog.at_level(_logging.ERROR),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         # Must surface the error and must NOT touch the legacy Drive SDK
         assert any(
@@ -648,7 +683,7 @@ class TestProcessRequestDispatch:
         )
         drive.upload_and_share.assert_not_called()
         # Request stays in_progress (no fulfill) so it can be retried after re-link
-        ttt.fulfill_clip_request.assert_not_called()
+        assert work.called("complete") == []
 
     @pytest.mark.asyncio
     async def test_unknown_delivery_method_no_upload(self, tmp_path):
@@ -657,13 +692,12 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         drive = MagicMock()
         yt = MagicMock()
 
         proc = _make_processor(
-            tmp_path, ttt_client=ttt, drive_uploader=drive, youtube_uploader=yt
+            tmp_path, work=work, drive_uploader=drive, youtube_uploader=yt
         )
         req = _make_request(
             delivery_method="s3",  # not supported
@@ -674,11 +708,11 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         drive.upload_and_share.assert_not_called()
         yt.upload_video.assert_not_called()
-        ttt.fulfill_clip_request.assert_not_called()
+        assert work.called("complete") == []
 
     @pytest.mark.asyncio
     async def test_missing_folder_id_no_upload(self, tmp_path):
@@ -687,12 +721,11 @@ class TestProcessRequestDispatch:
         game_dir.mkdir()
         (game_dir / "combined.mp4").write_bytes(b"\x00")
 
-        ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        work = FakeWorkSource()
         drive = MagicMock()
 
         proc = _make_processor(
-            tmp_path, ttt_client=ttt, drive_uploader=drive, folder_id=None
+            tmp_path, work=work, drive_uploader=drive, folder_id=None
         )
         req = _make_request(recording_group_dir="game-x")
 
@@ -700,10 +733,10 @@ class TestProcessRequestDispatch:
             "video_grouper.utils.ffmpeg_utils.extract_clip",
             new=AsyncMock(return_value="ok"),
         ):
-            await proc._process_request(proc.ttt_client, req)
+            await proc._process_request(req)
 
         drive.upload_and_share.assert_not_called()
-        ttt.fulfill_clip_request.assert_not_called()
+        assert work.called("complete") == []
 
 
 # ---------------------------------------------------------------------------

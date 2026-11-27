@@ -1,10 +1,18 @@
-"""Tests for the TTTJobProcessor."""
+"""Tests for the TTTJobProcessor, against the work-source interface
+(FakeWorkSource). The TTT mapping (claim_job / update_job_progress /
+complete_job / fail_job) is tested in
+tests/integrations/work/test_ttt_work_source.py."""
 
+import os
 import tempfile
 from unittest.mock import Mock
 
 import pytest
 
+from video_grouper.integrations.work import PROCESS_RECORDING, WorkItem
+from video_grouper.integrations.work.fake import FakeWorkSource, WorkCall
+from video_grouper.integrations.work.sources.null import NullWorkSource
+from video_grouper.task_processors.tasks.ttt.ttt_job_task import TTTJobTask
 from video_grouper.task_processors.ttt_job_processor import TTTJobProcessor
 from video_grouper.utils.config import (
     AppConfig,
@@ -79,31 +87,19 @@ def ttt_config(ttt_storage):
 
 
 @pytest.fixture
-def mock_ttt_client():
-    """Create a mock TTT API client."""
-    client = Mock()
-    client.is_authenticated.return_value = True
-    client.register_service.return_value = {"id": "service-123"}
-    client.send_heartbeat.return_value = None
-    client.get_pending_jobs.return_value = []
-    client.claim_job.return_value = None
-    client.update_job_progress.return_value = None
-    client.complete_job.return_value = None
-    client.fail_job.return_value = None
-    return client
+def work():
+    """An in-memory work source that records every report."""
+    return FakeWorkSource()
 
 
 @pytest.fixture
-def processor(ttt_storage, ttt_config, mock_ttt_client):
-    """Create a TTTJobProcessor instance. Back-compat shim attaches the
-    TTT mock as ``handler.ttt_client`` so existing tests can keep
-    reading it; the live TTTPoller passes it via :py:meth:`poll`."""
-    h = TTTJobProcessor(
-        storage_path=ttt_storage,
-        config=ttt_config,
-    )
-    h.ttt_client = mock_ttt_client
-    return h
+def processor(ttt_storage, ttt_config, work):
+    """A TTTJobProcessor reporting to the fake work source."""
+    return TTTJobProcessor(storage_path=ttt_storage, config=ttt_config, work=work)
+
+
+def _job_item(job_id="job-1"):
+    return WorkItem(PROCESS_RECORDING, job_id, {"id": job_id})
 
 
 class TestTTTJobProcessorInit:
@@ -112,8 +108,12 @@ class TestTTTJobProcessorInit:
     def test_init_stores_config(self, processor, ttt_config):
         assert processor.config is ttt_config
 
-    def test_init_stores_ttt_client(self, processor, mock_ttt_client):
-        assert processor.ttt_client is mock_ttt_client
+    def test_init_stores_work_source(self, processor, work):
+        assert processor.work is work
+
+    def test_init_defaults_to_no_work_source(self, ttt_storage, ttt_config):
+        proc = TTTJobProcessor(storage_path=ttt_storage, config=ttt_config)
+        assert isinstance(proc.work, NullWorkSource)
 
     def test_init_no_service_id(self, processor):
         # Service registration moved to TTTPoller; the processor itself
@@ -121,9 +121,7 @@ class TestTTTJobProcessorInit:
         # exists on the (rare) path that sets it.
         assert processor._service_id is None
 
-    def test_init_stores_optional_processors(
-        self, ttt_storage, ttt_config, mock_ttt_client
-    ):
+    def test_init_stores_optional_processors(self, ttt_storage, ttt_config):
         download = Mock()
         video = Mock()
         upload = Mock()
@@ -136,7 +134,6 @@ class TestTTTJobProcessorInit:
             video_processor=video,
             upload_processor=upload,
         )
-        proc.ttt_client = mock_ttt_client
         assert proc.camera is camera
         assert proc.download_processor is download
         assert proc.video_processor is video
@@ -151,8 +148,6 @@ class TestTTTJobProcessorInit:
 async def test_add_work_dedups_on_ttt_id(processor):
     """``add_work`` keys dedup on ``ttt_id`` so the same job queued
     twice only produces one queue entry."""
-    from video_grouper.task_processors.tasks.ttt.ttt_job_task import TTTJobTask
-
     await processor.add_work(TTTJobTask(ttt_id="job-1", payload={"id": "job-1"}))
     await processor.add_work(TTTJobTask(ttt_id="job-1", payload={"id": "job-1"}))
     await processor.add_work(TTTJobTask(ttt_id="job-2", payload={"id": "job-2"}))
@@ -163,20 +158,69 @@ class TestProcessJob:
     """Tests for _process_job."""
 
     @pytest.mark.asyncio
-    async def test_process_job_claim_failure(self, processor, mock_ttt_client):
-        mock_ttt_client.claim_job.side_effect = Exception("Already claimed")
-        await processor._process_job(
-            processor.ttt_client, {"id": "job-1", "config": {}}
-        )
-        mock_ttt_client.update_job_progress.assert_not_called()
+    async def test_process_job_claim_failure(self, processor, work):
+        work.errors["claim"] = Exception("Already claimed")
+        await processor._process_job({"id": "job-1", "config": {}})
+        assert [c.verb for c in work.calls] == ["claim"]
 
     @pytest.mark.asyncio
-    async def test_process_job_no_group_dir(self, processor, mock_ttt_client):
+    async def test_process_job_lost_claim_is_skipped(self, processor, work):
+        work.claims["job-1"] = None
+        await processor._process_job({"id": "job-1", "config": {}})
+        assert [c.verb for c in work.calls] == ["claim"]
+
+    @pytest.mark.asyncio
+    async def test_process_job_no_group_dir(self, processor, work):
         job = {"id": "job-1", "config": {}}
-        await processor._process_job(processor.ttt_client, job)
-        mock_ttt_client.fail_job.assert_called_once_with(
-            "job-1", "Could not resolve recording group directory"
+        await processor._process_job(job)
+        assert work.called("fail") == [
+            WorkCall(
+                "fail",
+                PROCESS_RECORDING,
+                "job-1",
+                ("Could not resolve recording group directory",),
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_process_job_success_reports_each_step_then_completes(
+        self, processor, work, ttt_storage
+    ):
+        group = os.path.join(ttt_storage, "2025-01-01_game")
+        os.makedirs(group)
+        with open(os.path.join(group, "combined.mp4"), "wb") as f:
+            f.write(b"\x00")
+
+        await processor.process_item(
+            TTTJobTask(
+                ttt_id="job-1",
+                payload={
+                    "id": "job-1",
+                    "config": {"recording_group_dir": "2025-01-01_game"},
+                },
+            )
         )
+
+        assert [c.verb for c in work.calls] == [
+            "claim",
+            "progress",
+            "progress",
+            "progress",
+            "complete",
+        ]
+        assert [c.args for c in work.called("progress")] == [
+            ("downloading", 0, {"message": "Starting download from camera"}),
+            ("combining", 30, {"message": "Combining video files"}),
+            ("uploading", 70, {"message": "Uploading to YouTube"}),
+        ]
+        # YouTube uploads are off in this config -> no URL in the result.
+        assert work.called("complete")[0].args == ({},)
+
+    @pytest.mark.asyncio
+    async def test_process_job_error_fails_the_job(self, processor, work):
+        processor._resolve_or_create_group = Mock(side_effect=RuntimeError("disk gone"))
+        await processor._process_job({"id": "job-1", "config": {}})
+        assert work.called("fail")[0].args == ("disk gone",)
 
 
 # NOTE: ``_processing_jobs`` set is gone — QueueProcessor's
@@ -187,35 +231,32 @@ class TestProgressAndFailure:
     """Tests for progress reporting and failure handling."""
 
     @pytest.mark.asyncio
-    async def test_update_progress(self, processor, mock_ttt_client):
-        await processor._update_progress(
-            processor.ttt_client, "job-1", "downloading", {"percent": 50}
-        )
-        mock_ttt_client.update_job_progress.assert_called_once_with(
-            "job-1", "downloading", {"percent": 50}
-        )
+    async def test_update_progress(self, processor, work):
+        await processor._update_progress(_job_item(), "downloading", 50, "Halfway")
+        assert work.called("progress") == [
+            WorkCall(
+                "progress",
+                PROCESS_RECORDING,
+                "job-1",
+                ("downloading", 50, {"message": "Halfway"}),
+            )
+        ]
 
     @pytest.mark.asyncio
-    async def test_update_progress_error_does_not_raise(
-        self, processor, mock_ttt_client
-    ):
-        mock_ttt_client.update_job_progress.side_effect = Exception("API down")
-        await processor._update_progress(
-            processor.ttt_client, "job-1", "downloading", {}
-        )
+    async def test_update_progress_error_does_not_raise(self, processor, work):
+        work.errors["progress"] = Exception("API down")
+        await processor._update_progress(_job_item(), "downloading", 0, "")
         # Should not raise
 
     @pytest.mark.asyncio
-    async def test_fail_job(self, processor, mock_ttt_client):
-        await processor._fail_job(processor.ttt_client, "job-1", "Something went wrong")
-        mock_ttt_client.fail_job.assert_called_once_with(
-            "job-1", "Something went wrong"
-        )
+    async def test_fail_job(self, processor, work):
+        await processor._fail_job(_job_item(), "Something went wrong")
+        assert work.called("fail")[0].args == ("Something went wrong",)
 
     @pytest.mark.asyncio
-    async def test_fail_job_error_does_not_raise(self, processor, mock_ttt_client):
-        mock_ttt_client.fail_job.side_effect = Exception("API down")
-        await processor._fail_job(processor.ttt_client, "job-1", "error")
+    async def test_fail_job_error_does_not_raise(self, processor, work):
+        work.errors["fail"] = Exception("API down")
+        await processor._fail_job(_job_item(), "error")
         # Should not raise
 
 

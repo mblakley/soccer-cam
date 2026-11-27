@@ -898,22 +898,11 @@ class TestStandaloneOperation:
 
         # None of these should raise
         await reporter.report_camera_status("online")
-        result = await reporter.register_recordings([])
-        assert result is None
-        await reporter.update_recording_step(
-            "rec-1",
-            step_id="download",
-            step_type="download",
-            label="Download",
-            status="complete",
-        )
         result = await reporter.sync_config()
         assert result is None
         await reporter.push_config()
         commands = await reporter.poll_pending_commands()
         assert commands == []
-        hwm = await reporter.get_high_water_mark()
-        assert hwm is None
 
     def test_processors_default_ttt_reporter_is_none(self):
         """All pipeline processors default ttt_reporter to None."""
@@ -949,6 +938,7 @@ class TestStandaloneOperation:
     @pytest.mark.asyncio
     async def test_job_processor_skips_when_not_authenticated(self):
         """TTTPoller.discover_work() does nothing when not authenticated."""
+        from video_grouper.integrations.work.sources.ttt import TTTWorkSource
         from video_grouper.task_processors.ttt_job_processor import TTTJobProcessor
         from video_grouper.task_processors.ttt_poller import TTTPoller
 
@@ -963,36 +953,36 @@ class TestStandaloneOperation:
         config.cameras = [MagicMock(type="dahua", device_ip="1.2.3.4")]
         config.pipeline.is_active.return_value = False
 
+        work = TTTWorkSource(mock_client, config.ttt)
         processor = TTTJobProcessor(
             storage_path=tempfile.mkdtemp(),
             config=config,
-            ttt_client=mock_client,
+            work=work,
         )
         poller = TTTPoller(
             storage_path=tempfile.mkdtemp(),
             config=config,
             ttt_client=mock_client,
+            work=work,
             ttt_job_processor=processor,
         )
         await poller.discover_work()
         mock_client.get_pending_jobs.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reporter_update_recording_status_noop_when_no_id(self):
-        """update_recording_status is a no-op when recording_id is None."""
-        client = MagicMock()
-        config = MagicMock()
-        config.ttt.camera_id = "test-cam"
-        config.ttt.ttt_sync_enabled = True
-        config.ttt.heartbeat_interval = 30
-        reporter = TTTReporter(ttt_client=client, config=config)
+    async def test_step_report_noop_when_recording_not_registered(self, tmp_path):
+        """No TTT recording id in state.json -> the TTT sink sends nothing.
+        (Recording reports moved from TTTReporter to the recordings port.)"""
+        from video_grouper.integrations.recordings import StepReport
+        from video_grouper.integrations.recordings.sources.ttt import (
+            TTTRecordingSink,
+        )
 
-        await reporter.update_recording_step(
-            None,
-            step_id="download",
-            step_type="download",
-            label="Download",
-            status="complete",
+        client = MagicMock()
+        client.is_authenticated.return_value = True
+        (tmp_path / "state.json").write_text('{"status": "downloaded", "files": {}}')
+        await TTTRecordingSink(client, "test-cam").progress(
+            str(tmp_path), StepReport("download", "download", "Download", "complete")
         )
         client.update_recording_step.assert_not_called()
 
@@ -1030,29 +1020,32 @@ class TestGracefulDegradation:
         reporter = self._make_failing_reporter()
         await reporter.report_camera_status("online")  # Should not raise
 
-    @pytest.mark.asyncio
-    async def test_register_recordings_returns_none_on_error(self):
-        """register_recordings returns None when TTT is unreachable."""
+    def _failing_sink(self):
+        from video_grouper.integrations.recordings.sources.ttt import (
+            TTTRecordingSink,
+        )
+
         reporter = self._make_failing_reporter()
+        reporter.client.is_authenticated.return_value = True
+        return TTTRecordingSink(reporter.client, "test-camera")
+
+    @pytest.mark.asyncio
+    async def test_recording_found_survives_network_error(self):
+        """Registering recordings with an unreachable TTT doesn't raise."""
         mock_file = MagicMock()
         mock_file.file_path = "test.mp4"
         mock_file.start_time = datetime(2026, 3, 1)
         mock_file.end_time = datetime(2026, 3, 1)
         mock_file.metadata = {}
-        mock_file.group_dir = "/storage/test"
-        result = await reporter.register_recordings([mock_file])
-        assert result is None  # Not a crash, just None
+        await self._failing_sink().recording_found("/storage/test", [mock_file])
 
     @pytest.mark.asyncio
-    async def test_update_recording_step_survives_error(self):
-        """update_recording_step silently logs on error."""
-        reporter = self._make_failing_reporter()
-        await reporter.update_recording_step(
-            "rec-123",
-            step_id="download",
-            step_type="download",
-            label="Download",
-            status="failed",
+    async def test_step_report_survives_error(self):
+        """A step report with an unreachable TTT silently logs."""
+        from video_grouper.integrations.recordings import StepReport
+
+        await self._failing_sink().progress(
+            "/storage/test", StepReport("download", "download", "Download", "failed")
         )  # Should not raise
 
     @pytest.mark.asyncio
@@ -1076,15 +1069,9 @@ class TestGracefulDegradation:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_high_water_mark_returns_none_on_error(self):
-        """get_high_water_mark returns None when TTT is unreachable."""
-        reporter = self._make_failing_reporter()
-        result = await reporter.get_high_water_mark()
-        assert result is None
-
-    @pytest.mark.asyncio
     async def test_job_processor_survives_api_error(self):
         """TTTPoller.discover_work() handles API errors gracefully."""
+        from video_grouper.integrations.work.sources.ttt import TTTWorkSource
         from video_grouper.task_processors.ttt_job_processor import TTTJobProcessor
         from video_grouper.task_processors.ttt_poller import TTTPoller
 
@@ -1101,15 +1088,17 @@ class TestGracefulDegradation:
         config.cameras = [MagicMock(type="dahua", device_ip="1.2.3.4")]
         config.pipeline.is_active.return_value = False
 
+        work = TTTWorkSource(mock_client, config.ttt)
         processor = TTTJobProcessor(
             storage_path=tempfile.mkdtemp(),
             config=config,
-            ttt_client=mock_client,
+            work=work,
         )
         poller = TTTPoller(
             storage_path=tempfile.mkdtemp(),
             config=config,
             ttt_client=mock_client,
+            work=work,
             ttt_job_processor=processor,
         )
         # Should not raise

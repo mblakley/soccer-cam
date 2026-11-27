@@ -71,11 +71,13 @@ def fake_integrations():
     from video_grouper.integrations.entitlements.fake import FakeEntitlements
     from video_grouper.integrations.recordings.fake import FakeRecordingSink
     from video_grouper.integrations.registry import IntegrationContext
+    from video_grouper.integrations.work.fake import FakeWorkSource
 
     previous = integrations._active
     fake = integrations.Integrations(
         entitlements=FakeEntitlements(),
         recordings=FakeRecordingSink(),
+        work=FakeWorkSource(),
         context=IntegrationContext(
             SimpleNamespace(ttt=SimpleNamespace(enabled=False)), "."
         ),

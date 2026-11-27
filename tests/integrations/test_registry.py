@@ -15,6 +15,7 @@ from video_grouper.integrations.registry import (
     build_port,
     provides,
 )
+from video_grouper.integrations.work import IWorkSource
 
 
 class IGreeter(Provider, ABC):
@@ -93,6 +94,8 @@ def test_every_built_in_port_resolves_with_ttt_off():
     assert integrations.entitlements.available is False
     assert isinstance(integrations.recordings, IRecordingSink)
     assert integrations.recordings.name == "none"
+    assert isinstance(integrations.work, IWorkSource)
+    assert integrations.work.name == "none"
 
 
 def test_ttt_on_shares_one_client_across_ports():
@@ -105,6 +108,8 @@ def test_ttt_on_shares_one_client_across_ports():
     assert integrations.shared_ttt_client() is client
     assert integrations.entitlements.name == "ttt"
     assert integrations.recordings.name == "ttt"
+    assert integrations.work.name == "ttt"
+    assert integrations.work._client is client
 
 
 def test_active_defaults_to_the_null_set_and_activate_replaces_it(monkeypatch):

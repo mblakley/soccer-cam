@@ -1,10 +1,15 @@
-"""Clip request processor — polls TTT for pending requests, extracts clips, uploads."""
+"""Clip request processor — extracts the requested clips and delivers them.
+
+Requests arrive from the work source (``IWorkSource``, kind ``clip``) via the
+work poller; claim / complete go back through the same port."""
 
 import asyncio
 import logging
 import os
 import tempfile
 
+from ..integrations.work import CLIP, IWorkSource, WorkItem
+from ..integrations.work.sources.null import NullWorkSource
 from ..utils.config import Config
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
@@ -19,33 +24,33 @@ logger = logging.getLogger(__name__)
 
 
 class ClipRequestProcessor(QueueProcessor):
-    """Drains the TTT clip-request queue. ``process_item`` runs the
+    """Drains the clip-request queue. ``process_item`` runs the
     full extract → upload → fulfill flow inside the shared
     ``ram_heavy`` gate so FFmpeg work can't overlap the main
     pipeline's render step.
 
     Flow per request:
-    1. Mark as in_progress via TTT API
+    1. Claim it (mark in_progress) through the work source
     2. Locate the processed video (fall back to combined.mp4) in recording_group_dir
     3. Extract clips via FFmpeg
     4. Dispatch on delivery_method:
        - 'youtube': compile multi-segment, upload to YouTube
        - 'external_storage': honor is_compilation → 1 upload or N, Drive
-    5. Report fulfilled URL back to TTT
+    5. Complete it with the delivered URL
     """
 
     def __init__(
         self,
         storage_path: str,
         config: Config,
-        ttt_client=None,
+        work: IWorkSource | None = None,
         drive_uploader=None,
         ntfy_service=None,
         youtube_uploader=None,
         resource_manager=None,
     ):
         super().__init__(storage_path, config)
-        self.ttt_client = ttt_client
+        self.work: IWorkSource = work or NullWorkSource()
         self.drive_uploader = drive_uploader
         self.youtube_uploader = youtube_uploader
         self.ntfy_service = ntfy_service
@@ -62,19 +67,16 @@ class ClipRequestProcessor(QueueProcessor):
         """Process one clip request. Wrapped in ``ram_heavy`` because
         the FFmpeg extract phase saturates a CPU core for minutes per
         clip and we don't want to overlap the render step."""
-        if self.ttt_client is None:
-            raise RuntimeError(
-                "ClipRequestProcessor needs a ttt_client; check TTT config"
-            )
         if self.resource_manager is not None:
             async with self.resource_manager.acquire(("ram_heavy",)):
-                await self._process_request(self.ttt_client, item.payload)
+                await self._process_request(item.payload)
         else:
-            await self._process_request(self.ttt_client, item.payload)
+            await self._process_request(item.payload)
 
-    async def _process_request(self, ttt_client, req: dict) -> None:
+    async def _process_request(self, req: dict) -> None:
         """Process a single clip request end-to-end."""
         req_id = req["id"]
+        work_item = WorkItem(CLIP, req_id, req)
         clip_paths: list[str] = []
         upload_paths: list[str] = []
         try:
@@ -88,14 +90,16 @@ class ClipRequestProcessor(QueueProcessor):
                 self._notify_missing_footage(req, recording_dir)
                 return
 
-            # Mark as in_progress
+            # Mark as in_progress (a request already in_progress -- ours, being
+            # retried -- claims fine and processing continues).
             try:
-                await asyncio.to_thread(ttt_client.start_clip_request, req_id)
+                claimed = await self.work.claim(work_item)
             except Exception as e:
-                if "Cannot start" not in str(e):
-                    logger.error(f"Failed to start clip request {req_id}: {e}")
-                    return
-                # Already in_progress, continue processing
+                logger.error(f"Failed to start clip request {req_id}: {e}")
+                return
+            if claimed is None:
+                logger.info(f"Clip request {req_id} taken by another worker")
+                return
 
             # Extract clips
             segments = req.get("segments", [])
@@ -128,8 +132,8 @@ class ClipRequestProcessor(QueueProcessor):
             # Fulfill the request
             notes = f"{len(segments)} clip(s) extracted and uploaded"
             try:
-                await asyncio.to_thread(
-                    ttt_client.fulfill_clip_request, req_id, fulfilled_url, notes
+                await self.work.complete(
+                    work_item, {"url": fulfilled_url, "notes": notes}
                 )
                 logger.info(f"Fulfilled clip request {req_id}: {fulfilled_url}")
             except Exception as e:
