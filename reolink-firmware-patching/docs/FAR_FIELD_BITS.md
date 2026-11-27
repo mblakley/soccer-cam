@@ -350,53 +350,115 @@ grass-coloured (87 to 93 % on real games, 0 % on grey or black).
 | Memory on the camera | ~20 MB of working memory plus 45 MB of weights mapped read-only from the SD card. Free RAM while `device` runs has not been read |
 | Getting a frame | The tool reads the camera's snapshot format: three archived `cmd=Snap` files are baseline 4:2:0 JPEG, 7680x2160, and it decodes them at one-eighth scale from the DC coefficients alone (under 1 MB instead of 50; mean error under 1.4 grey levels against a full decode). Across 27 games the 1/8-scale input moves the far row by a median of 1 (worst 95) and the near row by 15 (worst 141), nearly always outward. **Not wired up:** nothing on the camera fetches the snapshot yet, and whether `cmd=Snap` is safe to call while recording is unmeasured. busybox `wget` is on the camera and `S99_NetState` already uses it against the local API |
 | When to run | Not designed. Once at recording start is the obvious choice; the camera may still be being aimed then |
-| A window that works at all | Everything here is moot until the ROI window is proven on hardware (levers 2, steps 4 to 7 below) |
+| A window that works at all | Everything here is moot until the ROI window is proven on hardware (lever 2; phase D below) |
 
 ## To test on the camera
+
+Everything above is offline work. This is the order for the first session with
+the camera connected. Stop at the first failure; each phase leaves the camera
+in a state the next can start from.
+
+**Decided 2026-11-27 (Mark: "you decide"):**
+
+- **No `device` bitrate patch is built yet.** It is the riskiest change on the
+  list (it touches the process that owns the network) for the smallest expected
+  gain (about 4 % of extra bitrate reaches the far band). Phase B answers
+  whether more bitrate helps at all, with no flash. Build it only if it does.
+- **No SD-card auto-run hook in 4922.** The session runs `fieldroi` by hand from
+  the root shell. An auto-run hook is for unattended games and goes in a later
+  build, once the detector has been timed and proven on the camera.
+- **Flash order: 4922, then 4923.** One string change first, code second.
 
 **The scene must be rate-limited, or every result is a false negative.** A
 static indoor scene encodes at about 1.2 Mbps against the 20 Mbps cap
 (`BUILD_LOG.md`, rollover measurements). There the encoder already sits at its
-QP floor with bits to spare; moving bits around changes nothing. Before any A/B:
+QP floor with bits to spare; moving bits around changes nothing. Point the
+camera at something busy: game footage looping on a screen that fills as much
+of the frame as possible, or outdoors at foliage. If the measured bitrate is
+still under the cap, lower `bitRate` with `SetEnc` until the cap binds.
 
-```bash
-uv run python reolink-firmware-patching/verify/stream_quality.py capture base.mp4 --seconds 30
-```
+Local setup already done: `camera.env` (git-ignored; IP is the `camsh.py`
+default and is confirmed in A1), the static aarch64 `fieldroi` and its weights
+in `builds/out/fieldroi/`, and paks 4922 and 4923 in the firmware folder.
 
-and read the bitrate. It must be at the cap. If it is not, either point the
-camera at something busy (game footage looping on a screen that fills the
-frame, or outdoors with foliage), or lower `bitRate` with `SetEnc` until the cap
-binds. Lock the exposure first: `bash runtime/set_exposure.sh manual 110 20`.
+### A. Read-only baseline (nothing on the camera changes)
 
-In order. Stop at the first failure.
+1. **Find it and identify the build.** `http://<cam>/downloadfile/soccercam/build.txt`
+   must name the 4921 pak. Root shell on tcp/2323 answers (`runtime/camsh.py`).
+2. **Save the state to restore later:** `GetEnc`, `GetIsp`, and
+   `cat /proc/hdal/venc/info`.
+3. **Read what the offline work could not:**
+   - `venc/info`: out 0 is the 7680x2160 H.265 path; its `PATH CONFIG` row
+     shows `bitrate 20971520` and the buffer length (`enc_ms`); the ROI table
+     is empty; the live GOP and QP range.
+   - `cat /proc/meminfo` and `cat /proc/hdal/comm/info`: free Linux memory and
+     free video pool.
+   - `GetEnc` after noting what `gop` the API reports (the code sends 40; the
+     range is 1 to 2).
+4. **Lock exposure** (`runtime/set_exposure.sh manual 110 20`), **capture 30 s**
+   (`verify/stream_quality.py capture`), and confirm the bitrate is at the cap.
+   This also confirms the live stream is the same encode path as the recorder
+   (`venc/info` lists one 7680x2160 path).
 
-1. **Identify the build**: `curl http://<cam>/downloadfile/soccercam/build.txt`
-   should say `4921 stitchcal`.
-2. **Read the encoder's own state**: `cat /proc/hdal/venc/info` over the tcp/2323
-   shell (`runtime/camsh.py`). Confirms out 0 is the 7680x2160 path, shows the
-   live `gop`, and the QP range.
-3. **Keyframe interval A/B**, no flash. `gop=1`, capture 60 s. `gop=2`, capture
-   60 s. `stream_quality.py compare`. Expect the keyframe gap to go 20 to 40,
-   keyframe share to drop, and far-region detail on the last frame of the cycle
-   to rise.
-3b. **Rate-control commands**, no flash (lever 1b). Start with `setcbr` at the
-   values `venc/info` already shows, changing only GOP. Then MinPQp. Then
-   ByteRate. One change at a time, reading `venc/info` back after each.
-4. **ROI negative control on 4921** (`ENCODER_ROI_QP.md` section 7.1): the stock
-   `setroi` must read back `QP = 0`.
-5. **Flash 4922.** Confirm `build.txt` names 4922, the stream still encodes, the
-   ROI table in `venc/info` is still empty, and `roi.log` says the encoder was
-   left untouched.
-6. **ROI readback** (section 7.3): `QP = -6, QPMode = 1` in dmesg and a row in
-   the ROI table.
-7. **ROI A/B**: off, `qp=-6`, `qp=0`, and **`qp=+10` as a positive control**. A
-   positive delta makes the rectangle visibly worse even when the encoder is not
-   rate-limited, so it proves the window reaches the hardware and settles pixels
-   against CTUs independently of the scene. `roi_qp_heatmap.py` for the picture,
-   `stream_quality.py compare` for the numbers.
-8. Record results in `training/docs/EXPERIMENTS.md`.
+### B. No-flash levers (all revert on reboot or by re-sending `SetEnc`)
 
-A full-game soak (section 7.6) needs a game.
+5. **Keyframe interval through the API.** `gop=1`, capture 60 s; `gop=2`,
+   capture 60 s; `stream_quality.py compare`. Expect the keyframe gap to go 20
+   to 40, keyframe share to drop, far-region detail late in the cycle to rise.
+6. **`setroi` negative control** (`ENCODER_ROI_QP.md` 7.1): on 4921 the echo
+   must read `QP = 0, QPMode = 0`. The harness already shows this under qemu;
+   this is the same line from the real kernel. Then disable it again.
+7. **`setcbr`, one change at a time**, starting from exactly the values
+   `venc/info` shows and reading `venc/info` and `dmesg` back after each:
+   GOP beyond 2 s; then minimum QP below 25; then byte rate above 2,621,440
+   (start at 3,276,800 = 26.2 Mbps). Capture 60 s at each setting that takes.
+   Watch `dmesg` for `size not enough, drop frame` and check whether `device`
+   puts its own values back.
+8. **Global AQ strength** (`setaq`, small values only) if time allows.
+
+### C. The field detector, by hand (no flash)
+
+9. **Put it on the card.** Serve `builds/out/fieldroi/` from this machine and
+   fetch both files with the camera's own `wget` into `/mnt/sda/soccercam/bin/`;
+   check the md5 of each.
+10. **Does a snapshot cost frames?** Capture the stream for 30 s while taking
+    `cmd=Snap` three times; `verify/measure_clip_fps.py` on the capture.
+11. **Run it** on a snapshot under `time`, at `nice 19`, watching `/proc/meminfo`.
+    Record seconds and peak memory. Pointed at a screen or a yard it should
+    either find the grass or refuse; pointed indoors it must refuse.
+
+### D. Flash 4922 (format-string fix, daemon disabled by default)
+
+12. `verify/test_setroi_patch.sh <4922 pak> fix`, then `flash/flash_pak.py`.
+    Confirm `build.txt` names 4922, the stream still encodes, the ROI table is
+    still empty, and `roi.log` says the encoder was left untouched.
+13. **ROI readback** (7.3): `QP = -6, QPMode = 1` in `dmesg`, and a row in the
+    ROI table.
+14. **ROI A/B** through `roi.conf`: off, `qp=-6`, `qp=0`, and **`qp=+10` as a
+    positive control**. A positive delta makes the rectangle visibly worse even
+    if the encoder is not rate-limited, so it proves the window reaches the
+    hardware and settles pixels against CTUs independently of the scene.
+    `roi_qp_heatmap.py` for the picture, `stream_quality.py compare` for the
+    numbers. Then a strong window on the "field" rows of the test scene.
+15. **End to end:** `fieldroi snapshot.jpg > /mnt/sda/soccercam/roi.conf` and
+    watch the daemon apply it within 30 s.
+
+### E. Flash 4923 (ten windows) — only if D passed
+
+16. `verify/test_setroi_patch.sh <4923 pak> multiwin`, flash, same confirmations
+    as step 12.
+17. Two windows on different indexes: both rows present in the ROI table. Then
+    what the harness cannot show: overlapping windows, and which wins.
+18. An out-of-range index is refused and the camera keeps running.
+
+### After
+
+19. Restore the saved `GetEnc` / exposure state unless a new setting is being
+    kept on purpose. Record results in `training/docs/EXPERIMENTS.md` and decide:
+    `gop` default, whether the `device` bitrate patch is worth building, and the
+    auto-run hook.
+
+A full-game soak (`ENCODER_ROI_QP.md` 7.6) needs a game.
 
 ## Would replacing the firmware remove these limits? (assessed 2026-11-27)
 
@@ -432,8 +494,10 @@ the sensor, which any replacement would have to keep.
 
 | question | how it gets answered |
 |---|---|
-| Does `gop=2` survive a reboot and a day/night switch | step 3, then reboot |
-| Does the rate controller give the freed bits to the frames between, or to bigger keyframes | step 3 |
+| Does `gop=2` survive a reboot and a day/night switch | step 5, then reboot |
+| Does the rate controller give the freed bits to the frames between, or to bigger keyframes | step 5 |
 | What the camera does with `gop=40` from `apply_optimal_settings` | `GetEnc` after an `apply_optimal_settings` run |
-| Whether the live RTSP stream and the recorder share one encode path | step 2: `venc/info` lists the paths and their consumers |
-| Everything in `ENCODER_ROI_QP.md` section 8 | steps 4 to 7 |
+| Whether the live RTSP stream and the recorder share one encode path | step 3: `venc/info` lists the paths and their consumers |
+| Everything in `ENCODER_ROI_QP.md` section 8 | steps 6 and 12 to 18 |
+| Whether a `setcbr` value survives, and whether more bitrate helps the far field | step 7 |
+| How long `fieldroi` takes on the camera, and whether a snapshot costs frames | steps 10 and 11 |

@@ -40,9 +40,12 @@
   byte rate — untested, no flash needed. The SoC is NT98539 (NS02302), not NT9856x/NT98530.
 - **Full firmware replacement assessed and not pursued:** no open-firmware path for this SoC; an
   app replacement is 12–25 weeks (agent's estimate) and does not lift the hardware limits.
-- **Next:** connect the camera, run `FAR_FIELD_BITS.md` "To test on the camera" steps 1–8. On the
-  same session read `/proc/meminfo`, time `fieldroi`, and read `PATH CONFIG` + `dmesg` after a
-  rejected `SetEnc`.
+- **Decided (Mark: "you decide"):** no `device` bitrate patch until `setcbr` shows more bitrate
+  helps; no SD auto-run hook in 4922; flash 4922 then 4923.
+- **READY for the camera.** Runbook: `FAR_FIELD_BITS.md` "To test on the camera", phases A–E
+  (read-only baseline → no-flash levers → detector by hand → flash 4922 → flash 4923). Local
+  `camera.env`, `builds/out/fieldroi/` and both paks are in place. Needs from Mark: the camera on
+  the LAN, pointed at a busy scene.
 
 ## 2026-08-17 — NON-UNIFORM CAMERA WARP: assessed, DECLINED for image quality; the mesh READ is the win
 
