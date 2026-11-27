@@ -4,7 +4,7 @@ From a fresh clone, two commands:
 
 ```bash
 uv sync          # everything needed to lint, format and run the tests
-uv run pytest -m "not integration and not e2e"
+uv run pytest -m "not integration and not e2e" -n auto
 ```
 
 `uv sync` with no flags is enough. The tooling lives in `[dependency-groups] dev`,
@@ -22,7 +22,7 @@ needs:
 ```bash
 uv run ruff check                                  # lint
 uv run ruff format --check                         # formatting
-uv run pytest -m "not integration and not e2e"     # unit tests
+uv run pytest -m "not integration and not e2e" -n auto   # unit tests
 ```
 
 All three must pass before you commit. `/verify` runs them together.
@@ -33,15 +33,33 @@ All three must pass before you commit. `/verify` runs them together.
 |---|---|---|
 | `uv run pytest tests/web/test_design_system.py` | 31 | 4s |
 | `uv run pytest tests/web/` | ~200 | 1m |
-| `uv run pytest -m "not integration and not e2e"` | ~2000 | 8m |
+| `uv run pytest -m "not integration and not e2e" -n auto` | ~2150 | 2m |
+| `uv run pytest -m "not integration and not e2e"` (serial) | ~2150 | 3.5m |
+
+(Measured on a 12-core laptop.) `-n auto` comes from `pytest-xdist`, which
+`uv sync` installs. It is deliberately not in `addopts`: a single file or test
+runs in-process, so `-s`, `--pdb` and debuggers behave as usual.
 
 Start with the design-system guards when you touch the UI — they are the fastest
 signal and they catch the mistakes that are easiest to make.
 
-If the whole suite feels slower than the table above, check whether something
-started building a fresh TLS context per test. `TTTApiClient` shares one via
-`_shared_ssl_context()`; without it, `ssl.load_verify_locations` cost ~2s per
-`create_app` and dominated the run.
+If the whole suite feels slower than the table above, look for these, each of
+which has cost minutes before:
+
+- A fresh TLS context per test. `TTTApiClient` shares one via
+  `_shared_ssl_context()`; without it, `ssl.load_verify_locations` cost ~2s per
+  `create_app` and dominated the run.
+- A test waiting on a real timeout. Make the wait an attribute the test can
+  shorten (`QueueProcessor._queue_poll_timeout`,
+  `NtfyProcessor._response_poll_timeout`) or fake the clock
+  (`tests/test_autocam_resume.py::_FakeClock`).
+- An expensive pure computation rebuilt per test (seam detection, the leveled
+  pano, a solve). Memoise it on its inputs and hand out copies — see
+  `tests/web/test_stitch_calibration.py::_MemoisedMetric`.
+- PyAV `reformat()` without `threads=1` in a fixture writer: swscale's
+  auto-sized pool costs ~3 ms per tiny frame, and far more under `-n auto`.
+- Full `gc.collect()` walks. `tests/conftest.py` freezes the import-time heap
+  after collection so the per-test collect stays cheap; don't undo that.
 
 Integration and e2e tests need real hardware or a live server:
 

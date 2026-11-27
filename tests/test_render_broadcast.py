@@ -38,7 +38,15 @@ _POLY = np.array(
 
 
 def _geom(cfg: RenderStepConfig):
-    return _resolve_geometry(SRC_W, SRC_H, cfg, _POLY)
+    # Resolve with the pinhole projection: world-up leveling and the mount tilt
+    # are derived exactly as for the cylindrical default (they come before the
+    # projection branch), but the full-source leveled pano -- ~10 s of numpy at
+    # 7680x2160, and never read by _frame_view -- is not built.
+    geom = _resolve_geometry(
+        SRC_W, SRC_H, cfg.model_copy(update={"render_projection": "pinhole"}), _POLY
+    )
+    assert geom.world_up is not None, "the polygon must still level the view"
+    return geom
 
 
 def test_viewport_log_line_is_autocam_format_and_round_trips(caplog):

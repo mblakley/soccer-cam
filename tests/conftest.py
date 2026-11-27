@@ -1,3 +1,4 @@
+import gc
 import importlib.machinery
 import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -38,13 +39,25 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
+def pytest_collection_finish(session):
+    """Freeze everything alive once collection is done.
+
+    Every module, fixture definition and collected test item exists by now
+    and lives for the whole session. ``gc.freeze()`` moves them out of the
+    collector's view, so the per-test ``gc.collect()`` below still collects
+    every bit of garbage a test leaves -- all of it is created later -- but
+    no longer re-walks ~150k import-time objects each time (~60-100 ms per
+    test, over 2000 tests: a third of the serial run).
+    """
+    gc.collect()
+    gc.freeze()
+
+
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
     """Cleanup fixture that runs after every test."""
     yield
     # Force cleanup of any remaining resources
-    import gc
-
     gc.collect()
 
     # Close any remaining loggers

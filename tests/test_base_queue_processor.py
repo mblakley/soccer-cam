@@ -157,6 +157,9 @@ class TestQueueProcessorInProgressPersistence:
         processor = StubQueueProcessor(str(tmp_path), mock_config)
         processor._queue = asyncio.PriorityQueue()
 
+        # The idle loop re-checks shutdown once per poll (5 s in production).
+        processor._queue_poll_timeout = 0.05
+
         task = StubTask("success-item")
         await processor.add_work(task)
 
@@ -187,6 +190,8 @@ class TestQueueProcessorInProgressPersistence:
         processor = StubQueueProcessor(str(tmp_path), mock_config)
         processor._queue = asyncio.PriorityQueue()
         processor._max_retries = 0  # Fail immediately, no retries
+        # The idle loop re-checks shutdown once per poll (5 s in production).
+        processor._queue_poll_timeout = 0.05
 
         # Make process_item always fail
         async def always_fail(item):

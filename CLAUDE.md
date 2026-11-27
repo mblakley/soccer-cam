@@ -262,14 +262,20 @@ uv run pytest tests/test_camera_poller.py
 # Single test method
 uv run pytest tests/test_dahua_camera.py::TestDahuaCameraAvailability::test_check_availability_failure -v
 
-# Unit tests only (skip integration/e2e)
-uv run pytest -m "not integration and not e2e"
+# Unit tests only (skip integration/e2e) -- run them in parallel (pytest-xdist)
+uv run pytest -m "not integration and not e2e" -n auto
 
 # Integration tests only
 uv run pytest -m "integration"
 ```
 
-Test markers: `slow`, `integration`, `e2e`. Async tests use `asyncio_mode = "strict"` — always use `@pytest.mark.asyncio` on async test functions.
+`-n auto` is not in `addopts` so a single file or test still runs in-process
+(debuggers, `-s`, `--pdb` work as usual); add it for whole-suite runs.
+
+Test markers: `slow`, `integration`, `e2e`. A test that drives real processor
+instances against wall-clock sleeps is `integration`, wherever it lives. Unit
+tests must not wait on real timeouts: make the wait an attribute the test can
+shorten, or fake the clock (see `tests/test_autocam_resume.py::_FakeClock`). Async tests use `asyncio_mode = "strict"` — always use `@pytest.mark.asyncio` on async test functions.
 
 ### Linting & Formatting
 
@@ -338,7 +344,7 @@ Pydantic models in `video_grouper/utils/config.py`. Loaded from INI file (defaul
 Always verify changes before committing:
 1. `uv run ruff check` — must pass with no errors
 2. `uv run ruff format --check` — must show no reformatting needed
-3. `uv run pytest -m "not integration and not e2e"` — all unit tests must pass
+3. `uv run pytest -m "not integration and not e2e" -n auto` — all unit tests must pass
 
 Use `/verify` to run all checks at once.
 
