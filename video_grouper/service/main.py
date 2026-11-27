@@ -113,7 +113,14 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
 
         logger.info(f"Loading config from {config_path}")
         try:
+            from video_grouper.utils.config_migrations import migrate_config_file
+
             with FileLock(config_path):
+                # Same one-shot schema migration the console entry point runs.
+                # The service is how Windows installs actually boot, so it has
+                # to be here too or an upgraded service would read a config
+                # still in the old shape.
+                migrate_config_file(config_path)
                 config = load_config(config_path)
         except Exception as e:
             logger.error(f"Failed to load config: {e}")

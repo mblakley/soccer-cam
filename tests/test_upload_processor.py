@@ -96,6 +96,7 @@ class TestUploadProcessor:
                 youtube_config=mock_config.youtube,
                 ntfy_service=None,
                 storage_path=temp_storage,
+                teams=mock_config.teams,
             )
 
     @pytest.mark.asyncio
@@ -274,6 +275,7 @@ class TestUploadProcessorAuthCheck:
                 youtube_config=mock_config.youtube,
                 ntfy_service=mock_ntfy,
                 storage_path=temp_storage,
+                teams=mock_config.teams,
             )
 
     @pytest.mark.asyncio

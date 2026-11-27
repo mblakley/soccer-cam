@@ -48,6 +48,8 @@ check_interval_seconds = 60
 timezone = America/New_York
 
 [TEAMSNAP]
+# Credentials only. WHICH teams to pull is configured per team, under
+# [TEAM.<key>] at the bottom of this file — set teamsnap_team_id there.
 # Set to true to enable TeamSnap integration
 enabled = false
 # OAuth credentials (get these from TeamSnap developer portal)
@@ -55,21 +57,14 @@ client_id = your_client_id
 client_secret = your_client_secret
 # Access token
 access_token = your_access_token
-# Your team ID from TeamSnap
-team_id = your_team_id
-# Your team name as it should appear in video titles
-my_team_name = Your Team Name
 
 [PLAYMETRICS]
+# Credentials only — see [TEAM.<key>] playmetrics_team_id for which teams.
 # Set to true to enable PlayMetrics integration
 enabled = false
 # Your PlayMetrics login credentials
 username = your_email@example.com
 password = your_password
-# Your team ID from PlayMetrics (optional, will try to find from dashboard if not provided)
-team_id = your_team_id
-# Your team name as it should appear in video titles (optional, will try to extract from PlayMetrics)
-team_name = Your Team Name
 
 [NTFY]
 # Set to true to enable NTFY integration for game start/end time detection
@@ -165,9 +160,8 @@ type = render
 # type = autocam
 # executable = C:\path\to\AutoCam.exe
 
-# [PIPELINE.PER_TEAM]
-# # Per-team pipeline override. Key = MatchInfo team_name.
-# # flash = ...
+# Per-team pipeline overrides are NOT configured here. Set `pipeline` on the
+# team itself — see [TEAM.<key>] at the bottom of this file.
 
 # Playlist configuration for processed videos
 [YOUTUBE.PLAYLIST.PROCESSED]
@@ -210,3 +204,63 @@ auth_server_port = 8765
 # supabase_internal_url = http://supabase_kong_<project>:8000
 # Leave blank in production; one URL serves both legs.
 # supabase_internal_url =
+
+[AUTOCAM]
+# Installation-level AutoCam settings: where the vendor's app lives and the
+# licence key it runs under. Per-render options belong to the pipeline step,
+# not here.
+enabled = true
+# Leave blank to auto-detect the usual install location.
+executable =
+# Your AutoCam licence key.
+license_key =
+
+[CLOUD_SYNC]
+# Mirror finished games to a cloud provider. Off by default.
+enabled = false
+provider =
+
+[MOMENT_TAGGING]
+# Pull moment tags from a Team Tech Tools instance so clips can be cut from
+# them. Off by default; needs a reachable TTT API.
+enabled = false
+api_base_url = http://localhost:8000
+service_role_key =
+
+[NODE]
+# Multi-machine rendering. `standalone` (default) does everything locally.
+# `master` hands work out; `worker` polls a master for it — a worker must be
+# started with `python -m video_grouper.worker`, not the normal entry point.
+role = standalone
+# Workers only: where to poll.
+master_url =
+# Master only: comma-separated tokens workers authenticate with.
+worker_tokens =
+# Workers only: comma-separated capabilities this node advertises.
+capabilities =
+
+# ---------------------------------------------------------------------------
+# Teams
+# ---------------------------------------------------------------------------
+# One section per team, spelled [TEAM.<key>]. The <key> is a short handle you
+# choose; it is never matched against anything, it just labels the section.
+#
+# Everything about a team lives here: which TeamSnap/PlayMetrics team it is,
+# which YouTube playlist its games go to, and which pipeline processes them.
+#
+# `name` is what gets matched, against [MATCH] my_team_name in each game's
+# match_info.ini. Matching is case-insensitive and falls back to substring, so
+# a short `aliases` entry resolves a longer real name.
+#
+# `pipeline` is an optional comma-separated list of step ids from the
+# [PIPELINE.<step_id>] sections above. Set it to run a different subset or
+# order for this team's games; leave it blank to use [PIPELINE] steps.
+#
+# [TEAM.heat2012]
+# name = BU14 - Guzzetta
+# aliases = Guzzetta, Hilton Heat
+# enabled = true
+# teamsnap_team_id = 10198718
+# playmetrics_team_id =
+# youtube_playlist = Hilton Heat 2012s
+# pipeline = stitch, render
