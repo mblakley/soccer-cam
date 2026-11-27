@@ -278,15 +278,27 @@ class MockTTTApiClient:
         return list(self._roster)
 
     def auto_match_video(
-        self, team_id: str, video_url: str, recorded_at: str
+        self,
+        team_id: str,
+        video_url: str,
+        recorded_at: str,
+        game_id: str | None = None,
     ) -> dict[str, Any]:
         logger.debug("Mock auto_match_video for team %s at %s", team_id, recorded_at)
         if self._games:
+            # Like TTT: a known game_id wins; otherwise match on time.
+            chosen = next(
+                (g for g in self._games if game_id and g["game_id"] == game_id),
+                None,
+            )
+            game = chosen or self._games[0]
             return {
                 "matched": True,
-                "game_id": self._games[0]["game_id"],
-                "opponent_name": self._games[0]["opponent_name"],
-                "message": "Matched to nearest game",
+                "game_id": game["game_id"],
+                "opponent_name": game["opponent_name"],
+                "message": "Matched to the reported game"
+                if chosen
+                else "Matched to nearest game",
             }
         return {
             "matched": False,

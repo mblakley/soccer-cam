@@ -292,3 +292,60 @@ class TestMatchInfo:
             total_duration="01:30:00",
         )
         assert match_info.get_start_offset() == "01:10:00"
+
+
+class TestTTTGameIdSurvives:
+    """match_info.ini ttt_game_id: kept by save(), cleared by a non-TTT re-match."""
+
+    def _group(self, tmp_path):
+        group_dir = tmp_path / "2026.12.05-10.00.00"
+        group_dir.mkdir()
+        return str(group_dir)
+
+    def _read(self, group_dir):
+        config = configparser.ConfigParser()
+        config.read(os.path.join(group_dir, "match_info.ini"))
+        return config["MATCH"]
+
+    def test_save_keeps_the_ttt_game_id_and_other_keys(self, tmp_path):
+        # The NTFY game-start confirmation calls save(); it must not erase the
+        # TTT match written earlier by the schedule lookup.
+        group_dir = self._group(tmp_path)
+        MatchInfo.update_team_info(
+            group_dir,
+            {
+                "my_team_name": "Flash",
+                "opponent_team_name": "Rivals",
+                "location": "Home",
+                "ttt_game_id": "g-123",
+            },
+        )
+        info, _ = MatchInfo.get_or_create(
+            group_dir, os.path.dirname(os.path.abspath(group_dir))
+        )
+        info.group_dir = group_dir
+        info.start_time_offset = "00:05:00"
+        info.save()
+
+        match = self._read(group_dir)
+        assert match["ttt_game_id"] == "g-123"
+        assert match["start_time_offset"] == "00:05:00"
+
+    def test_a_non_ttt_rematch_clears_an_earlier_ttt_game_id(self, tmp_path):
+        group_dir = self._group(tmp_path)
+        MatchInfo.update_team_info(
+            group_dir, {"opponent_team_name": "A", "ttt_game_id": "g-1"}
+        )
+        MatchInfo.update_team_info(
+            group_dir, {"opponent_team_name": "B", "ttt_game_id": ""}
+        )
+        assert "ttt_game_id" not in self._read(group_dir)
+
+    def test_writers_without_the_key_leave_it_alone(self, tmp_path):
+        # NTFY team-info answers don't mention it; they must not clear it.
+        group_dir = self._group(tmp_path)
+        MatchInfo.update_team_info(
+            group_dir, {"opponent_team_name": "A", "ttt_game_id": "g-1"}
+        )
+        MatchInfo.update_team_info(group_dir, {"location": "Away"})
+        assert self._read(group_dir)["ttt_game_id"] == "g-1"

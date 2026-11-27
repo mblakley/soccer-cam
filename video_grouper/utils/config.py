@@ -414,6 +414,16 @@ class NodeConfig(BaseModel):
         return v
 
 
+TTT_SECRET_KEYS = ("email", "password")
+
+
+def sanitize_ttt_conn(ttt_config: dict | None) -> dict:
+    """A TTT config dict without credentials -- the only form that may be
+    written into task metadata or queue state files. Clients authenticate with
+    the stored session tokens, never with these."""
+    return {k: v for k, v in (ttt_config or {}).items() if k not in TTT_SECRET_KEYS}
+
+
 class TTTConfig(BaseModel):
     """Configuration for Team Tech Tools integration (clip request automation)."""
 

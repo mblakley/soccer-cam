@@ -55,8 +55,10 @@ def _write_decodable_clip(path, video_seconds, fps=10, rate=16000):
         rng = np.random.default_rng(0)
         for i in range(int(round(video_seconds * fps))):
             img = (rng.random((64, 64, 3)) * 255).astype(np.uint8)
+            # threads=1: an auto-sized swscale pool costs ~3 ms per tiny frame
+            # (and far more with parallel test workers); output is identical.
             frame = av.VideoFrame.from_ndarray(img, format="rgb24").reformat(
-                format="yuv420p"
+                format="yuv420p", threads=1
             )
             frame.pts = i
             for pkt in vstream.encode(frame):

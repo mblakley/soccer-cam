@@ -150,3 +150,45 @@ async def test_no_processor_is_safe(storage_path):
     )
     # Must not raise when there's no processor to enqueue to.
     await proc.discover_work()
+
+
+# ---------------------------------------------------------------------------
+# Credentials never reach the queue state file
+# ---------------------------------------------------------------------------
+
+_TTT_WITH_SECRETS = {
+    "enabled": True,
+    "api_base_url": "https://ttt.example",
+    "email": "manager@example.com",
+    "password": "hunter2",
+}
+
+
+@pytest.mark.asyncio
+async def test_enqueued_task_carries_no_ttt_credentials(storage_path):
+    _make_group(storage_path, "flash__2024.06.01_vs_IYSA_home", "trimmed")
+    cfg = _make_config()
+    cfg.ttt.enabled = True
+    cfg.ttt.model_dump.return_value = dict(_TTT_WITH_SECRETS)
+    proc, pipeline_processor = _processor(storage_path, cfg)
+
+    await proc.discover_work()
+
+    enqueued = pipeline_processor.add_work.await_args.args[0]
+    assert enqueued.ttt_config["api_base_url"] == "https://ttt.example"
+    assert "password" not in enqueued.ttt_config
+    assert "email" not in enqueued.ttt_config
+
+
+def test_serialized_task_never_contains_credentials(storage_path):
+    # Defence in depth: whatever a caller passes in, the persisted form is clean.
+    task = PipelineTask(
+        group_dir=storage_path / "g",
+        input_path="in.mp4",
+        output_path="out.mp4",
+        ttt_config=dict(_TTT_WITH_SECRETS),
+    )
+    blob = json.dumps(task.serialize())
+    assert "hunter2" not in blob
+    assert "manager@example.com" not in blob
+    assert json.loads(blob)["ttt_config"]["api_base_url"] == "https://ttt.example"

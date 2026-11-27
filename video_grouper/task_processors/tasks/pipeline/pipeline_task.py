@@ -17,6 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+from video_grouper.utils.config import sanitize_ttt_conn
+
 from ...queue_type import QueueType
 from ..base_task import BaseTask
 
@@ -65,7 +67,10 @@ class PipelineTask(BaseTask):
             "output_path": self.output_path,
             "team_name": self.team_name,
             "storage_path": self.storage_path,
-            "ttt_config": dict(self.ttt_config) if self.ttt_config else None,
+            # Never persist credentials, whatever the caller passed in.
+            "ttt_config": sanitize_ttt_conn(self.ttt_config)
+            if self.ttt_config
+            else None,
         }
 
     @classmethod

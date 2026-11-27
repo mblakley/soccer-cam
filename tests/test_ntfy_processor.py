@@ -406,6 +406,9 @@ class TestNtfyProcessorBlocking:
             ntfy_service=mock_ntfy_service,
             match_info_service=mock_match_info_service,
         )
+        # Shutdown is noticed on the next poll wake-up (30 s in production);
+        # shorten the poll so the test sees one full cycle in milliseconds.
+        processor._response_poll_timeout = 0.05
 
         mock_task = Mock()
         mock_task.execute = AsyncMock(return_value=True)
@@ -422,16 +425,15 @@ class TestNtfyProcessorBlocking:
 
         task = asyncio.create_task(run_process_item())
 
-        # Give process_item a chance to block
-        await asyncio.sleep(0.05)
+        # Let process_item block, and sit through more than one poll cycle so
+        # the test shows it keeps waiting while nobody has asked it to stop.
+        await asyncio.sleep(0.2)
         assert not completed
 
         # Signal shutdown
         processor._stopping = True
 
-        await asyncio.wait_for(
-            task, timeout=35.0
-        )  # Must wait for one 30s timeout cycle
+        await asyncio.wait_for(task, timeout=2.0)  # one poll cycle, not 30 s
         assert completed
 
     @pytest.mark.asyncio

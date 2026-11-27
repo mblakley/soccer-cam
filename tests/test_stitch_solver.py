@@ -26,6 +26,8 @@ which is the correct behaviour, not a gap in the test suite.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import sys
 from functools import cache
@@ -136,8 +138,30 @@ def frames(
     return tuple(_fuse(lines, e_of_y, dy, seed=s) for s in range(1, n + 1))
 
 
+#: Successful solves, keyed on the frames' pixels and the solver arguments.
+#: Several tests interrogate the same solve of the same fixture frames, and a
+#: solve is a pure function of its inputs (~1.5 s each). Refusals are not
+#: cached: they are cheap to reproduce and each test checks its own.
+_SOLVES: dict[tuple, object] = {}
+
+
 def _solve(fs, **kw):
-    return solve_from_frames(list(fs), **KW, **kw)
+    fs = list(fs)
+    key = (
+        tuple(
+            (
+                f.shape,
+                f.dtype.str,
+                hashlib.blake2b(f.tobytes(), digest_size=16).digest(),
+            )
+            for f in fs
+        ),
+        tuple(sorted(kw.items())),
+    )
+    if key not in _SOLVES:
+        _SOLVES[key] = solve_from_frames(fs, **KW, **kw)
+    # A deep copy, so no test can see what another did to its result.
+    return copy.deepcopy(_SOLVES[key])
 
 
 # -- ground truth: recover a shear we put there ------------------------------
