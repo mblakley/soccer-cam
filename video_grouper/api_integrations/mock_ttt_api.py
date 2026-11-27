@@ -278,7 +278,11 @@ class MockTTTApiClient:
         return list(self._roster)
 
     def auto_match_video(
-        self, team_id: str, video_url: str, recorded_at: str
+        self,
+        team_id: str,
+        video_url: str,
+        recorded_at: str,
+        game_id: str | None = None,
     ) -> dict[str, Any]:
         logger.debug("Mock auto_match_video for team %s at %s", team_id, recorded_at)
         if self._games:

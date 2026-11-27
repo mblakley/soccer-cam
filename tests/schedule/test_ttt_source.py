@@ -44,6 +44,11 @@ class TestTTTSource:
             "location": "",
         }
 
+    def test_keeps_the_matched_ttt_game_id(self):
+        game = TTTScheduleSource(_service({"game_id": "g-42"})).find_game(START, END)
+        assert game.ttt_game_id == "g-42"
+        assert game.to_match_info()["ttt_game_id"] == "g-42"
+
     def test_is_authoritative(self):
         assert TTTScheduleSource.authoritative is True
 

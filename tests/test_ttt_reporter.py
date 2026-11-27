@@ -677,7 +677,33 @@ class TestAutoMatchVideo:
             "team-1",
             "https://youtu.be/vid123",
             recorded_at.isoformat(),
+            game_id=None,
         )
+
+    @pytest.mark.asyncio
+    async def test_auto_match_video_reports_the_ttt_game_it_was_matched_to(
+        self, tmp_path
+    ):
+        # A recording matched against TTT's schedule carries that game's id in match_info.ini;
+        # it's sent so TTT attaches to that game instead of re-matching on time.
+        from video_grouper.models.match_info import MatchInfo
+
+        group_dir = tmp_path / "2026.12.05-10.00.00"
+        group_dir.mkdir()
+        MatchInfo.update_team_info(
+            str(group_dir),
+            {
+                "my_team_name": "Flash",
+                "opponent_team_name": "Rivals",
+                "ttt_game_id": "g-123",
+            },
+        )
+        self.client.auto_match_video.return_value = {"matched": True, "message": "ok"}
+        recorded_at = datetime(2026, 12, 5, 10, 0, 0)
+
+        await self.reporter.auto_match_video(str(group_dir), "vid123", recorded_at)
+
+        assert self.client.auto_match_video.call_args.kwargs == {"game_id": "g-123"}
 
     @pytest.mark.asyncio
     async def test_auto_match_video_swallows_client_error(self):

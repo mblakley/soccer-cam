@@ -29,6 +29,9 @@ class MatchInfo:
     start_time_offset: str = ""
     total_duration: str = ""
     date: datetime | None = None
+    # The TTT game this recording was matched to (TTT schedule source only). Reported back to
+    # TTT so the video attaches to that game instead of TTT re-matching on time.
+    ttt_game_id: str = ""
 
     def __hash__(self):
         """Make MatchInfo hashable so it can be used in sets and as dictionary keys."""
@@ -76,6 +79,7 @@ class MatchInfo:
                 location=config.get("MATCH", "location", fallback=""),
                 start_time_offset=config.get("MATCH", "start_time_offset", fallback=""),
                 total_duration=config.get("MATCH", "total_duration", fallback=""),
+                ttt_game_id=config.get("MATCH", "ttt_game_id", fallback=""),
             )
         except (configparser.Error, KeyError) as e:
             logger.error(f"Error creating MatchInfo from config: {e}")
@@ -200,6 +204,9 @@ class MatchInfo:
                 logger.info(
                     f"Updated match_info.ini with location: {team_info['location']}"
                 )
+
+            if team_info.get("ttt_game_id"):
+                config["MATCH"]["ttt_game_id"] = team_info["ttt_game_id"]
 
         # Ensure required fields exist with default values if not set
         if "my_team_name" not in config["MATCH"]:

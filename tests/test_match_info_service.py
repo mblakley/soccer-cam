@@ -153,6 +153,16 @@ class TestScheduledGame:
             "time": "11:00",
         }
 
+    def test_a_known_ttt_game_id_is_written(self):
+        info = ScheduledGame(
+            source="X", team_name="A", opponent="B", ttt_game_id="g-42"
+        ).to_match_info()
+        assert info["ttt_game_id"] == "g-42"
+
+    def test_no_ttt_game_id_writes_none(self):
+        info = ScheduledGame(source="X", team_name="A", opponent="B").to_match_info()
+        assert "ttt_game_id" not in info
+
     def test_no_kickoff_writes_no_date_or_time(self):
         info = ScheduledGame(source="X", team_name="A", opponent="B").to_match_info()
         assert "date" not in info and "time" not in info
