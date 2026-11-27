@@ -87,6 +87,32 @@ are being lost too.
 Going beyond 2 s would need the range lifted in `router`, the same kind of patch
 as the bitrate cap. Not located. Not worth looking for until 2x is measured.
 
+### 1b. The encoder's own rate-control commands (no flash) — found 2026-11-27
+
+The debug node that carries `setroi` also carries rate control. From the help
+table in `kflow_videoenc.ko` (file offset 0x380d0 onward, read from the
+extracted module):
+
+```
+setcbr   PathId Enable StaticTime ByteRate FrameRate GOP InitIQp MinIQp MaxIQp
+         InitPQp MinPQp MaxPQp IPWeight            => setcbr 0 1 4 524288 30 15 26 10 40 26 10 40 0
+setvbr   ...same, plus ChangePos
+setevbr  ...plus KeyPPeriod, KeyPWeight, MotionAQStrength and four more
+setfixqp PathId Enable IFixQP PFixQP
+setaq    PathId Enable I_Str P_Str MaxAq MinAq
+```
+
+If these work, one shell session answers three things with no flash and no
+rewrite: whether GOP can go past the API's 2 s, whether the QP floor of 25 can
+be lowered, and whether the kernel accepts a byte rate above the 20.5 Mbps the
+API refuses (which would place that ceiling in the app, not the encoder).
+
+**UNVERIFIED, all of it.** Nobody has written one of these commands on this
+camera. Two specific risks: `setroi` on the same node has an argument-width bug
+(`ENCODER_ROI_QP.md` section 4) and these may share it; and `device` may
+re-apply its own settings over ours. Read the kernel's echo in `dmesg` and
+`/proc/hdal/venc/info` after each write, exactly as for `setroi`.
+
 ### 2. ROI window on the far band (flash)
 
 `ENCODER_ROI_QP.md`. One rectangle with a QP delta. Because the far band is
@@ -130,6 +156,9 @@ In order. Stop at the first failure.
    60 s. `stream_quality.py compare`. Expect the keyframe gap to go 20 to 40,
    keyframe share to drop, and far-region detail on the last frame of the cycle
    to rise.
+3b. **Rate-control commands**, no flash (lever 1b). Start with `setcbr` at the
+   values `venc/info` already shows, changing only GOP. Then MinPQp. Then
+   ByteRate. One change at a time, reading `venc/info` back after each.
 4. **ROI negative control on 4921** (`ENCODER_ROI_QP.md` section 7.1): the stock
    `setroi` must read back `QP = 0`.
 5. **Flash 4922.** Confirm `build.txt` names 4922, the stream still encodes, the
@@ -145,6 +174,36 @@ In order. Stop at the first failure.
 8. Record results in `training/docs/EXPERIMENTS.md`.
 
 A full-game soak (section 7.6) needs a game.
+
+## Would replacing the firmware remove these limits? (assessed 2026-11-27)
+
+Assessed offline by reading the docs and the extracted firmware; spot-checked
+against both. Short version: the limits that are policy live in `device` and
+`router`, and the limits that are not policy live in binary kernel modules or
+the sensor, which any replacement would have to keep.
+
+- **The SoC is NT98539 (Novatek platform NS02302).** `1_fdt.bin` carries
+  `novatek,ns02302`, U-Boot prints `CHIP[NS02302]`, the loader names
+  `FW98539A.BIN`, and `device` was built from `cbb/lib/NT98539/`. The "NT9856x"
+  in `FIRMWARE_PATCH_NOTES.md` and "NT98530" in `ISF_PARAM_MAP.md` are wrong for
+  this unit.
+- **Open firmware / own kernel: no path.** OpenIPC's Novatek work lists this
+  platform as unsupported ("NS02201/02301/02302/02401 and NA51102 have no
+  loader, board trees or QEMU machine to work from", OpenIPC/u-boot PR 99), and
+  where it does support Novatek it still runs the vendor's binary media modules.
+  It would unlock nothing on the list above.
+- **Replacing `device` with our own app: possible, large, and bounded.** It
+  would give full encoder control and a recorder that survives power cuts. It
+  would not give 30 fps at 7680x2160: `FPS_CEILING.md` puts the sensor readout
+  wall at about 26.8 fps. `APP_REPLACEMENT_DESIGN.md` understates the work in
+  three ways that later docs establish: HDAL is statically linked into `device`
+  and keeps shadow state, so it must be reimplemented rather than replayed;
+  `device` also owns the IP address (`BRICK_POSTMORTEM.md`), so a dead app is a
+  camera off the network, not "a camera that answers HTTP with no stream"; and
+  its "very low risk" first stage is what caused the 4917 outage.
+- **Before any of that, lever 1b.** If the debug node's rate-control commands
+  work, most of what an app replacement would buy for the encoder is available
+  today from a shell.
 
 ## Not known
 
