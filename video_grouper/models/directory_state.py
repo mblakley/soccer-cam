@@ -737,6 +737,9 @@ def skip_download(
     file_path: str,
     by: str,
     reason: str | None = None,
+    *,
+    require_failing: bool = False,
+    camera: str | None = None,
 ) -> SkipResult:
     """Give up on one download, because a person said so.
 
@@ -753,6 +756,12 @@ def skip_download(
         file_path: The file, by name or by its full local path.
         by: Who decided, e.g. ``"dashboard"`` or a TTT user. Required.
         reason: Optional note, kept on the file entry.
+        require_failing: Refuse a file that has not failed (status
+            ``download_failed`` or a failed retry round behind it) -- for a
+            request from elsewhere, which may only skip what this install
+            listed as stuck. The dashboard lists only such files anyway.
+        camera: When given, refuse a file recorded by another camera (a
+            remote command names the camera it was sent for).
 
     Returns:
         A ``SkipResult``; ``changed`` is False if it was already skipped.
@@ -829,6 +838,25 @@ def skip_download(
             raise SkipDownloadError(
                 f"{file_name} has status {status!r}, which cannot be skipped."
             )
+        if require_failing:
+            try:
+                attempts = int(entry.get("failed_attempts") or 0)
+            except (TypeError, ValueError):
+                attempts = 0
+            if status != "download_failed" and attempts <= 0:
+                raise SkipDownloadError(
+                    f"{file_name} has not failed; only a download that keeps "
+                    "failing can be skipped from elsewhere."
+                )
+        if camera:
+            metadata = entry.get("metadata")
+            recorded_by = (
+                metadata.get("camera_name") if isinstance(metadata, dict) else None
+            )
+            if recorded_by and recorded_by != camera:
+                raise SkipDownloadError(
+                    f"{file_name} was recorded by {recorded_by}, not {camera}."
+                )
 
         now = datetime.now().isoformat()
         entry["status"] = SKIPPED_FILE_STATUS

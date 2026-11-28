@@ -4,8 +4,10 @@ Each tick (every ``link.heartbeat_interval`` seconds): ``register`` this
 install's capabilities when it offers to take processing jobs (the link makes
 that idempotent), ``heartbeat``, remember which cameras the reply says this
 install should poll, then run each command the reply carries -- acknowledge,
-execute, report the result. The camera pollers ask :meth:`is_camera_enabled`
-before every poll.
+execute, report the result. Last, report the downloads that keep failing here
+(``directory_state.list_stuck_downloads``) when that list changed, and hourly
+regardless, so a person elsewhere sees a current list and can skip one. The
+camera pollers ask :meth:`is_camera_enabled` before every poll.
 
 Talks only to :class:`IDeviceLink`; with TTT off that is the Null link and
 every tick is a no-op that leaves every camera enabled.
@@ -26,7 +28,9 @@ from ..integrations.device_link import (
     DeviceHealth,
     HeartbeatReply,
     IDeviceLink,
+    StuckDownload,
 )
+from ..models.directory_state import list_stuck_downloads
 from ..utils.config import Config
 from .base_polling_processor import PollingProcessor
 
@@ -77,6 +81,14 @@ class DeviceLinkProcessor(PollingProcessor):
         self._profiles_checked_at: float | None = None
         # camera name -> enabled here. Empty: nothing heard yet, all enabled.
         self._camera_enabled: dict[str, bool] = {}
+        # The camera ids the last successful registration returned.
+        self._registered_ids: dict[str, str] = {}
+        # The stuck-download list the link last took (None: none yet, so the
+        # next tick sends one) and time.monotonic() when it took it.
+        self._stuck_sent: list[StuckDownload] | None = None
+        self._stuck_sent_at = 0.0
+        # After a report the link could not deliver, wait this long (monotonic).
+        self._stuck_retry_at = 0.0
 
     def _health(self) -> DeviceHealth:
         """This install's health for the heartbeat (blocking: psutil samples)."""
@@ -114,6 +126,11 @@ class DeviceLinkProcessor(PollingProcessor):
                 ids = await self.link.register_cameras(described)
         finally:
             # Every attempt counts, so a failure isn't retried every tick.
+            if ids and ids != self._registered_ids:
+                # A stuck download sent before its camera had an id was left
+                # out of the report: send the list again now it has one.
+                self._registered_ids = dict(ids)
+                self._stuck_sent = None
             if ids:
                 self._camera_retry = self.CAMERA_REGISTRATION_RETRY
                 self._next_camera_registration = now + self.CAMERA_REGISTRATION_INTERVAL
@@ -161,6 +178,35 @@ class DeviceLinkProcessor(PollingProcessor):
         )
         logger.info("DEVICE_LINK: stitch profile from the link: %s", outcome)
 
+    # An unchanged stuck-download list is sent again this often, so the other
+    # end can tell the report is current rather than an install gone quiet.
+    STUCK_DOWNLOADS_REFRESH = 3600
+    # A report the link could not deliver is tried again after this long, not
+    # every tick (an older TTT without the route answers 404 for good).
+    STUCK_DOWNLOADS_RETRY = 300
+
+    async def _maybe_report_stuck_downloads(self) -> None:
+        # The account gate camera registration uses: with nobody signed in to
+        # report to (TTT off, signed out), the list isn't even read.
+        if not self.link.registers_cameras:
+            self._stuck_sent = None  # signing in again sends it at once
+            return
+        now = time.monotonic()
+        if now < self._stuck_retry_at:
+            return
+        entries = await asyncio.to_thread(list_stuck_downloads, self.storage_path)
+        stuck = [_stuck_download(e) for e in entries]
+        if (
+            stuck == self._stuck_sent
+            and now - self._stuck_sent_at < self.STUCK_DOWNLOADS_REFRESH
+        ):
+            return
+        if await self.link.report_stuck_downloads(stuck):
+            self._stuck_sent, self._stuck_sent_at = stuck, now
+            self._stuck_retry_at = 0.0
+        else:
+            self._stuck_retry_at = now + self.STUCK_DOWNLOADS_RETRY
+
     def is_camera_enabled(self, camera_name: str) -> bool:
         """False only when the link said this camera is not polled here."""
         return self._camera_enabled.get(camera_name, True)
@@ -169,17 +215,18 @@ class DeviceLinkProcessor(PollingProcessor):
         """One tick. Called again after ``poll_interval`` whatever happens.
 
         Each step runs on its own: one that raises is logged and the rest
-        (above all the heartbeat and its commands) still run."""
+        (above all the heartbeat and its commands) still run. The stuck
+        downloads go last, so a skip command run this tick is in the report."""
         if self.capabilities is not None:
             await self._step("register", self.link.register(self.capabilities))
         await self._step("camera registration", self._maybe_register_cameras())
         await self._step("stitch profile pull", self._maybe_pull_stitch_profile())
         reply = await self._step("heartbeat", self._heartbeat())
-        if reply is None:
-            return
-        self._apply_camera_state(reply)
-        for command in reply.commands:
-            await self._step(f"command {command.id}", self._run_command(command))
+        if reply is not None:
+            self._apply_camera_state(reply)
+            for command in reply.commands:
+                await self._step(f"command {command.id}", self._run_command(command))
+        await self._step("stuck downloads report", self._maybe_report_stuck_downloads())
 
     async def _heartbeat(self) -> HeartbeatReply:
         return await self.link.heartbeat(await asyncio.to_thread(self._health))
@@ -209,6 +256,23 @@ class DeviceLinkProcessor(PollingProcessor):
         else:
             result = {"success": False, "message": "Command executor not available"}
         await self.link.complete_command(command.id, result)
+
+
+def _text(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _stuck_download(entry: dict[str, Any]) -> StuckDownload:
+    """One ``list_stuck_downloads`` entry as the port's StuckDownload."""
+    return StuckDownload(
+        camera=_text(entry.get("camera")) or None,
+        group=str(entry.get("group") or ""),
+        file_name=str(entry.get("file_name") or ""),
+        recorded_at=_text(entry.get("start_time")),
+        failed_attempts=int(entry.get("failed_attempts") or 0),
+        error=_text(entry.get("last_error")),
+        last_failed_at=_text(entry.get("last_failed_at")),
+    )
 
 
 async def _describe(camera: Any) -> DeviceCamera | None:

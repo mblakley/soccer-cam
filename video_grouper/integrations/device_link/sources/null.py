@@ -7,7 +7,13 @@ from typing import Any
 
 from video_grouper.integrations.registry import NULL_PRIORITY, provides
 
-from ..base import DeviceCamera, DeviceHealth, HeartbeatReply, IDeviceLink
+from ..base import (
+    DeviceCamera,
+    DeviceHealth,
+    HeartbeatReply,
+    IDeviceLink,
+    StuckDownload,
+)
 
 
 @provides(IDeviceLink)
@@ -40,3 +46,6 @@ class NullDeviceLink(IDeviceLink):
 
     async def complete_command(self, command_id: str, result: dict[str, Any]) -> None:
         return None
+
+    async def report_stuck_downloads(self, downloads: list[StuckDownload]) -> bool:
+        return False  # nobody to tell

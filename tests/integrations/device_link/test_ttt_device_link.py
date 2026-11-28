@@ -475,3 +475,192 @@ def test_registers_cameras_only_with_a_machine_id_and_a_session():
     no_machine, client = _link(machine_id=None)
     client.has_session.return_value = True
     assert no_machine.registers_cameras is False
+
+
+# ---------------------------------------------------------------------------
+# report_stuck_downloads -> report_stuck_downloads(machine_id, rows)
+# ---------------------------------------------------------------------------
+
+
+def _stuck(camera="front", **kw):
+    from video_grouper.integrations.device_link import StuckDownload
+
+    fields = {
+        "camera": camera,
+        "group": "2026.07.01-10.00.00",
+        "file_name": "a.mp4",
+        "recorded_at": "2026-07-01T10:00:00",
+        "failed_attempts": 2,
+        "error": "timed out",
+        "last_failed_at": "2026-07-01T12:00:00",
+    }
+    fields.update(kw)
+    return StuckDownload(**fields)
+
+
+def _stuck_link(client=None, *, machine_id="me", ids=None):
+    from video_grouper.integrations.ttt_cameras import TTTCameraIds
+
+    cameras = TTTCameraIds(None)
+    cameras.update(ids if ids is not None else {"front": "c-1", "back": "c-2"})
+    client = client or _client()
+    link = TTTDeviceLink(client, _cfg(), machine_id=machine_id, camera_ids=cameras)
+    return link, client
+
+
+@pytest.mark.asyncio
+async def test_stuck_downloads_go_out_under_ttt_camera_ids():
+    link, client = _stuck_link()
+    assert await link.report_stuck_downloads([_stuck(), _stuck("back", error=None)])
+    client.report_stuck_downloads.assert_called_once_with(
+        "me",
+        [
+            {
+                "camera_id": "c-1",
+                "group_dir": "2026.07.01-10.00.00",
+                "file_name": "a.mp4",
+                "recorded_at": "2026-07-01T10:00:00",
+                "failed_attempts": 2,
+                "error_message": "timed out",
+                "last_failed_at": "2026-07-01T12:00:00",
+            },
+            {
+                "camera_id": "c-2",
+                "group_dir": "2026.07.01-10.00.00",
+                "file_name": "a.mp4",
+                "recorded_at": "2026-07-01T10:00:00",
+                "failed_attempts": 2,
+                "error_message": None,
+                "last_failed_at": "2026-07-01T12:00:00",
+            },
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_stuck_downloads_without_a_ttt_camera_are_left_out():
+    link, client = _stuck_link()
+    await link.report_stuck_downloads(
+        [_stuck("unregistered"), _stuck(None), _stuck("front")]
+    )
+    (_, rows), _ = client.report_stuck_downloads.call_args
+    assert [r["camera_id"] for r in rows] == ["c-1"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_list_is_sent_to_clear_ttts():
+    link, client = _stuck_link()
+    assert await link.report_stuck_downloads([]) is True
+    client.report_stuck_downloads.assert_called_once_with("me", [])
+
+
+@pytest.mark.asyncio
+async def test_stuck_download_fields_fit_ttts_limits():
+    link, client = _stuck_link()
+    await link.report_stuck_downloads(
+        [
+            _stuck(
+                error="x" * 900,
+                recorded_at="not a time",
+                last_failed_at=None,
+                failed_attempts=-1,
+            ),
+            _stuck(file_name="f" * 256),  # longer than TTT takes: left out
+            _stuck(group=""),
+        ]
+    )
+    ((_, rows), _) = client.report_stuck_downloads.call_args
+    (row,) = rows
+    assert row["error_message"] == "x" * 500
+    assert row["recorded_at"] is None and row["last_failed_at"] is None
+    assert row["failed_attempts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_at_most_500_stuck_downloads_are_sent():
+    link, client = _stuck_link()
+    await link.report_stuck_downloads(
+        [_stuck(file_name=f"{i:04}.mp4") for i in range(600)]
+    )
+    ((_, rows), _) = client.report_stuck_downloads.call_args
+    assert len(rows) == 500
+    assert rows[0]["file_name"] == "0000.mp4"  # oldest first, as listed
+
+
+@pytest.mark.asyncio
+async def test_stuck_downloads_need_a_session_and_a_machine_id():
+    signed_out, client = _stuck_link(_client(signed_in=False))
+    assert await signed_out.report_stuck_downloads([_stuck()]) is False
+    client.report_stuck_downloads.assert_not_called()
+    no_machine, client = _stuck_link(machine_id=None)
+    assert await no_machine.report_stuck_downloads([_stuck()]) is False
+    client.report_stuck_downloads.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_stuck_report_is_swallowed_and_logged_once(caplog):
+    client = _client()
+    client.report_stuck_downloads.side_effect = RuntimeError("404 machine")
+    link, _ = _stuck_link(client)
+    with caplog.at_level(logging.WARNING):
+        assert await link.report_stuck_downloads([_stuck()]) is False
+        assert await link.report_stuck_downloads([_stuck()]) is False
+    warnings = [r for r in caplog.records if "stuck downloads" in r.getMessage()]
+    assert len(warnings) == 1 and warnings[0].levelno == logging.WARNING
+    assert "404 machine" in warnings[0].getMessage()
+
+    client.report_stuck_downloads.side_effect = None
+    caplog.clear()
+    assert await link.report_stuck_downloads([_stuck()]) is True
+    client.report_stuck_downloads.side_effect = RuntimeError("down again")
+    with caplog.at_level(logging.WARNING):
+        await link.report_stuck_downloads([_stuck()])
+    assert "down again" in caplog.text  # a new failure after a success is news
+
+
+# ---------------------------------------------------------------------------
+# Commands addressed to an install (machine_id): several installs can share
+# one camera, so another install's command is left pending for it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_commands_for_another_install_are_neither_returned_nor_acknowledged():
+    client = _client()
+    client.get_pending_commands.return_value = [
+        {
+            "id": "theirs",
+            "command_type": "skip_download",
+            "parameters": {"machine_id": "other-machine", "group_dir": "g"},
+        },
+        {
+            "id": "mine",
+            "command_type": "skip_download",
+            "parameters": {"machine_id": "ME-UUID", "group_dir": "g"},
+        },
+        {"id": "anyone", "command_type": "restart", "parameters": {}},
+    ]
+    link, _ = _link(client, machine_id="me-uuid")
+    reply = await link.heartbeat()
+    assert [c.id for c in reply.commands] == ["mine", "anyone"]
+    client.acknowledge_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_without_a_machine_id_addressed_commands_are_not_ours():
+    client = _client()
+    client.get_pending_commands.return_value = [
+        {"id": "addressed", "command_type": "x", "parameters": {"machine_id": "m"}},
+        {"id": "plain", "command_type": "x", "parameters": None},
+    ]
+    link, _ = _link(client, machine_id=None)
+    assert [c.id for c in (await link.heartbeat()).commands] == ["plain"]
+
+
+@pytest.mark.asyncio
+async def test_an_unnamed_stuck_download_goes_under_the_only_camera():
+    """Old state.json entries carry no camera name; with one camera it can only be that one."""
+    link, client = _stuck_link(ids={"front": "c-1"})
+    await link.report_stuck_downloads([_stuck(None)])
+    (_, rows), _ = client.report_stuck_downloads.call_args
+    assert [r["camera_id"] for r in rows] == ["c-1"]

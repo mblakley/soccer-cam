@@ -619,6 +619,48 @@ class TestTTTApiClient(unittest.TestCase):
         result = self.client.redeem_support_grant("test-code-abc")
         self.assertEqual(result["grant_id"], "g-1")
 
+    # ------------------------------------------------------------------
+    # Device link: stuck downloads
+    # ------------------------------------------------------------------
+
+    def test_report_stuck_downloads_replaces_the_machines_list(self):
+        rows = [
+            {
+                "camera_id": "c-1",
+                "group_dir": "2026.07.01-10.00.00",
+                "file_name": "a.mp4",
+                "recorded_at": "2026-07-01T10:00:00",
+                "failed_attempts": 2,
+                "error_message": "timed out",
+                "last_failed_at": None,
+            }
+        ]
+        self.client._http.request = Mock(
+            return_value=_mock_response(200, {"machine_id": "m-1", "count": 1})
+        )
+        result = self.client.report_stuck_downloads("m-1", rows)
+        self.assertEqual(result, {"machine_id": "m-1", "count": 1})
+        call_args = self.client._http.request.call_args
+        self.assertEqual(
+            call_args[0],
+            (
+                "PUT",
+                "https://api.test.com/api/internal/device-link/stuck-downloads",
+            ),
+        )
+        self.assertEqual(call_args[1]["json"], {"machine_id": "m-1", "downloads": rows})
+        self.assertEqual(
+            call_args[1]["headers"]["Authorization"], "Bearer test-jwt-token"
+        )
+
+    def test_report_stuck_downloads_raises_on_404(self):
+        self.client._http.request = Mock(
+            return_value=_mock_response(404, text="machine not registered")
+        )
+        with self.assertRaises(TTTApiError) as ctx:
+            self.client.report_stuck_downloads("m-1", [])
+        self.assertEqual(ctx.exception.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,7 @@ from .base import (
     DeviceHealth,
     HeartbeatReply,
     IDeviceLink,
+    StuckDownload,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "DeviceHealth",
     "HeartbeatReply",
     "IDeviceLink",
+    "StuckDownload",
 ]

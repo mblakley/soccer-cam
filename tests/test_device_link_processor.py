@@ -241,7 +241,10 @@ async def test_a_raising_heartbeat_is_logged_and_the_next_tick_runs(tmp_path, ca
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("verb", ["register", "register_cameras", "stitch_profiles"])
+@pytest.mark.parametrize(
+    "verb",
+    ["register", "register_cameras", "stitch_profiles", "report_stuck_downloads"],
+)
 async def test_one_raising_step_does_not_skip_the_heartbeat_or_commands(
     tmp_path, verb, caplog
 ):
@@ -450,3 +453,225 @@ async def test_different_profiles_for_two_cameras_install_neither(tmp_path):
     processor.config.processing.seam_realign_profile_path = None
     await processor.discover_work()
     assert not (tmp_path / "stitch_profile.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Stuck downloads: reported when they change, hourly regardless
+# ---------------------------------------------------------------------------
+
+_GROUP = "2026.07.01-10.00.00"
+
+
+def _stuck_group(storage, files, *, name=_GROUP):
+    """A group dir whose state.json holds ``files``: basename -> entry."""
+    import json
+    from pathlib import Path
+
+    group_dir = Path(storage) / name
+    group_dir.mkdir(parents=True, exist_ok=True)  # Path.mkdir: os.makedirs is patched
+    (group_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "status": "pending",
+                "files": {str(group_dir / n): e for n, e in files.items()},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _failing(camera="front", attempts=2, error="timed out"):
+    return {
+        "status": "download_failed",
+        "start_time": "2026-07-01T10:00:00",
+        "end_time": "2026-07-01T10:30:00",
+        "failed_attempts": attempts,
+        "error_message": error,
+        "last_failed_at": "2026-07-01T12:00:00",
+        "metadata": {"camera_name": camera},
+    }
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    import video_grouper.task_processors.device_link_processor as dlp
+
+    now = [1000.0]
+    monkeypatch.setattr(dlp.time, "monotonic", lambda: now[0])
+    return now
+
+
+@pytest.mark.asyncio
+async def test_first_tick_reports_the_stuck_downloads_in_soccer_cam_terms(tmp_path):
+    from video_grouper.integrations.device_link import StuckDownload
+
+    _stuck_group(tmp_path, {"a.mp4": _failing(), "ok.mp4": {"status": "downloaded"}})
+    link = FakeDeviceLink()
+    await _processor(tmp_path, link).discover_work()
+    assert link.stuck_reports == [
+        [
+            StuckDownload(
+                camera="front",
+                group=_GROUP,
+                file_name="a.mp4",
+                recorded_at="2026-07-01T10:00:00",
+                failed_attempts=2,
+                error="timed out",
+                last_failed_at="2026-07-01T12:00:00",
+            )
+        ]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_list_is_reported_on_the_first_tick(tmp_path):
+    """Nothing stuck still goes out once: it clears a stale list elsewhere."""
+    link = FakeDeviceLink()
+    processor = _processor(tmp_path, link)
+    await processor.discover_work()
+    await processor.discover_work()
+    assert link.stuck_reports == [[]]
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_list_is_not_re_sent_within_the_hour(tmp_path, clock):
+    _stuck_group(tmp_path, {"a.mp4": _failing()})
+    link = FakeDeviceLink()
+    processor = _processor(tmp_path, link)
+    for _ in range(119):  # just under an hour of 30 s ticks
+        await processor.discover_work()
+        clock[0] += 30
+    assert len(link.stuck_reports) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_changed_list_is_sent_at_once(tmp_path, clock):
+    _stuck_group(tmp_path, {"a.mp4": _failing(attempts=2)})
+    link = FakeDeviceLink()
+    processor = _processor(tmp_path, link)
+    await processor.discover_work()
+    clock[0] += 30
+    _stuck_group(tmp_path, {"a.mp4": _failing(attempts=3)})  # another round failed
+    await processor.discover_work()
+    clock[0] += 30
+    _stuck_group(tmp_path, {"a.mp4": _failing(attempts=3, camera=None)})
+    _stuck_group(tmp_path, {"b.mp4": _failing()}, name="2026.07.02-10.00.00")
+    await processor.discover_work()
+    assert [
+        [(s.file_name, s.failed_attempts) for s in r] for r in link.stuck_reports
+    ] == [
+        [("a.mp4", 2)],
+        [("a.mp4", 3)],
+        [("a.mp4", 3), ("b.mp4", 2)],
+    ]
+    assert link.stuck_reports[-1][0].camera is None
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_list_is_re_sent_hourly(tmp_path, clock):
+    """So the other end can tell the report is fresh."""
+    _stuck_group(tmp_path, {"a.mp4": _failing()})
+    link = FakeDeviceLink()
+    processor = _processor(tmp_path, link)
+    await processor.discover_work()
+    clock[0] += 3599
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 1
+    clock[0] += 1
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 2
+    assert link.stuck_reports[0] == link.stuck_reports[1]
+
+
+@pytest.mark.asyncio
+async def test_a_report_the_link_could_not_deliver_is_retried_after_a_wait(
+    tmp_path, clock
+):
+    """Not every tick: an older TTT without the route refuses it for good."""
+    link = FakeDeviceLink()
+    link.accepts_stuck_reports = False
+    processor = _processor(tmp_path, link)
+    await processor.discover_work()
+    clock[0] += processor.STUCK_DOWNLOADS_RETRY - 1
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 1  # refused once, not re-sent yet
+    link.accepts_stuck_reports = True
+    clock[0] += 1
+    await processor.discover_work()
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 2  # retried after the wait, delivered once
+
+
+@pytest.mark.asyncio
+async def test_new_camera_ids_resend_the_list(tmp_path, clock):
+    """A stuck file whose camera had no id yet went out without it; once the
+    camera registers, the same list is worth sending again."""
+    _stuck_group(tmp_path, {"a.mp4": _failing()})
+    link = FakeDeviceLink()  # registration gets no ids back
+    processor = _processor(tmp_path, link, cameras=lambda: [_Camera("front")])
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 1
+    link.camera_ids = {"front": "c-1"}
+    clock[0] += 300  # the registration retry
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 2
+    clock[0] += 3600  # hourly re-registration, same ids: just the hourly resend
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 3
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_reported_when_the_link_has_no_account(tmp_path):
+    from video_grouper.integrations.device_link.sources.null import NullDeviceLink
+
+    _stuck_group(tmp_path, {"a.mp4": _failing()})
+    off = FakeDeviceLink(registers_cameras=False)
+    await _processor(tmp_path, off).discover_work()
+    assert off.stuck_reports == []
+
+    null = NullDeviceLink()
+    null.report_stuck_downloads = AsyncMock()  # type: ignore[method-assign]
+    await _processor(tmp_path, null).discover_work()
+    null.report_stuck_downloads.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_signing_back_in_reports_again_at_once(tmp_path, clock):
+    _stuck_group(tmp_path, {"a.mp4": _failing()})
+    link = FakeDeviceLink()
+    processor = _processor(tmp_path, link)
+    await processor.discover_work()
+    link.can_register_cameras = False  # signed out
+    clock[0] += 30
+    await processor.discover_work()
+    link.can_register_cameras = True
+    clock[0] += 30
+    await processor.discover_work()
+    assert len(link.stuck_reports) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_raising_stuck_list_does_not_stop_the_heartbeat(
+    tmp_path, monkeypatch, caplog
+):
+    import video_grouper.task_processors.device_link_processor as dlp
+
+    def boom(storage_path):
+        raise OSError("storage gone")
+
+    monkeypatch.setattr(dlp, "list_stuck_downloads", boom)
+    link = FakeDeviceLink.replying(commands=[DeviceCommand("k-1", "restart")])
+    processor = _processor(tmp_path, link, command_executor=_executor())
+    with caplog.at_level(logging.ERROR):
+        await processor.discover_work()
+    assert link.heartbeats == 1
+    assert [c[:2] for c in link.command_calls] == [("ack", "k-1"), ("complete", "k-1")]
+    assert link.stuck_reports == []
+    assert "stuck downloads report raised" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stuck_downloads_are_reported_even_when_the_heartbeat_raises(tmp_path):
+    link = FakeDeviceLink(errors={"heartbeat": RuntimeError("bug")})
+    await _processor(tmp_path, link).discover_work()
+    assert link.stuck_reports == [[]]

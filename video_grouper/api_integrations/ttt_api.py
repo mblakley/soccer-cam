@@ -1155,6 +1155,22 @@ class TTTApiClient:
         logger.debug("Registering device '%s' (%d cameras)", machine_name, len(cameras))
         return self._request("POST", url, json=body)
 
+    def report_stuck_downloads(
+        self, machine_id: str, downloads: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Replace this machine's list of downloads that keep failing.
+
+        PUT {api_base_url}/api/internal/device-link/stuck-downloads
+        ``downloads``: ``[{camera_id, group_dir, file_name, recorded_at,
+        failed_attempts, error_message, last_failed_at}]``, at most 500; ``[]``
+        clears the list. Returns ``{machine_id, count}``. 404 when the machine
+        isn't registered or a camera isn't one the caller manages.
+        """
+        url = f"{self.api_base_url}/api/internal/device-link/stuck-downloads"
+        body = {"machine_id": machine_id, "downloads": downloads}
+        logger.debug("Reporting %d stuck download(s)", len(downloads))
+        return self._request("PUT", url, json=body)
+
     def register_service(self, machine_name: str, capabilities: dict) -> Any:
         """Register this service instance with TTT.
 

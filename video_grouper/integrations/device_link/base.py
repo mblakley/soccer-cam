@@ -5,7 +5,8 @@ fixed cadence (``heartbeat``), and runs the commands the reply carries,
 acknowledging each before it runs and reporting its result after
 (``acknowledge_command`` / ``complete_command``). The reply also says which of
 this install's cameras it should be polling: a camera can be moved to another
-computer remotely.
+computer remotely. The app also reports the downloads that keep failing here
+(``report_stuck_downloads``), so a person elsewhere can give up on one.
 
 Best-effort throughout: no method raises, and with nobody on the other end the
 reply says nothing (every camera stays enabled, no commands).
@@ -67,6 +68,21 @@ class DeviceHealth:
     queue_depth: int | None = None
 
 
+@dataclass(frozen=True)
+class StuckDownload:
+    """A download that keeps failing and holds up its camera's watermark, as
+    ``directory_state.list_stuck_downloads`` finds it. A person elsewhere can
+    give up on it with a ``skip_download`` command."""
+
+    camera: str | None  # this install's camera name (None: not recorded)
+    group: str  # the recording group directory's name
+    file_name: str
+    recorded_at: str | None = None  # the recording's start, local ISO time
+    failed_attempts: int = 0
+    error: str | None = None  # the last failure
+    last_failed_at: str | None = None  # local ISO time
+
+
 class IDeviceLink(Provider, ABC):
     # Seconds between heartbeats; the link decides how often it wants to hear.
     heartbeat_interval: int = 30
@@ -104,3 +120,9 @@ class IDeviceLink(Provider, ABC):
     @abstractmethod
     async def complete_command(self, command_id: str, result: dict[str, Any]) -> None:
         """Report a command's result (``{"success": bool, "message": str}``)."""
+
+    @abstractmethod
+    async def report_stuck_downloads(self, downloads: list[StuckDownload]) -> bool:
+        """Replace the other end's list of this install's stuck downloads with
+        ``downloads`` (``[]`` clears it). True once it has them; False when it
+        could not take them right now (the caller sends them again)."""

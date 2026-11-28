@@ -56,6 +56,11 @@ KNOWN_MISSING: dict[tuple[str, str], str] = {
         "stacked on #175; remove this entry when the vendored subset is refreshed "
         "after it merges"
     ),
+    ("PUT", "/api/internal/device-link/stuck-downloads"): (
+        "skipping a stuck download from TTT (decided 2026-11-28): the route is in "
+        "a TTT PR stacked on #176; remove this entry when the vendored subset is "
+        "refreshed after it merges"
+    ),
 }
 
 # (METHOD, normalized path, body key) -> why TTT does not accept the key.
