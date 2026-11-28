@@ -163,7 +163,7 @@ video_grouper/
      b. Log error
 - [ ] `get_item_key(item)` → `f"clip_extraction:{item.clip_id}"`
 
-### 5. Wire into VideoGrouperApp
+### 5. Wire into SoccerCamApp
 
 - [ ] Import ClipDiscoveryProcessor and ClipProcessor in `video_grouper_app.py`
 - [ ] Instantiate `MomentApiClient` and `StorageUploader` in `__init__()`

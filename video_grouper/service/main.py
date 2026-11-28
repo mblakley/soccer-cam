@@ -68,7 +68,7 @@ class SoccerCamService(win32serviceutil.ServiceFramework):
         from video_grouper.utils.config import load_config
         from video_grouper.utils.locking import FileLock
         from video_grouper.utils.logger import setup_logging
-        from video_grouper.video_grouper_app import VideoGrouperApp
+        from video_grouper.video_grouper_app import SoccerCamApp
 
         setup_logging(level="INFO", app_name="video_grouper")
         logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ class SoccerCamService(win32serviceutil.ServiceFramework):
         os.chdir(storage_dir)
         logger.info(f"Set working directory to {storage_dir}")
 
-        app = VideoGrouperApp(config, config_path=config_path)
+        app = SoccerCamApp(config, config_path=config_path)
 
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)

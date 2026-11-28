@@ -10,7 +10,7 @@ from video_grouper.utils.config_migrations import migrate_config_file
 from video_grouper.utils.locking import FileLock
 from video_grouper.utils.logger import get_logger, setup_logging
 from video_grouper.utils.paths import get_shared_data_path
-from video_grouper.video_grouper_app import VideoGrouperApp
+from video_grouper.video_grouper_app import SoccerCamApp
 
 # Configure basic logging first, will be updated with config later
 setup_logging(level="INFO", app_name="video_grouper")
@@ -86,7 +86,7 @@ async def main():
         logger.info("Using default config file from shared_data directory")
 
     # Resolve the default path BEFORE load so we can pass the same Path
-    # to VideoGrouperApp (used by the auth server's /config editor).
+    # to SoccerCamApp (used by the auth server's /config editor).
     if config_path is None:
         from video_grouper.utils.paths import get_shared_data_path
 
@@ -97,7 +97,7 @@ async def main():
         logger.error("Failed to load configuration. Exiting.")
         return
 
-    app = VideoGrouperApp(config, config_path=config_path)
+    app = SoccerCamApp(config, config_path=config_path)
 
     try:
         await app.run()

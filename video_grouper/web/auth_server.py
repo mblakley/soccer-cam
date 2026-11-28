@@ -1128,7 +1128,7 @@ def create_app(
 
     # Auto-upgrade API. Only mounted when the orchestrator passes a
     # processor reference -- tests and standalone runs (no
-    # VideoGrouperApp) skip it.
+    # SoccerCamApp) skip it.
     if update_processor is not None:
         from video_grouper.web.update_api import build_router as _build_update
 

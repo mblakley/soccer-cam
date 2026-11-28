@@ -27,15 +27,15 @@ from video_grouper.version import get_version
 logger = get_logger(__name__)
 
 
-class VideoGrouperApp:
+class SoccerCamApp:
     """
-    Refactored VideoGrouperApp that orchestrates task processors.
+    Refactored SoccerCamApp that orchestrates task processors.
     Each task processor is self-contained and manages its own queue and state.
     """
 
     def __init__(self, config: Config, camera=None, config_path: Path | None = None):
         """
-        Initialize the VideoGrouperApp with task processors.
+        Initialize the SoccerCamApp with task processors.
 
         Args:
             config: Configuration object
@@ -745,7 +745,7 @@ class VideoGrouperApp:
         # Register all task types with the task registry
         register_service_tasks()
 
-        logger.info("VideoGrouperApp initialized with task processors")
+        logger.info("SoccerCamApp initialized with task processors")
 
     def _validate_storage_path(self):
         """Validate that the storage path is usable.
@@ -827,7 +827,7 @@ class VideoGrouperApp:
 
     async def initialize(self):
         """Initialize the application by setting up storage and processors."""
-        logger.info("Initializing VideoGrouperApp")
+        logger.info("Initializing SoccerCamApp")
         os.makedirs(self.storage_path, exist_ok=True)
 
         # Initialize all processors
@@ -837,11 +837,11 @@ class VideoGrouperApp:
         # Device link heartbeat (best-effort, never blocks startup)
         await self.device_link_processor.start()
 
-        logger.info("VideoGrouperApp initialization complete")
+        logger.info("SoccerCamApp initialization complete")
 
     async def run(self):
         """Run the application."""
-        logger.info("Running VideoGrouperApp")
+        logger.info("Running SoccerCamApp")
         await self.initialize()
 
         # Start NTFY response service when NTFY is enabled
@@ -850,7 +850,7 @@ class VideoGrouperApp:
             try:
                 ntfy_response_service = create_ntfy_response_service(self.config.ntfy)
                 await ntfy_response_service.start()
-                logger.info("NTFY response service started in VideoGrouperApp")
+                logger.info("NTFY response service started in SoccerCamApp")
             except Exception as e:
                 logger.error(f"Failed to start NTFY response service: {e}")
         else:
@@ -1269,7 +1269,7 @@ class VideoGrouperApp:
 
     async def shutdown(self):
         """Shut down the application."""
-        logger.info("Shutting down VideoGrouperApp")
+        logger.info("Shutting down SoccerCamApp")
 
         # Signal shutdown to wake up the run() method if it's waiting
         self._shutdown_event.set()
@@ -1295,7 +1295,7 @@ class VideoGrouperApp:
 
         close_loggers()
 
-        logger.info("VideoGrouperApp shutdown complete")
+        logger.info("SoccerCamApp shutdown complete")
 
     # Convenience methods for external access to processors
 

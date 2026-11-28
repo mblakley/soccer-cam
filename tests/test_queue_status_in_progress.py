@@ -9,7 +9,7 @@ the legacy log line had no way to express that. The fix:
 
   - :meth:`BaseQueueProcessor.get_in_progress_summary` reports the
     currently-processing item (or ``None``).
-  - :meth:`VideoGrouperApp.get_queue_status_summary` returns
+  - :meth:`SoccerCamApp.get_queue_status_summary` returns
     ``{queued: int, in_progress: str | None}`` per processor.
   - :meth:`_log_queue_status` uses the richer summary.
 
@@ -99,7 +99,7 @@ class TestGetInProgressSummary:
 
 
 class TestQueueStatusSummary:
-    """``VideoGrouperApp.get_queue_status_summary`` aggregates per-
+    """``SoccerCamApp.get_queue_status_summary`` aggregates per-
     processor ``{queued, in_progress}`` for the log line."""
 
     def _make_app(
@@ -114,12 +114,12 @@ class TestQueueStatusSummary:
         ntfy_qsize=0,
         ntfy_busy=None,
     ):
-        """Build a VideoGrouperApp-shaped object via __new__ + attribute
+        """Build a SoccerCamApp-shaped object via __new__ + attribute
         injection; the real __init__ has too many dependencies to drive
         in a unit test."""
-        from video_grouper.video_grouper_app import VideoGrouperApp
+        from video_grouper.video_grouper_app import SoccerCamApp
 
-        app = VideoGrouperApp.__new__(VideoGrouperApp)
+        app = SoccerCamApp.__new__(SoccerCamApp)
 
         def _mock_processor(qsize, busy):
             proc = MagicMock()
@@ -177,9 +177,9 @@ class TestQueueStatusSummary:
         assert "ntfy" not in s
 
     def test_download_in_progress_aggregates_across_cameras(self):
-        from video_grouper.video_grouper_app import VideoGrouperApp
+        from video_grouper.video_grouper_app import SoccerCamApp
 
-        app = VideoGrouperApp.__new__(VideoGrouperApp)
+        app = SoccerCamApp.__new__(SoccerCamApp)
 
         def _proc(qsize, busy):
             p = MagicMock()
@@ -213,9 +213,9 @@ class TestLogQueueStatusFormat:
     def test_log_line_contains_in_progress(self, caplog):
         import logging
 
-        from video_grouper.video_grouper_app import VideoGrouperApp
+        from video_grouper.video_grouper_app import SoccerCamApp
 
-        app = VideoGrouperApp.__new__(VideoGrouperApp)
+        app = SoccerCamApp.__new__(SoccerCamApp)
 
         def _proc(qsize, busy):
             p = MagicMock()
@@ -249,9 +249,9 @@ class TestGetQueueSizesBackwardCompat:
     StopService-deferral check) filter on ``v >= 0`` / ``v > 0``."""
 
     def test_returns_ints(self):
-        from video_grouper.video_grouper_app import VideoGrouperApp
+        from video_grouper.video_grouper_app import SoccerCamApp
 
-        app = VideoGrouperApp.__new__(VideoGrouperApp)
+        app = SoccerCamApp.__new__(SoccerCamApp)
 
         def _proc(qsize):
             p = MagicMock()
