@@ -718,13 +718,14 @@ class ReolinkCamera(Camera):
                 )
                 if data is not None and data[0].get("code") == 0:
                     info = data[0]["value"]["DevInfo"]
+                    mac = info.get("mac", "") or await self._local_link_mac(client)
                     return DeviceInfo(
                         device_name=info.get("name", ""),
                         device_type=info.get("type", ""),
                         firmware_version=info.get("firmVer", ""),
                         serial_number=info.get("serial", ""),
                         ip_address=self.device_ip,
-                        mac_address=info.get("mac", ""),
+                        mac_address=mac,
                         model=info.get("model", ""),
                         manufacturer="Reolink",
                     )
@@ -753,6 +754,23 @@ class ReolinkCamera(Camera):
                 model="",
                 manufacturer="Reolink",
             )
+
+    async def _local_link_mac(self, client) -> str:
+        """The MAC from GetLocalLink, or "" when it can't be read.
+
+        Some models (the Duo 3 PoE, read 2026-11-28) put no ``mac`` in
+        GetDevInfo; GetLocalLink carries it and a guest account can read it.
+        """
+        try:
+            data = await self._api_call(
+                client, "GetLocalLink", {}, log_name="get_device_info_mac"
+            )
+        except Exception as e:  # noqa: BLE001 -- the serial still identifies it
+            logger.debug("Could not read GetLocalLink for the MAC: %s", e)
+            return ""
+        if not data or data[0].get("code") != 0:
+            return ""
+        return str(data[0].get("value", {}).get("LocalLink", {}).get("mac") or "")
 
     @property
     def connection_events(self) -> list[tuple[datetime, str]]:

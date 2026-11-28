@@ -706,6 +706,58 @@ class TestReolinkCameraDeviceInfo:
         "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
         new_callable=AsyncMock,
     )
+    async def test_mac_comes_from_local_link_when_dev_info_has_none(self, mock_log):
+        """A Duo 3 PoE's GetDevInfo carries no ``mac`` (read on the camera,
+        2026-11-28); its MAC is in GetLocalLink. Device registration sends the
+        MAC as evidence of possession, so it must not come back empty."""
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response(
+                "GetDevInfo",
+                {"DevInfo": {"serial": "SN12345", "model": "Reolink Duo 3 PoE"}},
+            ),
+            _success_response(
+                "GetLocalLink",
+                {"LocalLink": {"type": "DHCP", "mac": "ec:71:db:00:11:22"}},
+            ),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        info = await camera.get_device_info()
+        assert info["serial_number"] == "SN12345"
+        assert info["mac_address"] == "ec:71:db:00:11:22"
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    async def test_an_unreadable_local_link_leaves_the_mac_empty(self, mock_log):
+        """The serial still identifies the camera when the MAC can't be read."""
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("GetDevInfo", {"DevInfo": {"serial": "SN12345"}}),
+            _error_response("GetLocalLink"),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        info = await camera.get_device_info()
+        assert info["serial_number"] == "SN12345"
+        assert info["mac_address"] == ""
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
     async def test_get_device_info_failure(self, mock_log):
         mock_client = AsyncMock()
         mock_client.post.side_effect = [
