@@ -54,6 +54,12 @@ GAVE_UP_FILE_STATUSES = frozenset(
     }
 )
 SETTLED_FILE_STATUSES = DOWNLOADED_FILE_STATUSES | GAVE_UP_FILE_STATUSES
+# The group status for a group whose every file a person skipped: nothing is
+# left to download, combine, trim or upload. Set by skip_download when the
+# last remaining file is skipped, and by the StateAuditor for a group already
+# in that state on disk. It is derived ("every file is skipped"), so the
+# auditor reopens the group if a file that is not skipped joins it later.
+SKIPPED_GROUP_STATUS = "skipped"
 # Group-level statuses that settle every file inside them regardless of the
 # individual file status — the group as a whole is finished with the camera.
 #
@@ -76,6 +82,7 @@ SETTLED_GROUP_STATUSES = frozenset(
         # Uploaded and moved off local disk. Its files are *supposed* to be
         # missing locally; re-fetching them would undo the archive.
         "archived",
+        SKIPPED_GROUP_STATUS,
     }
 )
 # File statuses a person may skip. Anything with bytes is refused (nothing to
@@ -94,6 +101,13 @@ MAX_SKIP_REASON_CHARS = 200
 def _is_skipped(rec: RecordingFile) -> bool:
     """A person gave up on this file (``skip_download``)."""
     return rec.status == SKIPPED_FILE_STATUS or bool(getattr(rec, "skip", False))
+
+
+def _entry_is_skipped(entry: object) -> bool:
+    """``_is_skipped`` for a raw state.json file entry."""
+    return isinstance(entry, dict) and (
+        entry.get("status") == SKIPPED_FILE_STATUS or bool(entry.get("skip"))
+    )
 
 
 def skipped_file_names(
@@ -212,6 +226,14 @@ class DirectoryState:
                     except (json.JSONDecodeError, FileNotFoundError):
                         state_data = {}
                 self._keep_skips_from_disk(state_data)
+                # Same for the group a skip settled: a copy loaded before the
+                # last skip still holds the old download-phase status.
+                if (
+                    state_data.get("status") == SKIPPED_GROUP_STATUS
+                    and self.status not in SETTLED_GROUP_STATUSES
+                    and self.all_files_skipped()
+                ):
+                    self.status = SKIPPED_GROUP_STATUS
                 state_data["status"] = self.status
                 state_data["error_message"] = self.error_message
                 state_data["files"] = {
@@ -395,6 +417,10 @@ class DirectoryState:
             and f.status == "downloaded"
             and not self.is_file_fully_downloaded(f)
         ]
+
+    def all_files_skipped(self) -> bool:
+        """The group has files and a person skipped every one of them."""
+        return bool(self.files) and all(_is_skipped(f) for f in self.files.values())
 
     def is_ready_for_combining(self) -> bool:
         """Check if all non-skipped files are downloaded and ready for combining."""
@@ -865,6 +891,11 @@ def skip_download(
         entry["skipped_by"] = who
         entry["skip_reason"] = note
         entry["last_updated"] = now
+        # That was the last file still wanted: nothing is left to combine, so
+        # settle the group instead of leaving it in the download phase forever.
+        settles_group = all(_entry_is_skipped(e) for e in files.values())
+        if settles_group:
+            state_data["status"] = SKIPPED_GROUP_STATUS
 
         temp_path = state_path + ".tmp"
         with open(temp_path, "w", encoding="utf-8") as f:
@@ -881,6 +912,13 @@ def skip_download(
         entry.get("failed_attempts") or 0,
         f"; reason: {note}" if note else "",
     )
+    if settles_group:
+        logger.warning(
+            "DOWNLOAD: every file in %s is now skipped; the group is settled as "
+            "%r and will not be combined or uploaded.",
+            group,
+            SKIPPED_GROUP_STATUS,
+        )
     return SkipResult(group, file_name, status, changed=True)
 
 

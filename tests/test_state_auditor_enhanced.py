@@ -791,6 +791,7 @@ class TestStateAuditorTerminalGroupDownloads:
         state.status = status
         state.files = {file_obj.file_path: file_obj}
         state.is_ready_for_combining.return_value = False
+        state.all_files_skipped.return_value = False
         return state
 
     @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
@@ -921,6 +922,104 @@ class TestSkippedDownloadsAreNotRequeued:
             c.args[0].file_path for c in download_processor.add_work.call_args_list
         ]
         assert queued == [str(group_dir / "flaky.mp4")]
+
+
+class TestAllSkippedGroupsSettle:
+    """A group whose every file was skipped (before skip_download settled the
+    group itself, or by a stale save) sits in the download phase forever --
+    nothing combines it. The auditor settles it as ``skipped`` and then
+    leaves it alone."""
+
+    async def _group(self, storage, files, status=None):
+        from datetime import datetime, timedelta
+
+        from video_grouper.models import DirectoryState, RecordingFile
+
+        group_dir = storage / "2026.07.01-10.00.00"
+        group_dir.mkdir()
+        dir_state = DirectoryState(str(group_dir))
+        start = datetime(2026, 7, 1, 10, 0, 0)
+        for i, (name, file_status, skip) in enumerate(files):
+            path = str(group_dir / name)
+            await dir_state.add_file(
+                path,
+                RecordingFile(
+                    start_time=start + timedelta(minutes=30 * i),
+                    end_time=start + timedelta(minutes=30 * (i + 1)),
+                    file_path=path,
+                    status=file_status,
+                    skip=skip,
+                    metadata={"path": f"/mnt/sd/{name}"},
+                ),
+            )
+        if status:
+            await dir_state.update_group_status(status)
+        return group_dir
+
+    def _auditor(self, storage, mock_config):
+        download_processor = AsyncMock()
+        video_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(storage), mock_config, download_processor, video_processor
+        )
+        auditor.cleanup_service = AsyncMock()
+        return auditor, download_processor, video_processor
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
+    async def test_all_skipped_group_on_disk_is_settled_and_not_requeued(
+        self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
+    ):
+        from video_grouper.models import DirectoryState
+        from video_grouper.models.directory_state import SKIPPED_GROUP_STATUS
+
+        mock_ntfy.return_value.initialize = AsyncMock()
+        group_dir = await self._group(
+            tmp_path,
+            [("a.dav", "skipped", True), ("b.dav", "skipped", True)],
+            status="pending",
+        )
+        auditor, downloads, video = self._auditor(tmp_path, mock_config)
+
+        await auditor._audit_directory(str(group_dir))
+        assert DirectoryState(str(group_dir)).status == SKIPPED_GROUP_STATUS
+
+        # A second pass finds it settled and queues nothing.
+        await auditor._audit_directory(str(group_dir))
+        downloads.add_work.assert_not_called()
+        video.add_work.assert_not_called()
+        assert DirectoryState(str(group_dir)).status == SKIPPED_GROUP_STATUS
+        # Nothing on disk was removed: both entries remain.
+        assert len(DirectoryState(str(group_dir)).files) == 2
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
+    async def test_a_new_unskipped_file_reopens_a_skipped_group(
+        self, mock_ntfy, mock_playmetrics, mock_teamsnap, mock_config, tmp_path
+    ):
+        """``skipped`` means "every file was skipped". If the poller later adds
+        a file to the group, that stops being true and the group goes back to
+        downloading instead of losing the new footage behind a settled status."""
+        from video_grouper.models import DirectoryState
+        from video_grouper.models.directory_state import SKIPPED_GROUP_STATUS
+
+        mock_ntfy.return_value.initialize = AsyncMock()
+        group_dir = await self._group(
+            tmp_path,
+            [("a.dav", "skipped", True), ("b.dav", "pending", False)],
+            status=SKIPPED_GROUP_STATUS,
+        )
+        auditor, downloads, _ = self._auditor(tmp_path, mock_config)
+
+        await auditor._audit_directory(str(group_dir))
+
+        assert DirectoryState(str(group_dir)).status == "pending"
+        queued = [c.args[0].file_path for c in downloads.add_work.call_args_list]
+        assert queued == [str(group_dir / "b.dav")]
 
 
 if __name__ == "__main__":
