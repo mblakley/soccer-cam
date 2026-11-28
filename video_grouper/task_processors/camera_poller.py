@@ -465,6 +465,9 @@ class CameraPoller(PollingProcessor):
             local_tz = pytz.utc
 
         files_to_delete = []
+        # Earliest end time among new files deferred by the cap; the
+        # watermark must not pass it (see _advance_completion_watermark).
+        oldest_deferred_end: datetime | None = None
         # Track newly discovered files per group for TTT registration
         new_files_by_group: dict[str, list] = {}
 
@@ -572,6 +575,11 @@ class CameraPoller(PollingProcessor):
                 # The cap counts only files that would actually be queued.
                 if counts["new_added"] >= max_files:
                     counts["deferred"] += 1
+                    if (
+                        oldest_deferred_end is None
+                        or file_end_time < oldest_deferred_end
+                    ):
+                        oldest_deferred_end = file_end_time
                     continue
 
                 group_dir = find_group_directory(
@@ -689,7 +697,7 @@ class CameraPoller(PollingProcessor):
         # the instant a file was queued -- before a single byte was
         # downloaded -- so a recording that never finished downloading was
         # never queried again (the 2026-06-15 loss).
-        await self._advance_completion_watermark()
+        await self._advance_completion_watermark(ceiling=oldest_deferred_end)
 
     async def _file_needs_download(
         self, local_path: str, dir_state: DirectoryState, expected_size: int | None
@@ -969,8 +977,16 @@ class CameraPoller(PollingProcessor):
                 )
         return recordings
 
-    async def _advance_completion_watermark(self) -> None:
+    async def _advance_completion_watermark(
+        self, ceiling: datetime | None = None
+    ) -> None:
         """Move the watermark over the settled prefix of known recordings.
+
+        ``ceiling`` is the earliest end time of a recording this poll listed
+        but deferred under ``max_files_per_poll``. It is in no ``state.json``
+        yet, so the walk below cannot see it; the watermark must stay strictly
+        below it, or a newer known recording could carry the mark past
+        footage that was never discovered.
 
         The watermark is the newest recording end time ``T`` such that *every*
         recording at or before ``T`` is settled. That contiguous-prefix rule is
@@ -1000,6 +1016,9 @@ class CameraPoller(PollingProcessor):
         candidate: datetime | None = None
         blocker: tuple[str, str] | None = None
         for end_time, settled, name, status in recordings:
+            if ceiling is not None and end_time >= ceiling:
+                blocker = ("a file deferred by max_files_per_poll", "undiscovered")
+                break
             if not settled:
                 blocker = (name, status)
                 break

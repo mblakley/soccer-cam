@@ -1785,6 +1785,68 @@ class TestPerPollCapCountsOnlyNewWork:
         ]
         assert queued == ["n0.dav", "n1.dav"]
 
+    @pytest.mark.asyncio
+    async def test_watermark_never_passes_a_deferred_file(
+        self, temp_storage, mock_config, mock_camera, mock_file_system
+    ):
+        """A deferred file is in no state.json, so the watermark walk cannot
+        see it. If the queued file settles within the same poll (a tiny file,
+        a fast link) and a newer recording is already known and settled, the
+        mark must still stop short of the deferred one -- the poller never
+        looks behind its watermark again."""
+        # New groups must really be created on disk for their state to persist;
+        # conftest's autouse mock makes os.makedirs a no-op.
+        mock_file_system["makedirs"].side_effect = lambda p, *a, **kw: Path(p).mkdir(
+            parents=True, exist_ok=True
+        )
+        mock_file_system["exists"].side_effect = os.path.lexists
+        mock_config.app.max_files_per_poll = 1
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        _, newer_known = await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-15.00.00",
+            ["known_later.dav"],
+            base + timedelta(hours=5),
+            "complete",
+        )
+        listing = [
+            _camera_listing(
+                "queued.dav",
+                base + timedelta(hours=1),
+                base + timedelta(hours=1, minutes=30),
+            ),
+            _camera_listing(
+                "deferred.dav",
+                base + timedelta(hours=2),
+                base + timedelta(hours=2, minutes=30),
+            ),
+        ] + [_camera_listing(n, s, e) for n, s, e in newer_known]
+        mock_camera.get_file_list = AsyncMock(return_value=listing)
+
+        dp = _idle_download_processor()
+
+        async def downloads_instantly(rec):
+            await DirectoryState(os.path.dirname(rec.file_path)).update_file_state(
+                rec.file_path, status="downloaded"
+            )
+
+        dp.add_work = AsyncMock(side_effect=downloads_instantly)
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+        await poller._update_latest_processed_time(base)
+
+        await poller._sync_files_from_camera()
+
+        mark = await poller._get_latest_processed_time()
+        assert mark < base + timedelta(hours=2, minutes=30), (
+            f"watermark {mark} passed the deferred recording, which was never "
+            "discovered"
+        )
+        await poller._sync_files_from_camera()
+        queued = [
+            os.path.basename(c.args[0].file_path) for c in dp.add_work.call_args_list
+        ]
+        assert queued == ["queued.dav", "deferred.dav"]
+
 
 def _two_camera_config(config):
     """The same Config with a second camera sharing the storage path."""
