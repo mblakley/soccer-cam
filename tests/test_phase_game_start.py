@@ -460,10 +460,11 @@ _OK_RESULT = {
 def _gated_detector(release: asyncio.Event, result=None):
     """A fake _run_detector that counts calls and blocks until ``release`` is set
     (standing in for the multi-minute decode running in a worker thread)."""
-    calls = {"n": 0}
+    calls = {"n": 0, "entered": asyncio.Event()}
 
     async def _fake(*_a, **_k):
         calls["n"] += 1
+        calls["entered"].set()
         await release.wait()
         return result
 
@@ -492,6 +493,9 @@ async def test_duplicate_triggers_share_one_detector_run(
     second = asyncio.create_task(
         pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
     )
+    # Wait for the first run to really be inside the detector (a fixed sleep
+    # flaked under a loaded parallel run), then let the duplicate settle.
+    await asyncio.wait_for(calls["entered"].wait(), timeout=5)
     await asyncio.sleep(0.05)
     assert calls["n"] == 1  # the duplicate is waiting on the first run
     release.set()
@@ -516,6 +520,9 @@ async def test_cancelled_duplicate_does_not_cancel_shared_run(
     dup = asyncio.create_task(
         pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
     )
+    # Wait for the first run to really be inside the detector (a fixed sleep
+    # flaked under a loaded parallel run), then let the duplicate settle.
+    await asyncio.wait_for(calls["entered"].wait(), timeout=5)
     await asyncio.sleep(0.05)
     dup.cancel()
     release.set()
@@ -551,7 +558,12 @@ async def test_timeout_falls_back_and_blocks_a_second_decode_until_the_first_end
 
     # Once the abandoned decode finishes, the group can be detected again.
     release.set()
-    await asyncio.sleep(0.05)
+
+    async def _orphan_cleared():
+        while pgs._ORPHANED:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_orphan_cleared(), timeout=5)
     assert pgs._ORPHANED == set()
     monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0)  # 0 = no ceiling
     assert (
