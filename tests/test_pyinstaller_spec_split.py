@@ -33,18 +33,18 @@ def _excludes(spec_path: Path) -> str:
 
 @pytest.mark.parametrize("module", _INFERENCE_STACK)
 def test_tray_spec_excludes_inference_stack(module):
-    excludes = _excludes(_ROOT / "VideoGrouperTray.spec")
+    excludes = _excludes(_ROOT / "SoccerCamTray.spec")
     assert f"'{module}'" in excludes, (
-        f"VideoGrouperTray.spec must exclude {module!r} (tray drives only the "
+        f"SoccerCamTray.spec must exclude {module!r} (tray drives only the "
         f"autocam GUI step); excludes: {excludes}"
     )
 
 
 @pytest.mark.parametrize("module", _INFERENCE_STACK)
 def test_service_spec_retains_inference_stack(module):
-    excludes = _excludes(_ROOT / "VideoGrouperService.spec")
+    excludes = _excludes(_ROOT / "SoccerCamService.spec")
     assert f"'{module}'" not in excludes, (
-        f"VideoGrouperService.spec must NOT exclude {module!r} (service runs "
+        f"SoccerCamService.spec must NOT exclude {module!r} (service runs "
         f"detect/render in Session 0); excludes: {excludes}"
     )
 
@@ -52,7 +52,7 @@ def test_service_spec_retains_inference_stack(module):
 def test_both_specs_still_exclude_heavy_ml_libs():
     """Both bundles keep the existing torch/scipy excludes — the split adds to
     the tray's excludes, it doesn't remove anything from either."""
-    for spec in ("VideoGrouperTray.spec", "VideoGrouperService.spec"):
+    for spec in ("SoccerCamTray.spec", "SoccerCamService.spec"):
         excludes = _excludes(_ROOT / spec)
         for module in ("torch", "torchvision", "ultralytics", "scipy"):
             assert f"'{module}'" in excludes, f"{spec} dropped {module!r}: {excludes}"

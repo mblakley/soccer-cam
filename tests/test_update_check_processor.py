@@ -24,20 +24,20 @@ SAMPLE_VERSION_INFO = {
     "release_notes": "release notes",
     "assets": [
         {
-            "name": "VideoGrouperService.exe",
-            "browser_download_url": "https://x/VideoGrouperService.exe",
+            "name": "SoccerCamService.exe",
+            "browser_download_url": "https://x/SoccerCamService.exe",
             "size": 50_000_000,
             "digest": "sha256:aaaa",
         },
         {
-            "name": "VideoGrouperTray.exe",
-            "browser_download_url": "https://x/VideoGrouperTray.exe",
+            "name": "SoccerCamTray.exe",
+            "browser_download_url": "https://x/SoccerCamTray.exe",
             "size": 40_000_000,
             "digest": "sha256:bbbb",
         },
         {
-            "name": "VideoGrouperSetup.exe",
-            "browser_download_url": "https://x/VideoGrouperSetup.exe",
+            "name": "SoccerCamSetup.exe",
+            "browser_download_url": "https://x/SoccerCamSetup.exe",
             "size": 90_000_000,
             "digest": "sha256:cccc",
         },
@@ -84,7 +84,7 @@ def _make_manager_mock(tmp_path, *, version_info=SAMPLE_VERSION_INFO, download_o
     instance.download_update = AsyncMock(return_value=download_ok)
     instance.temp_dir = str(tmp_path / "tmp-update")
     instance.installer_path.return_value = str(
-        tmp_path / "tmp-update" / "VideoGrouperSetup.exe"
+        tmp_path / "tmp-update" / "SoccerCamSetup.exe"
     )
     instance.compute_sha256.return_value = "sha256:cccc"  # matches setup.exe digest
     instance.verify_digest.return_value = True

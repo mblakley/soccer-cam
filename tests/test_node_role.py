@@ -1,4 +1,4 @@
-"""Tests for [NODE].role enforcement in VideoGrouperApp."""
+"""Tests for [NODE].role enforcement in SoccerCamApp."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from video_grouper.utils.config import (
     TeamSnapConfig,
     YouTubeConfig,
 )
-from video_grouper.video_grouper_app import VideoGrouperApp
+from video_grouper.video_grouper_app import SoccerCamApp
 
 
 def _config(temp_storage, role: str = "standalone") -> Config:
@@ -54,7 +54,7 @@ def _config(temp_storage, role: str = "standalone") -> Config:
 def test_standalone_role_starts_orchestrator(tmp_path):
     """Standalone is the default; orchestrator should initialize normally."""
     cfg = _config(str(tmp_path), role="standalone")
-    app = VideoGrouperApp(cfg)
+    app = SoccerCamApp(cfg)
     assert app.config.node.role == "standalone"
     # Sanity: the regular processor list was built.
     assert app.upload_processor is not None
@@ -63,17 +63,17 @@ def test_standalone_role_starts_orchestrator(tmp_path):
 def test_master_role_starts_orchestrator(tmp_path):
     """Master is just standalone + the worker API; orchestrator still starts."""
     cfg = _config(str(tmp_path), role="master")
-    app = VideoGrouperApp(cfg)
+    app = SoccerCamApp(cfg)
     assert app.config.node.role == "master"
     assert app.upload_processor is not None
 
 
 def test_worker_role_refused_in_orchestrator(tmp_path):
     """Worker mode requires `python -m video_grouper.worker`, not the
-    orchestrator entry point. VideoGrouperApp should refuse to start."""
+    orchestrator entry point. SoccerCamApp should refuse to start."""
     cfg = _config(str(tmp_path), role="worker")
     with pytest.raises(RuntimeError, match="role = 'worker'"):
-        VideoGrouperApp(cfg)
+        SoccerCamApp(cfg)
 
 
 def test_node_config_defaults():

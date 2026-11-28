@@ -1,5 +1,5 @@
 """
-Version information for VideoGrouper.
+Version information for Soccer-Cam.
 This file is automatically updated during the build process.
 """
 
@@ -17,12 +17,12 @@ __version_full__ = FULL_VERSION
 VERSION_INFO = {
     "version": VERSION,
     "build_number": BUILD_NUMBER,
-    "company_name": "VideoGrouper",
-    "file_description": "VideoGrouper Service and Tray Agent",
-    "internal_name": "VideoGrouper",
+    "company_name": "Soccer-Cam",
+    "file_description": "Soccer-Cam Service and Tray Agent",
+    "internal_name": "SoccerCam",
     "legal_copyright": "Copyright (c) 2026",
-    "original_filename": "VideoGrouperService.exe",
-    "product_name": "VideoGrouper",
+    "original_filename": "SoccerCamService.exe",
+    "product_name": "Soccer-Cam",
 }
 
 

@@ -201,6 +201,21 @@ def _v2_per_team_sections_to_team(
     return raw
 
 
+def _v3_drop_ttt_supabase_settings(
+    raw: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    """Drop ``[TTT]`` Supabase settings: soccer-cam now knows only TTT's API URL.
+
+    Sign-in moved to TTT's own browser flow (``/api/device-auth/*``), so
+    ``supabase_url``, ``anon_key`` and ``supabase_internal_url`` are dead.
+    """
+    ttt = raw.get("TTT")
+    if ttt:
+        for key in ("supabase_url", "anon_key", "supabase_internal_url"):
+            ttt.pop(key, None)
+    return raw
+
+
 # Ordered, contiguous from 1. Append only — never renumber or edit a shipped
 # migration, or configs part-way through the sequence will skip it.
 MIGRATIONS: list[Migration] = [
@@ -213,6 +228,11 @@ MIGRATIONS: list[Migration] = [
         version=2,
         description="per-team settings -> one [TEAM.<key>] section each",
         apply=_v2_per_team_sections_to_team,
+    ),
+    Migration(
+        version=3,
+        description="[TTT] drop Supabase settings (sign-in goes through TTT's API)",
+        apply=_v3_drop_ttt_supabase_settings,
     ),
 ]
 

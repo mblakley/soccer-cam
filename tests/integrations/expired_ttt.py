@@ -16,7 +16,6 @@ import httpx
 
 from video_grouper.api_integrations.ttt_api import TTTApiClient
 
-SUPABASE = "https://sb.example"
 API = "https://ttt.example"
 
 
@@ -34,7 +33,7 @@ class ExpiredTTTSession:
         self.requests: list[httpx.Request] = []
         # (method, path) -> JSON body returned with 200; anything else is 404
         self.routes: dict[tuple[str, str], Any] = {}
-        self.client = TTTApiClient(SUPABASE, "anon", API, storage_path)
+        self.client = TTTApiClient(api_base_url=API, storage_path=storage_path)
         self.client._http = httpx.Client(transport=httpx.MockTransport(self._handle))
         expired = time.time() - 600
         self.client._access_token = make_jwt(expired)
@@ -43,7 +42,7 @@ class ExpiredTTTSession:
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        if request.url.path == "/auth/v1/token":
+        if request.url.path == "/api/device-auth/refresh":
             if not self.refresh_ok:
                 return httpx.Response(400, json={"error": "invalid_grant"})
             return httpx.Response(
@@ -64,7 +63,7 @@ class ExpiredTTTSession:
 
     @property
     def refreshes(self) -> int:
-        return len(self.calls("POST", "/auth/v1/token"))
+        return len(self.calls("POST", "/api/device-auth/refresh"))
 
     def bearer(self, request: httpx.Request) -> str:
         return request.headers.get("Authorization", "")

@@ -75,9 +75,16 @@ def test_no_session_at_all(expired_ttt):
     assert expired_ttt.requests == []
 
 
-def test_an_oauth_session_has_no_refresh_token(expired_ttt):
+def test_a_session_without_a_refresh_token_cannot_renew(expired_ttt):
     client = expired_ttt.client
-    client.set_session_from_token(make_jwt(time.time() + 3600))
+    # A session with no refresh token to renew it with.
+    client._store_auth_response(
+        {
+            "access_token": make_jwt(time.time() + 3600),
+            "refresh_token": "",
+            "expires_in": 3600,
+        }
+    )
     assert client.ensure_signed_in() is True
     # Expired: nothing to refresh with -> signed out, no request made.
     client._expires_at = time.time() - 1
@@ -89,7 +96,14 @@ def test_a_new_sign_in_ends_the_backoff(tmp_path):
     session = ExpiredTTTSession(str(tmp_path), refresh_ok=False)
     client = session.client
     assert client.ensure_signed_in() is False
-    client.set_session_from_token(make_jwt(time.time() + 3600))
+    # A session with no refresh token to renew it with.
+    client._store_auth_response(
+        {
+            "access_token": make_jwt(time.time() + 3600),
+            "refresh_token": "",
+            "expires_in": 3600,
+        }
+    )
     assert client._refresh_retry_at == 0.0
     assert client.ensure_signed_in() is True
 

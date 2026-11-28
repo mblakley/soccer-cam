@@ -47,7 +47,14 @@ _PIPELINE_QUESTIONS = (
     "never built in TTT (planned after the core loop, decided 2026-11-27), and dead "
     "here: TTTQuestionService, the only caller, is never instantiated"
 )
+_DEVICE_AUTH = (
+    "added in mblakley/team-tech-tools#173 (soccer-cam device sign-in), not yet on "
+    "development; refresh the subset once it merges"
+)
+
 KNOWN_MISSING: dict[tuple[str, str], str] = {
+    ("POST", "/api/device-auth/token"): _DEVICE_AUTH,
+    ("POST", "/api/device-auth/refresh"): _DEVICE_AUTH,
     ("POST", "/api/pipeline-questions"): _PIPELINE_QUESTIONS,
     ("GET", "/api/pipeline-questions/{}"): _PIPELINE_QUESTIONS,
     ("PATCH", "/api/pipeline-questions/{}/respond"): _PIPELINE_QUESTIONS,
@@ -289,9 +296,11 @@ def test_every_http_call_in_the_client_is_extracted():
     assert len(_ttt_calls()) > 50
 
 
-def test_auth_calls_go_to_supabase_not_ttt():
-    supabase = {(c.method, c.path) for c in extract_calls() if c.base == "supabase"}
-    assert supabase == {("POST", "/auth/v1/token"), ("POST", "/auth/v1/otp")}
+def test_client_never_calls_supabase():
+    """Soccer-cam knows only TTT's API (decided 2026-11-27). Sign-in and refresh
+    go through TTT's /api/device-auth/*; Supabase is TTT's implementation detail."""
+    assert not [c for c in extract_calls() if c.base == "supabase"]
+    assert "supabase" not in CLIENT.read_text(encoding="utf-8").lower()
 
 
 @pytest.mark.parametrize(("method", "path"), _ttt_calls())

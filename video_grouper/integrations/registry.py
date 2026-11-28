@@ -108,13 +108,13 @@ class IntegrationContext:
         every TTT implementation shares it, so a sign-in reaches all of them.
         """
         if "ttt" not in self.services:
-            from video_grouper.api_integrations.ttt_api import TTTApiClient
+            from video_grouper.api_integrations.ttt_api import (
+                TTTApiClient,
+                resolve_api_base_url,
+            )
 
-            ttt = self.config.ttt
             self.services["ttt"] = TTTApiClient(
-                supabase_url=ttt.supabase_url,
-                anon_key=ttt.anon_key,
-                api_base_url=ttt.api_base_url,
+                api_base_url=resolve_api_base_url(self.config.ttt.api_base_url),
                 storage_path=str(self.storage_path),
             )
         return self.services["ttt"]

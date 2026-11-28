@@ -596,8 +596,6 @@ enabled = false
 
 [TTT]
 enabled = true
-supabase_url = {SUPABASE_URL}
-anon_key = {SUPABASE_ANON_KEY}
 api_base_url = {TTT_BASE}
 clip_request_poll_interval = 5
 camera_id = {SEED_CAMERA_ID}

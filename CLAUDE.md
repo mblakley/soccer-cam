@@ -291,7 +291,7 @@ Ruff config: double quotes, spaces, target Python 3.13.
 
 ### Processing Pipeline
 
-The app runs 6 task processors orchestrated by `VideoGrouperApp` (video_grouper/video_grouper_app.py):
+The app runs 6 task processors orchestrated by `SoccerCamApp` (video_grouper/video_grouper_app.py):
 
 ```
 CameraPoller → DownloadProcessor → VideoProcessor → UploadProcessor

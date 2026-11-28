@@ -18,9 +18,9 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
 $SharedDataSim = Join-Path $ProjectRoot "shared_data_simulator"
 $SharedDataProd = Join-Path $ProjectRoot "shared_data"
-$InstallDir = "C:\Program Files\VideoGrouper"
-$ServiceName = "VideoGrouperService"
-$TrayProcess = "VideoGrouperTray"
+$InstallDir = "C:\Program Files\SoccerCam"
+$ServiceName = "SoccerCamService"
+$TrayProcess = "SoccerCamTray"
 $SimConfigPath = Join-Path $SharedDataSim "config.ini"
 
 # Source clip directory (first 2 clips from July 22 game)
@@ -40,13 +40,13 @@ try {
     & uv sync --extra dev --extra tray --extra service
     if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
 
-    & uv run pyinstaller --noconfirm VideoGrouperService.spec
+    & uv run pyinstaller --noconfirm SoccerCamService.spec
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller (service) failed" }
 
-    & uv run pyinstaller --noconfirm VideoGrouperTray.spec
+    & uv run pyinstaller --noconfirm SoccerCamTray.spec
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller (tray) failed" }
 
-    Write-Host "  Built dist\VideoGrouperService.exe and dist\VideoGrouperTray.exe" -ForegroundColor Green
+    Write-Host "  Built dist\SoccerCamService.exe and dist\SoccerCamTray.exe" -ForegroundColor Green
 } finally {
     Pop-Location
 }
@@ -153,8 +153,8 @@ $lockFile = Join-Path $SharedDataSim "tray_agent.lock"
 if (Test-Path $lockFile) { Remove-Item $lockFile -Force }
 
 # Deploy
-Copy-Item (Join-Path $ProjectRoot "dist\VideoGrouperService.exe") $InstallDir -Force
-Copy-Item (Join-Path $ProjectRoot "dist\VideoGrouperTray.exe") $InstallDir -Force
+Copy-Item (Join-Path $ProjectRoot "dist\SoccerCamService.exe") $InstallDir -Force
+Copy-Item (Join-Path $ProjectRoot "dist\SoccerCamTray.exe") $InstallDir -Force
 Write-Host "  Executables deployed" -ForegroundColor Green
 
 # ---------------------------------------------------------------
@@ -165,7 +165,7 @@ Write-Host "[7/7] Starting service and tray..." -ForegroundColor Yellow
 Start-Service -Name $ServiceName
 Write-Host "  Service started" -ForegroundColor Green
 
-Start-Process -FilePath (Join-Path $InstallDir "VideoGrouperTray.exe") -ArgumentList "`"$SimConfigPath`""
+Start-Process -FilePath (Join-Path $InstallDir "SoccerCamTray.exe") -ArgumentList "`"$SimConfigPath`""
 Write-Host "  Tray launched" -ForegroundColor Green
 
 # ---------------------------------------------------------------

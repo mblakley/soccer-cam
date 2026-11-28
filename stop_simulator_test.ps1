@@ -11,8 +11,8 @@
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
-$ServiceName = "VideoGrouperService"
-$TrayProcess = "VideoGrouperTray"
+$ServiceName = "SoccerCamService"
+$TrayProcess = "SoccerCamTray"
 
 Write-Host "=== Stopping Simulator E2E Test ===" -ForegroundColor Cyan
 Write-Host ""

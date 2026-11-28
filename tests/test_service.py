@@ -19,20 +19,20 @@ sys.modules["win32event"] = mock_win32event
 sys.modules["servicemanager"] = mock_servicemanager
 sys.modules["win32service"] = mock_win32service
 
-from video_grouper.service.main import VideoGrouperService, _resolve_storage_cwd
+from video_grouper.service.main import SoccerCamService, _resolve_storage_cwd
 
 
-class TestVideoGrouperService:
+class TestSoccerCamService:
     def test_initialization(self):
         """Test basic initialization of the service."""
-        service = VideoGrouperService(args=())
+        service = SoccerCamService(args=())
         mock_win32event.CreateEvent.assert_called()
         assert service.running is False
         assert service.loop is None
 
     def test_svc_stop(self):
         """Test the SvcStop method."""
-        service = VideoGrouperService(args=())
+        service = SoccerCamService(args=())
         service.ReportServiceStatus = MagicMock()
         service.SvcStop()
         service.ReportServiceStatus.assert_called_once_with(
@@ -43,7 +43,7 @@ class TestVideoGrouperService:
 
     def test_svc_do_run(self):
         """Test the SvcDoRun method calls main()."""
-        service = VideoGrouperService(args=())
+        service = SoccerCamService(args=())
         service.ReportServiceStatus = MagicMock()
         service.main = MagicMock()
         service.SvcDoRun()

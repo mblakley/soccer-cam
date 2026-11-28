@@ -1,7 +1,7 @@
 """Import-time registration of all built-in pipeline steps.
 
 Importing this module triggers each step module to register itself. The wiring
-side (``VideoGrouperApp`` / the tray) imports this once at startup, mirroring
+side (``SoccerCamApp`` / the tray) imports this once at startup, mirroring
 the cameras-module convention.
 
 Each import is wrapped in try/except so a missing optional dependency for one

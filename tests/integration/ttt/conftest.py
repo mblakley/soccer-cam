@@ -84,17 +84,32 @@ def ttt_backend_available():
         pytest.skip(f"TTT backend not available at {TTT_API_URL}: {exc}")
 
 
+def seed_session(client: TTTApiClient) -> None:
+    """Give ``client`` a session for the seeded test user.
+
+    Soccer-cam signs in through TTT's browser flow (/api/device-auth), which a
+    test can't click through; the harness gets a session from the local auth
+    server directly instead. Test-only: soccer-cam itself never does this.
+    """
+    resp = httpx.post(
+        f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
+        headers={"apikey": SUPABASE_ANON_KEY},
+        json={"email": TEST_EMAIL, "password": TEST_PASSWORD},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    client._store_auth_response(resp.json())
+
+
 @pytest.fixture(scope="session")
 def ttt_client(ttt_backend_available, tmp_path_factory):
     """Session-scoped authenticated TTTApiClient for live TTT tests."""
     storage = str(tmp_path_factory.mktemp("ttt_integration"))
     client = TTTApiClient(
-        supabase_url=SUPABASE_URL,
-        anon_key=SUPABASE_ANON_KEY,
         api_base_url=TTT_API_URL,
         storage_path=storage,
     )
-    client.login(TEST_EMAIL, TEST_PASSWORD)
+    seed_session(client)
     yield client
     client._http.close()
 

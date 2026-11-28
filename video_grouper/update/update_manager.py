@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # atomically. The legacy two-exe asset list was a Phase 1 transient.
 # CI (`.github/workflows/build-windows-service.yml`) publishes only
 # this single artifact to GitHub Releases.
-REQUIRED_ASSETS = ("VideoGrouperSetup.exe",)
-INSTALLER_ASSET = "VideoGrouperSetup.exe"
+REQUIRED_ASSETS = ("SoccerCamSetup.exe",)
+INSTALLER_ASSET = "SoccerCamSetup.exe"
 
 UPDATE_API_URL_ENV = "SOCCER_CAM_UPDATE_API_URL"
 
@@ -93,7 +93,7 @@ class UpdateManager:
         self,
         current_version: str,
         github_repo: str,
-        service_name: str = "VideoGrouperService",
+        service_name: str = "SoccerCamService",
         api_url_override: str | None = None,
     ):
         self.current_version = current_version
@@ -297,7 +297,7 @@ class UpdateManager:
         return True
 
     def spawn_installer(self, installer_path: str | None = None) -> int:
-        """Launch ``VideoGrouperSetup.exe /S`` detached from the
+        """Launch ``SoccerCamSetup.exe /S`` detached from the
         service process and return its PID.
 
         The installer is the single source of deployment truth -- it
@@ -308,10 +308,10 @@ class UpdateManager:
         auto-upgrade install is bit-identical to a fresh install.
 
         The detached flags matter: NSIS calls ``sc stop
-        VideoGrouperService`` early in its install, which would
+        SoccerCamService`` early in its install, which would
         SIGTERM our process if we were the parent. By the time NSIS
         runs the service has already exited cleanly (see
-        ``VideoGrouperApp._shutdown_event``), and the helper survives
+        ``SoccerCamApp._shutdown_event``), and the helper survives
         as an orphaned process group.
         """
         path = installer_path or self.installer_path()

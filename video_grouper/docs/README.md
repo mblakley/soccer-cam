@@ -1,12 +1,12 @@
-# Video Grouper System Documentation
+# Soccer-Cam System Documentation
 
 ## Overview
 
-The Video Grouper system is a comprehensive video processing pipeline designed to automatically capture, process, and upload soccer game recordings from IP cameras. The system implements a multi-stage processing architecture with separate queues for different types of operations, ensuring reliable and scalable video processing.
+The Soccer-Cam system is a comprehensive video processing pipeline designed to automatically capture, process, and upload soccer game recordings from IP cameras. The system implements a multi-stage processing architecture with separate queues for different types of operations, ensuring reliable and scalable video processing.
 
 ## System Architecture
 
-The Video Grouper system consists of several interconnected processors, each managing their own queue and responsible for specific aspects of the video processing pipeline:
+The Soccer-Cam system consists of several interconnected processors, each managing their own queue and responsible for specific aspects of the video processing pipeline:
 
 ### Core Processors
 

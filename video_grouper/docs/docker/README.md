@@ -1,6 +1,6 @@
-# Docker Setup for VideoGrouper
+# Docker Setup for Soccer-Cam
 
-This document explains how to run VideoGrouper in Docker on Linux (or Windows via Docker Desktop's WSL2 backend). It covers:
+This document explains how to run Soccer-Cam in Docker on Linux (or Windows via Docker Desktop's WSL2 backend). It covers:
 
 - [Quick start](#quick-start) — get the pipeline running, no ball detection
 - [Volume mounts](#volume-mounts) — where data goes in and out
@@ -35,7 +35,7 @@ docker compose up -d
 #    pipeline status.
 
 # 4. Watch the logs
-docker compose logs -f video-grouper
+docker compose logs -f soccer-cam
 ```
 
 ### Path B: hand-edit `config.ini`
@@ -50,7 +50,7 @@ cp video_grouper/config.ini.dist shared_data/config.ini
 
 docker compose build
 docker compose up -d
-docker compose logs -f video-grouper
+docker compose logs -f soccer-cam
 ```
 
 The container polls the camera, downloads new clips, combines/trims them, prompts for game start/end via NTFY, and uploads to YouTube. Standard pipeline.
@@ -61,7 +61,7 @@ To rebuild from a specific version tag:
 docker build \
   --build-arg VERSION=1.0.0 \
   --build-arg BUILD_NUMBER=123 \
-  -t video-grouper -f video_grouper/Dockerfile .
+  -t soccer-cam -f video_grouper/Dockerfile .
 ```
 
 ---
@@ -86,7 +86,7 @@ What lives where:
 | `/app/shared_data/config.ini` | Application configuration |
 | `/app/shared_data/<game>/` | Per-game video directory (downloaded clips, combined MP4, trimmed MP4, `state.json`, **and the ball-tracking outputs `detections.json` + `trajectory.json` if enabled**) |
 | `/app/shared_data/*_queue_state.json` | Persisted async queues (download / video / upload / ball-tracking) |
-| `/app/shared_data/ttt/tokens.json` | Cached Supabase access + refresh tokens (see ball detection below) |
+| `/app/shared_data/ttt/tokens.json` | Cached TTT session (access + refresh tokens) (see ball detection below) |
 
 **There is no separate "output" volume** — ball detection writes its `detections.json` and `trajectory.json` into the same per-game directory as the input video. Mount whatever directory tree holds your games; outputs land alongside inputs.
 
@@ -134,39 +134,29 @@ type = render
 
 [TTT]
 enabled = true
-supabase_url = https://<your-supabase-project>.supabase.co
-anon_key = <your-supabase-anon-key>
-api_base_url = https://api.teamtechtools.com
-email = <your-ttt-email>
-password = <your-ttt-password>
+# api_base_url = https://...   # optional; defaults to the build's TTT address
 # plugin_signing_public_keys = ["...hex..."]   # optional override; default ships in code
 ```
 
-Email + password are used for the **first** authentication only — after that, Supabase access + refresh tokens are persisted to `/app/shared_data/ttt/tokens.json` and refreshed automatically. You can clear `password` from `config.ini` once tokens exist if you don't want it stored at rest.
+Soccer-cam knows only TTT's API address. You sign in once from the dashboard; the session (with a refresh token) is stored in `/app/shared_data/ttt/tokens.json` and refreshed automatically. There is no TTT password in `config.ini`.
 
-### Headless sign-in via the in-container web server
+### Signing in to TTT
 
-The container can run a small HTTP server with a status dashboard at `/` that lets you sign in to TTT from a browser without putting credentials in `config.ini`. It supports every method TTT's Supabase project enables:
+The container serves a status dashboard at `/` with a **Sign in to Team Tech Tools** button. It opens TTT's own sign-in page (every method TTT offers: Google and other providers, email code or magic link), asks you to approve this camera, and returns to the container's `/ttt/callback` with a one-time code that soccer-cam redeems for its session (OAuth authorization code + PKCE).
 
-- **OAuth providers**: Google, Discord, Apple, Facebook, Twitter — buttons redirect to Supabase, which redirects to the provider, which redirects back to the server's `/callback`. The access token is extracted from the URL fragment and persisted to `shared_data/ttt/tokens.json`.
-- **Email + password**: an inline form posts to `/login/password`, which calls Supabase's password grant.
-- **Magic link**: an inline form posts to `/login/magic`, which asks Supabase to email a sign-in link. Clicking the link in the email lands on the server's `/callback` the same way the OAuth flow does.
-
-The dashboard also shows pipeline queue sizes, camera connectivity, and per-game progress, and refreshes every 10 seconds.
+TTT only sends that code back to a **loopback** address, so open the dashboard from the machine running the container, at `http://localhost:8765`. From another computer, tunnel the port first (`ssh -L 8765:localhost:8765 <host>`) and open `http://localhost:8765` locally. Opening it by LAN IP shows a message explaining this instead of a sign-in button that can't finish.
 
 Set in `config.ini`:
 
 ```ini
 [TTT]
 enabled = true
-# email and password can be left blank — the OAuth flow populates tokens.json directly.
-
 auth_server_enabled = true
 auth_server_bind = 127.0.0.1
 auth_server_port = 8765
 ```
 
-In `docker-compose.yaml`, uncomment the port mapping for the `video-grouper` service:
+In `docker-compose.yaml`, uncomment the port mapping for the `soccer-cam` service:
 
 ```yaml
     ports:
@@ -179,11 +169,7 @@ Then:
 docker compose up -d
 ```
 
-Open `http://localhost:8765` in your browser and click the OAuth provider button. On success, `shared_data/ttt/tokens.json` appears with the access token; the rest of the pipeline uses it automatically (restart the container if it was already running, or wait for the next TTT call to pick the file up).
-
-> **Email/password TTT accounts.** If you don't sign in to TTT via an OAuth provider, this server won't help — Supabase's hosted auth UI doesn't cover password sign-in. Use the `[TTT] email` + `password` config.ini fields above instead. After the first call, refresh tokens take over and you can clear `password` from disk if you prefer.
-
-> **Supabase redirect URL allowlist.** The server tells Supabase to redirect back to whatever host you typed in your address bar, e.g. `http://localhost:8765/callback`. That URL must be on the TTT Supabase project's redirect allowlist. `http://localhost:*` is on it for local dev; if you sign in via a non-localhost name (Tailscale, LAN host, etc.), add that URL too — otherwise Supabase rejects the redirect with `redirect_to URL not allowed`.
+Open `http://localhost:8765` and click **Sign in to Team Tech Tools**. On success `shared_data/ttt/tokens.json` appears; running parts of the pipeline pick it up on their next TTT call, no restart needed.
 
 **Security model.** The auth server is unauthenticated — anyone who can reach the port becomes the signed-in TTT user. The defaults keep that local: `bind = 127.0.0.1` inside the container, exposed only via the explicit Docker port mapping above. Don't change `auth_server_bind` to `0.0.0.0` or expose `8765` on a non-trusted network.
 
@@ -200,7 +186,7 @@ GPU mode (requires NVIDIA Container Toolkit on the host; Docker Desktop on Windo
 ```bash
 docker run --rm --gpus all \
   -v $(pwd)/shared_data:/app/shared_data \
-  video-grouper
+  soccer-cam
 ```
 
 Or, to keep using `docker compose` with GPU, append a `deploy.resources.reservations.devices` block to your local `docker-compose.yaml` (it's intentionally not in the default — see [GPU acceleration](#gpu-acceleration)).
@@ -225,7 +211,7 @@ Plaintext model bytes never touch the disk.
 After a game runs through, check the logs:
 
 ```bash
-docker compose logs video-grouper | grep -E "ONNX session using|licensed.*tier"
+docker compose logs soccer-cam | grep -E "ONNX session using|licensed.*tier"
 # Expected on a GPU host:
 #   detect: licensed premium.video.ball_detection v0.1.0 (premium, provider=CUDAExecutionProvider)
 #   ONNX session using: ['CUDAExecutionProvider', 'CPUExecutionProvider']
@@ -288,7 +274,7 @@ The default `docker-compose.yaml` does **not** request a GPU because compose har
 
 ```yaml
 services:
-  video-grouper:
+  soccer-cam:
     deploy:
       resources:
         reservations:

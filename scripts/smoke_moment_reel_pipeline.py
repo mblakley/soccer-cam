@@ -369,12 +369,14 @@ async def main() -> int:
     from video_grouper.api_integrations.ttt_api import TTTApiClient
 
     ttt_client = TTTApiClient(
-        supabase_url="http://127.0.0.1:54321",
-        anon_key=os.environ.get("SUPABASE_ANON_KEY", "anon-stub"),
         api_base_url=TTT_BASE,
         storage_path=str(STORAGE_PATH),
     )
-    ttt_client.set_session_from_token(token)
+    # Seed the session directly (smoke harness; soccer-cam itself signs in
+    # through TTT's /api/device-auth flow).
+    ttt_client._store_auth_response(
+        {"access_token": token, "refresh_token": "", "expires_in": 3600}
+    )
 
     stub_uploader = StubYouTubeUploader()
     config = make_config(camera_id)

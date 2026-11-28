@@ -383,6 +383,25 @@ class TestUnreadableConfigIsLeftAlone:
         assert "SCHEMA" not in path.read_text(encoding="utf-8")
 
 
+def test_v3_drops_ttt_supabase_settings_only():
+    from video_grouper.utils.config_migrations import _v3_drop_ttt_supabase_settings
+
+    raw = {
+        "TTT": {
+            "enabled": "true",
+            "supabase_url": "https://x.supabase.co",
+            "anon_key": "k",
+            "supabase_internal_url": "http://sb:8000",
+            "api_base_url": "https://ttt.example",
+        },
+        "STORAGE": {"path": "/data"},
+    }
+    out = _v3_drop_ttt_supabase_settings(raw)
+    assert out["TTT"] == {"enabled": "true", "api_base_url": "https://ttt.example"}
+    assert out["STORAGE"] == {"path": "/data"}
+    assert _v3_drop_ttt_supabase_settings({"STORAGE": {}}) == {"STORAGE": {}}
+
+
 class TestRetiredSettings:
     """A setting that no longer exists needs no migration: the config models
     ignore unknown keys, so an existing config.ini that still carries one

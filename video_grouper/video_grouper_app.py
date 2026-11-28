@@ -27,15 +27,15 @@ from video_grouper.version import get_version
 logger = get_logger(__name__)
 
 
-class VideoGrouperApp:
+class SoccerCamApp:
     """
-    Refactored VideoGrouperApp that orchestrates task processors.
+    Refactored SoccerCamApp that orchestrates task processors.
     Each task processor is self-contained and manages its own queue and state.
     """
 
     def __init__(self, config: Config, camera=None, config_path: Path | None = None):
         """
-        Initialize the VideoGrouperApp with task processors.
+        Initialize the SoccerCamApp with task processors.
 
         Args:
             config: Configuration object
@@ -353,23 +353,19 @@ class VideoGrouperApp:
 
                 # The integrations' shared session -- not a second client.
                 ttt_client = self.integrations.shared_ttt_client()
-                # Login with stored credentials
-                if self.config.ttt.email and self.config.ttt.password:
-                    try:
-                        ttt_client.login(
-                            self.config.ttt.email, self.config.ttt.password
-                        )
-                        logger.info("TTT API client authenticated")
-                    except Exception as e:
-                        logger.error(f"TTT login failed: {e}")
-                    else:
-                        # Auto-claim camera-manager rows for every team the
-                        # signed-in user is on. Best-effort; never blocks startup.
-                        from video_grouper.web.auth_server import (
-                            auto_claim_camera_manager,
-                        )
+                if ttt_client.has_session():
+                    # Auto-claim camera-manager rows for every team the
+                    # signed-in user is on. Best-effort; never blocks startup.
+                    from video_grouper.web.auth_server import (
+                        auto_claim_camera_manager,
+                    )
 
-                        auto_claim_camera_manager(ttt_client)
+                    auto_claim_camera_manager(ttt_client)
+                else:
+                    logger.warning(
+                        "TTT: not signed in. Use 'Sign in to Team Tech Tools' on "
+                        "the dashboard (config email/password is no longer used)."
+                    )
 
                 # Initialize plugin manager
                 try:
@@ -571,19 +567,12 @@ class VideoGrouperApp:
                 if not ttt_client:
                     # The integrations' shared session -- not a second client.
                     ttt_client = self.integrations.shared_ttt_client()
-                    if self.config.ttt.email and self.config.ttt.password:
-                        try:
-                            ttt_client.login(
-                                self.config.ttt.email, self.config.ttt.password
-                            )
-                        except Exception as e:
-                            logger.error(f"TTT login failed: {e}")
-                        else:
-                            from video_grouper.web.auth_server import (
-                                auto_claim_camera_manager,
-                            )
+                    if ttt_client.has_session():
+                        from video_grouper.web.auth_server import (
+                            auto_claim_camera_manager,
+                        )
 
-                            auto_claim_camera_manager(ttt_client)
+                        auto_claim_camera_manager(ttt_client)
                     self._ttt_client = ttt_client
 
                 # Job processor is only initialized when TTT job polling is on.
@@ -745,7 +734,7 @@ class VideoGrouperApp:
         # Register all task types with the task registry
         register_service_tasks()
 
-        logger.info("VideoGrouperApp initialized with task processors")
+        logger.info("SoccerCamApp initialized with task processors")
 
     def _validate_storage_path(self):
         """Validate that the storage path is usable.
@@ -827,7 +816,7 @@ class VideoGrouperApp:
 
     async def initialize(self):
         """Initialize the application by setting up storage and processors."""
-        logger.info("Initializing VideoGrouperApp")
+        logger.info("Initializing SoccerCamApp")
         os.makedirs(self.storage_path, exist_ok=True)
 
         # Initialize all processors
@@ -837,11 +826,11 @@ class VideoGrouperApp:
         # Device link heartbeat (best-effort, never blocks startup)
         await self.device_link_processor.start()
 
-        logger.info("VideoGrouperApp initialization complete")
+        logger.info("SoccerCamApp initialization complete")
 
     async def run(self):
         """Run the application."""
-        logger.info("Running VideoGrouperApp")
+        logger.info("Running SoccerCamApp")
         await self.initialize()
 
         # Start NTFY response service when NTFY is enabled
@@ -850,7 +839,7 @@ class VideoGrouperApp:
             try:
                 ntfy_response_service = create_ntfy_response_service(self.config.ntfy)
                 await ntfy_response_service.start()
-                logger.info("NTFY response service started in VideoGrouperApp")
+                logger.info("NTFY response service started in SoccerCamApp")
             except Exception as e:
                 logger.error(f"Failed to start NTFY response service: {e}")
         else:
@@ -1231,8 +1220,7 @@ class VideoGrouperApp:
             import subprocess
 
             subprocess.Popen(
-                'cmd.exe /c "timeout /t 5 /nobreak > nul & '
-                'sc start VideoGrouperService"',
+                'cmd.exe /c "timeout /t 5 /nobreak > nul & sc start SoccerCamService"',
                 shell=True,
                 creationflags=(
                     subprocess.DETACHED_PROCESS
@@ -1270,7 +1258,7 @@ class VideoGrouperApp:
 
     async def shutdown(self):
         """Shut down the application."""
-        logger.info("Shutting down VideoGrouperApp")
+        logger.info("Shutting down SoccerCamApp")
 
         # Signal shutdown to wake up the run() method if it's waiting
         self._shutdown_event.set()
@@ -1296,7 +1284,7 @@ class VideoGrouperApp:
 
         close_loggers()
 
-        logger.info("VideoGrouperApp shutdown complete")
+        logger.info("SoccerCamApp shutdown complete")
 
     # Convenience methods for external access to processors
 

@@ -420,8 +420,6 @@ async def test_signed_out_reports_raise_without_any_request(tmp_path):
     """The real client refuses before touching the network when there is no
     session, so a report while signed out reaches nothing."""
     client = TTTApiClient(
-        supabase_url="https://sb.example",
-        anon_key="anon",
         api_base_url="https://ttt.example",
         storage_path=str(tmp_path),
     )
@@ -429,9 +427,9 @@ async def test_signed_out_reports_raise_without_any_request(tmp_path):
     source = TTTWorkSource(client, SimpleNamespace(camera_id="c"))
 
     assert await source.pending() == []
-    with pytest.raises(TTTApiError, match="Not authenticated"):
+    with pytest.raises(TTTApiError, match="Not signed in"):
         await source.claim(_item(REPROCESS))
-    with pytest.raises(TTTApiError, match="Not authenticated"):
+    with pytest.raises(TTTApiError, match="Not signed in"):
         await source.complete(_item(CLIP), {"url": "u"})
     client._http.request.assert_not_called()
 

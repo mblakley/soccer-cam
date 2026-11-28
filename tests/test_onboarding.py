@@ -249,8 +249,6 @@ class TestTTTApiDeviceConfig:
         mock_client_cls.return_value = mock_http
 
         client = TTTApiClient(
-            supabase_url="https://example.supabase.co",
-            anon_key="test-key",
             api_base_url="https://api.example.com",
             storage_path=str(tmp_path),
         )
@@ -278,8 +276,6 @@ class TestTTTApiDeviceConfig:
         mock_client_cls.return_value = mock_http
 
         client = TTTApiClient(
-            supabase_url="https://example.supabase.co",
-            anon_key="test-key",
             api_base_url="https://api.example.com",
             storage_path=str(tmp_path),
         )
@@ -302,8 +298,6 @@ class TestTTTApiDeviceConfig:
         mock_client_cls.return_value = mock_http
 
         client = TTTApiClient(
-            supabase_url="https://example.supabase.co",
-            anon_key="test-key",
             api_base_url="https://api.example.com",
             storage_path=str(tmp_path),
         )
@@ -342,8 +336,6 @@ class TestDeviceConfigPasswordHandling:
         mock_client_cls.return_value = mock_http
 
         client = TTTApiClient(
-            supabase_url="https://example.supabase.co",
-            anon_key="test-key",
             api_base_url="https://api.example.com",
             storage_path=str(tmp_path),
         )
@@ -374,8 +366,6 @@ class TestDeviceConfigPasswordHandling:
         mock_client_cls.return_value = mock_http
 
         client = TTTApiClient(
-            supabase_url="https://example.supabase.co",
-            anon_key="test-key",
             api_base_url="https://api.example.com",
             storage_path=str(tmp_path),
         )
@@ -471,8 +461,6 @@ class TestWizardConfigSave:
 
         # TTT
         config.ttt.enabled = True
-        config.ttt.supabase_url = "https://test.supabase.co"
-        config.ttt.anon_key = "test-anon-key"
         config.ttt.api_base_url = "https://api.test.com"
         config.ttt.email = "user@example.com"
         config.ttt.password = "testpass"
@@ -562,15 +550,14 @@ class TestWizardTTTIntegration:
         mock_http.request.side_effect = [teams_resp, save_resp]
 
         client = TTTApiClient(
-            supabase_url="https://test.supabase.co",
-            anon_key="test-key",
             api_base_url="https://api.test.com",
             storage_path=str(tmp_path),
         )
 
-        # Login
-        client.login("user@example.com", "pass123")
+        # Sign in through TTT's device flow (code redeemed at /token)
+        client.complete_sign_in("code", "v" * 43, "http://127.0.0.1:8765/ttt/callback")
         assert client.is_authenticated()
+        assert mock_http.post.call_args.args[0].endswith("/api/device-auth/token")
 
         # Get teams
         teams = client.get_team_assignments()
@@ -592,8 +579,6 @@ class TestWizardTTTIntegration:
         mock_client_cls.return_value = mock_http
 
         client = TTTApiClient(
-            supabase_url="https://test.supabase.co",
-            anon_key="test-key",
             api_base_url="https://api.test.com",
             storage_path=str(tmp_path),
         )
