@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-11-28 — far-field bits: build 4924 (ten ROI windows, daemon drives them) flashed and working*
+*Last updated: 2026-11-28 — far-field bits: build 4925 on the camera (bands + game-start hook, hook off by default)*
 
 ## 2026-11-28 — FAR-FIELD BITS: build 4923 is on the camera; ten windows work; lower index wins an overlap
 
@@ -16,7 +16,7 @@
 - **The far-ball count was rerun with the clip fullscreen and did not give a usable number** (the
   count cannot tell a moving ball from a stale copy; details and the caveat it puts on EXP-ENC-08's
   percentages are in EXP-ENC-09).
-- **Camera left:** build 4924, not recording (`GetRecV20 enable=0`, no override flag, newest file
+- **Camera left:** build 4925, not recording (`GetRecV20 enable=0`, no override flag, newest file
   2026-08-22), image settings identical to the saved start state, encoder 20480 kbps / `gop=2` with
   the kernel's rate control confirmed back at 20.97 Mbps, all ROI windows cleared, `roi.conf`
   `enable=0`. Still at 192.168.86.22.
@@ -42,12 +42,19 @@
   pitch; a multi-snapshot agreement check would, and is not built.
 - **Indoor option for a winter test:** the dome game ran at 12.5 Mbps and QP 31–33, under the cap
   (outdoor games: at the cap, QP 34–35), on a full-size pitch with the same framing.
-- **Build 4925 staged, not flashed (needs Mark's yes): the game-start hook.** `S38_FieldRoi`, off by
+- **Build 4925 flashed (Mark's go-ahead) and is what the camera runs: the game-start hook.** `S38_FieldRoi`, off by
   default. With `auto=1` it waits 60 s after recording starts (Mark: the camera may not be fully
   extended or lined up), then installs the bands only when two detections in a row agree within 96
   rows (measured jitter on a fixed camera: 30 rows look to look, EXP-ENC-12); otherwise stock.
   26-check test, a build gate. Against 4924 only the hook, its default config and the manifest differ.
-- **Next:** (0) flash 4925 and run the hook at home with `fieldroi.now` (the TV showing a pitch);
+- **Hook run on the camera (manual trigger): the mechanics work, and it accepted a non-field.** Two
+  looks agreed and bands were installed in 180 s — while the camera was looking at a TV showing a
+  dark navy web page. Outline found + one dominant colour + two looks agree = "a still scene of one
+  colour", not "a pitch". The case that matters at a game: camera left still, pointing elsewhere,
+  for three minutes after the settle wait, then put up. Nothing re-checks after install. NOT FIXED.
+  Camera left with `auto=0`, bands off.
+- **Next:** (0) decide the hook's missing check (re-look after install; stronger colour line from
+  the 23 archived games);
   (1) a live game or a real pitch: `fieldroi` on the camera's own snapshot, then the
   bands' effect in the recording — neither has been measured outdoors;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the

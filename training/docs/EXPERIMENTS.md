@@ -33,7 +33,24 @@ the bands off, waits `settle_secs` (60; Mark: the camera may not be fully extend
 yet), then looks up to five times and installs the bands only when two looks in a row agree;
 otherwise the encoder stays at stock. Bands go off again when recording stops, and at boot if the
 last session left them on. `verify/test_fieldroi_hook.sh`: 26 checks, eight deliberate breakages
-each caught, also run under the camera's busybox `ash`. Not run on the camera yet (build 4925).
+each caught, also run under the camera's busybox `ash`.
+
+**On the camera (build 4925 flashed the same day), manual trigger at home:** the mechanics work.
+Login with the credentials read from `S99_NetState`, snapshot, detector at 75 s per look, look 1
+`387..1732`, look 2 `390..1735`, "agrees", bands installed 180 s after the trigger, `S37_RoiQp`
+applied all three with matching kernel echoes; switched off again afterwards.
+
+**But what it accepted was not a field.** The camera was looking at a TV showing a dark navy web
+page. The detector returned an outline with scores 0.33–0.46 (the dome scores 0.30–0.45), the
+middle colour was R 62 G 68 B 90 (spread 28, just over the 24 needed to count as a colour) and
+95 % of the claimed rows matched it. Two looks at a still scene agree by construction. So the
+three checks together — outline found, one dominant colour, two looks agree — establish "a still
+scene dominated by one colour", not "a pitch". Harmless at home; at a game it matters in one
+case: the camera sits still pointing somewhere else (on the ground, at the sky) for the three
+minutes after the settle wait, gets bands for that, and is put up afterwards. Nothing re-checks
+after the bands are installed. Not fixed. Candidates: look again some minutes after installing and
+redo the detection if the field has moved; require a stronger colour (measured fields: spread 46
+to 118; needs the 23 archived games sampled before choosing a line).
 
 ## EXP-ENC-11: the field-colour check reads the colour from the field — blue turf accepted (2026-11-28)
 
