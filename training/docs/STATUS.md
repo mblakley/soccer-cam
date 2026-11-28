@@ -49,9 +49,16 @@
   outside. `fieldroi` runs on the camera (79–82 s, ~23 MB) and the snapshot → detector →
   `roi.conf` → daemon chain works with no hands. The kernel encodes at 30 Mbps when unbounded.
   Rate control is EVBR; the debug commands take FrameRate in thousandths.
-- **Camera left in a test state:** exposure Manual (shutter 125, gain 1) — restore Auto before a
-  game. Bitrate back at 20480, `gop=2`, window off. `fieldroi` + weights are in
-  `/mnt/sda/soccercam/bin/`.
+- **Session stopped 2026-11-27 ~22:15 local; camera left as found, apart from the firmware.**
+  Build 4922. Image settings restored field-for-field to the values saved at the start (exposure
+  Auto), encoder at 20480 kbps / `gop=2`, ROI window off (`roi.conf` has `enable=0`). Not recording:
+  `GetRecV20 enable=0`, netstate `home`, no override flag, newest file on the card is from
+  2026-08-22. Left on the card: `fieldroi` + weights in `/mnt/sda/soccercam/bin/`, plus `snap.jpg`,
+  `roi.conf`, `roi.log` and test outputs in `/mnt/sda/soccercam/`. The camera is at 192.168.86.22;
+  `shared_data/config.ini` still says .200.
+- **Not done:** a rerun of the ball test with the clip at full 4K size (the TV left the PC's
+  picture and the clip server was stopped for memory); the 4923 flash; the TTT hand-off's
+  `sc_probe` account test (both waiting on Mark's yes).
 - **Next:** (1) flash 4923 (ten windows; rebuilt with the daemon logging fix) — Mark's call;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole by the camera; send 2);
   (3) `fieldroi` on a real pitch — the grass check and the near-edge error are untested there;
