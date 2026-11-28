@@ -41,7 +41,7 @@ The pipeline is fully automatic after initial setup. It recovers from crashes, r
 
 ### Option 1: Windows Installer
 
-1. Download `VideoGrouperSetup.exe` from the [Releases](https://github.com/mblakley/soccer-cam/releases) page
+1. Download `SoccerCamSetup.exe` from the [Releases](https://github.com/mblakley/soccer-cam/releases) page
 2. Run the installer
 3. The service starts automatically. Open `http://localhost:8765` in your browser, complete the onboarding wizard at `/setup`, and adjust settings later from `/config`. The tray icon's "Open Dashboard" item points at the same URL.
 
@@ -74,7 +74,7 @@ docker compose build
 docker compose up -d
 ```
 
-The image is GPU-capable: ball detection auto-detects an available CUDA GPU and otherwise falls back to CPU — the same image runs on either host. To expose a host GPU to the container, use `docker run --gpus all video-grouper` or add the standard NVIDIA `deploy.resources.reservations.devices` block to your compose file. See [video_grouper/docs/docker/README.md](video_grouper/docs/docker/README.md) for prerequisites and verification.
+The image is GPU-capable: ball detection auto-detects an available CUDA GPU and otherwise falls back to CPU — the same image runs on either host. To expose a host GPU to the container, use `docker run --gpus all soccer-cam` or add the standard NVIDIA `deploy.resources.reservations.devices` block to your compose file. See [video_grouper/docs/docker/README.md](video_grouper/docs/docker/README.md) for prerequisites and verification.
 
 ## Configuration
 
@@ -180,7 +180,7 @@ uv run ruff format          # Format
 .\build-installer.ps1
 ```
 
-Creates `VideoGrouperService.exe`, `VideoGrouperTray.exe`, and `VideoGrouperSetup.exe`.
+Creates `SoccerCamService.exe`, `SoccerCamTray.exe`, and `SoccerCamSetup.exe`.
 
 ## Project Structure
 

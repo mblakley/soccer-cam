@@ -596,7 +596,7 @@ def _render_tray_section(storage: Path) -> str:
             "run on this install (Linux/Docker, or the configured "
             "<code>[PIPELINE]</code> has no tray step such as autocam), this "
             "is normal. If the tray IS running on this box but the log "
-            "isn't here, check <code>%LOCALAPPDATA%\\VideoGrouper\\logs\\"
+            "isn't here, check <code>%LOCALAPPDATA%\\SoccerCam\\logs\\"
             "</code> for the bootstrap fallback.</p>"
         )
     try:
@@ -1283,7 +1283,7 @@ def create_app(
 
     # Auto-upgrade API. Only mounted when the orchestrator passes a
     # processor reference -- tests and standalone runs (no
-    # VideoGrouperApp) skip it.
+    # SoccerCamApp) skip it.
     if update_processor is not None:
         from video_grouper.web.update_api import build_router as _build_update
 

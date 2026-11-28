@@ -89,7 +89,7 @@ class StateAuditor(PollingProcessor):
             self._download_processors = {}
         self.video_processor = video_processor
         self.ntfy_processor = ntfy_processor
-        # Attribute-injected by VideoGrouperApp after construction. None in
+        # Attribute-injected by SoccerCamApp after construction. None in
         # the tray and in tests, where nothing archives.
         self.archive_processor = None
 

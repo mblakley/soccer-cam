@@ -101,13 +101,13 @@ jobs:
         }
 
     # Multi-target spec builds service + tray sharing one _internal/.
-    # See video_grouper/installer/VideoGrouper.spec for the analysis,
+    # See video_grouper/installer/SoccerCam.spec for the analysis,
     # MERGE, and COLLECT setup, plus the rationale for each module exclude.
     - name: Build service + tray executables
       run: |
         uv run pyinstaller --noconfirm `
           --distpath=video_grouper/dist --workpath=video_grouper/build `
-          video_grouper/installer/VideoGrouper.spec
+          video_grouper/installer/SoccerCam.spec
 
     - name: Install NSIS
       run: choco install nsis -y
@@ -119,9 +119,9 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
       with:
-        name: VideoGrouper-${{ env.VERSION }}-${{ env.BUILD_NUMBER }}
+        name: SoccerCam-${{ env.VERSION }}-${{ env.BUILD_NUMBER }}
         path: |
-          video_grouper/dist/VideoGrouperSetup.exe
+          video_grouper/dist/SoccerCamSetup.exe
 
   release:
     name: Create Release
@@ -135,7 +135,7 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v8
       with:
-        name: VideoGrouper-${{ needs.build.outputs.version }}-${{ needs.build.outputs.build_number }}
+        name: SoccerCam-${{ needs.build.outputs.version }}-${{ needs.build.outputs.build_number }}
         path: artifacts
 
     - name: Create or update GitHub Release
@@ -143,11 +143,11 @@ jobs:
       with:
         tag_name: ${{ github.ref_name }}
         body: |
-          # VideoGrouper ${{ needs.build.outputs.version }}
+          # Soccer-Cam ${{ needs.build.outputs.version }}
 
           ## Windows Installer
-          Download and run `VideoGrouperSetup.exe` to install the Windows application.
+          Download and run `SoccerCamSetup.exe` to install the Windows application.
         files: |
-          artifacts/VideoGrouperSetup.exe
+          artifacts/SoccerCamSetup.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

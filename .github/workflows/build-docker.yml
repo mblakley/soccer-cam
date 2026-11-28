@@ -64,11 +64,11 @@ jobs:
         file: ./video_grouper/Dockerfile
         push: true
         tags: |
-          ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:latest
-          ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:${{ env.VERSION }}
-          ${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:dev-${{ env.BUILD_NUMBER }}
-        cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:buildcache
-        cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/video-grouper:buildcache,mode=max
+          ${{ secrets.DOCKERHUB_USERNAME }}/soccer-cam:latest
+          ${{ secrets.DOCKERHUB_USERNAME }}/soccer-cam:${{ env.VERSION }}
+          ${{ secrets.DOCKERHUB_USERNAME }}/soccer-cam:dev-${{ env.BUILD_NUMBER }}
+        cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/soccer-cam:buildcache
+        cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/soccer-cam:buildcache,mode=max
         build-args: |
           VERSION=${{ env.VERSION }}
           BUILD_NUMBER=${{ env.BUILD_NUMBER }}

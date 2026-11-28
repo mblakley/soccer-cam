@@ -23,7 +23,7 @@ class CommandExecutor:
     def __init__(self, app):
         """
         Args:
-            app: VideoGrouperApp instance (for camera/processor access)
+            app: SoccerCamApp instance (for camera/processor access)
         """
         self.app = app
 

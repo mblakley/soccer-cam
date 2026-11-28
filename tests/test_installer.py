@@ -114,7 +114,7 @@ def test_the_service_is_deregistered_not_merely_stopped():
     a path that no longer exists."""
     un = _uninstall()
     assert '.exe" remove' in un or "sc.exe delete" in un, (
-        "the uninstaller must deregister VideoGrouperService, not just stop it"
+        "the uninstaller must deregister SoccerCamService, not just stop it"
     )
 
 
@@ -153,7 +153,7 @@ def test_install_dir_reg_key_reads_a_value_the_installer_writes():
 
 @pytest.mark.parametrize(
     "shipped",
-    ["VideoGrouperService.exe", "VideoGrouperTray.exe", "_internal", "icon.ico"],
+    ["SoccerCamService.exe", "SoccerCamTray.exe", "_internal", "icon.ico"],
 )
 def test_each_shipped_artefact_is_named_by_the_uninstaller(shipped: str):
     """RMDir "$INSTDIR" is not recursive, so anything the uninstaller does not
@@ -194,8 +194,8 @@ def _harness_source(out_exe: Path) -> str:
             '    File "..\\icon.ico"',
             '    CreateDirectory "$INSTDIR\\_internal"',
             '    File /oname=_internal\\payload.bin "..\\icon.ico"',
-            '    File /oname=VideoGrouperService.exe "..\\icon.ico"',
-            '    File /oname=VideoGrouperTray.exe "..\\icon.ico"',
+            '    File /oname=SoccerCamService.exe "..\\icon.ico"',
+            '    File /oname=SoccerCamTray.exe "..\\icon.ico"',
             '    WriteUninstaller "$INSTDIR\\uninstall.exe"',
             "SectionEnd",
             "",
@@ -204,7 +204,7 @@ def _harness_source(out_exe: Path) -> str:
     )
     harness = head + stub + uninstall
     return harness.replace(
-        'OutFile "..\\dist\\VideoGrouperSetup.exe"',
+        'OutFile "..\\dist\\SoccerCamSetup.exe"',
         f'OutFile "{out_exe}"',
     )
 
@@ -294,10 +294,10 @@ def test_the_real_script_compiles(tmp_path):
     """A syntax error in installer.nsi otherwise surfaces at release time.
 
     Compiles the real script, payload and all. The output is redirected into
-    tmp_path: left alone it writes ../dist/VideoGrouperSetup.exe, and a test
+    tmp_path: left alone it writes ../dist/SoccerCamSetup.exe, and a test
     must not overwrite the release artefact sitting there.
     """
-    dist = NSI.parents[1] / "dist" / "VideoGrouper"
+    dist = NSI.parents[1] / "dist" / "SoccerCam"
     if not dist.is_dir():
         pytest.skip(f"no built payload at {dist}")
 
@@ -305,7 +305,7 @@ def test_the_real_script_compiles(tmp_path):
     probe = NSI.parent / "_pytest_compile.nsi"
     probe.write_text(
         _source().replace(
-            'OutFile "..\\dist\\VideoGrouperSetup.exe"', f'OutFile "{out_exe}"'
+            'OutFile "..\\dist\\SoccerCamSetup.exe"', f'OutFile "{out_exe}"'
         ),
         encoding="utf-8",
     )
@@ -335,7 +335,7 @@ def test_the_real_script_compiles(tmp_path):
 # are read back from the registry here rather than composed in the test, so
 # what is exercised is what the installer actually registers.
 
-_ARP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VideoGrouper"
+_ARP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\SoccerCam"
 
 
 def _registered_values(install_dir: Path) -> dict[str, str]:
@@ -365,7 +365,7 @@ def _arp_entry(install_dir: Path):
     with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, _ARP_KEY) as key:
         for name, value in values.items():
             winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
-        winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "VideoGrouper")
+        winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "SoccerCam")
     try:
         yield values
     finally:
@@ -607,3 +607,36 @@ def test_a_silent_uninstall_shows_no_window(tmp_path, flags):
 
 if sys.platform != "win32":  # pragma: no cover - the installer is Windows-only
     pytestmark = pytest.mark.skip(reason="NSIS installer is Windows-only")
+
+
+def test_service_bundle_ships_web_static_dir():
+    """The service serves the web UI, which mounts ``video_grouper/web/static``.
+
+    PyInstaller only bundles Python modules unless told otherwise, so a build
+    without this ``datas`` entry installs a service whose dashboard never
+    starts. That shipped unnoticed in every build after the shared stylesheet
+    landed; unit tests run from source, where the directory always exists.
+    """
+    from video_grouper.web import chrome
+
+    spec = (NSI.parent / "SoccerCam.spec").read_text(encoding="utf-8")
+    assert chrome.STATIC_DIR.is_dir() and any(chrome.STATIC_DIR.iterdir())
+    assert '"video_grouper", "web", "static"' in spec
+    assert "datas=PHASE_MODEL_DATAS + WEB_STATIC_DATAS" in spec
+
+
+def test_service_bundle_collects_integration_port_sources():
+    """Ports find their implementations by scanning ``<port>/sources`` at
+    runtime; nothing imports them statically, so the spec must collect them
+    or the frozen service cannot build any port and exits at startup."""
+    from video_grouper.integrations import registry
+    from video_grouper.integrations.entitlements import IEntitlements
+
+    spec = (NSI.parent / "SoccerCam.spec").read_text(encoding="utf-8")
+    assert 'collect_submodules("video_grouper.integrations")' in spec
+    service = spec[spec.index("a_service = Analysis(") :]
+    assert service.index("hiddenimports=INTEGRATION_SOURCES") < service.index(
+        "a_tray = Analysis("
+    )
+    # The scan really is the only thing that loads them.
+    assert {"none", "ttt"} <= set(registry.implementations(IEntitlements))

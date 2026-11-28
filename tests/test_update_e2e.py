@@ -91,9 +91,9 @@ async def _always_idle() -> tuple[bool, str | None]:
 
 @pytest.fixture
 def fake_installer(tmp_path) -> Path:
-    """Stand-in for VideoGrouperSetup.exe. Real PE header + 3MB
+    """Stand-in for SoccerCamSetup.exe. Real PE header + 3MB
     filler so the streaming download loop iterates a few times."""
-    p = tmp_path / "VideoGrouperSetup.exe"
+    p = tmp_path / "SoccerCamSetup.exe"
     p.write_bytes(b"MZ" + b"\x00" * (3 * 1024 * 1024))
     return p
 
@@ -166,7 +166,7 @@ async def test_full_pipeline_against_local_mock(tmp_path, monkeypatch, release_s
     mock_popen.assert_called_once()
     cmd = mock_popen.call_args[0][0]
     assert cmd[-1] == "/S"
-    assert "VideoGrouperSetup.exe" in cmd[0]
+    assert "SoccerCamSetup.exe" in cmd[0]
     shutdown.assert_called_once()
 
 

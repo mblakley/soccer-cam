@@ -1,4 +1,4 @@
-# Build script for VideoGrouper installer
+# Build script for the Soccer-Cam installer
 
 # Configuration — version is sourced from video_grouper/version.py (single master)
 $BUILD_NUMBER = "0"
@@ -87,9 +87,9 @@ if (-not (Test-Path $NSIS_PATH)) {
 }
 
 # Build service + tray from the merged spec. installer.nsi pulls in
-# `dist/VideoGrouper/*` (one directory with both exes + a single shared
+# `dist/SoccerCam/*` (one directory with both exes + a single shared
 # `_internal/`) -- the per-target specs would write to
-# dist/VideoGrouperService/ and dist/VideoGrouperTray/ separately, leaving
+# dist/SoccerCamService/ and dist/SoccerCamTray/ separately, leaving
 # the installer's `File /r` unable to find anything. CI uses the same
 # combined spec; keep this build in lockstep.
 # Ensure the LFS-tracked person model is materialized (not a pointer) so the
@@ -103,7 +103,7 @@ if ((Test-Path $MODEL_PATH) -and ((Get-Item $MODEL_PATH).Length -gt 1MB)) {
     Write-Warning "  person model missing/pointer; phase detection will degrade (ok=false)."
 }
 
-$MERGED_SPEC = Join-Path $SCRIPT_DIR "video_grouper\installer\VideoGrouper.spec"
+$MERGED_SPEC = Join-Path $SCRIPT_DIR "video_grouper\installer\SoccerCam.spec"
 Write-Host "Building service + tray executables (merged spec)..."
 uv run pyinstaller --noconfirm --distpath=$DIST_DIR --workpath=$BUILD_DIR $MERGED_SPEC
 

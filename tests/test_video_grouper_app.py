@@ -1,4 +1,4 @@
-"""Integration tests for the refactored VideoGrouperApp."""
+"""Integration tests for the refactored SoccerCamApp."""
 
 import os
 import tempfile
@@ -26,7 +26,7 @@ from video_grouper.utils.config import (
     YouTubeConfig,
 )
 from video_grouper.utils.logger import close_loggers
-from video_grouper.video_grouper_app import VideoGrouperApp
+from video_grouper.video_grouper_app import SoccerCamApp
 
 
 @pytest.fixture(autouse=True)
@@ -109,7 +109,7 @@ def create_mock_youtube_upload_task(group_dir: str) -> YoutubeUploadTask:
 
 
 def shutdown_app(app):
-    """Helper function to properly shutdown a VideoGrouperApp instance."""
+    """Helper function to properly shutdown a SoccerCamApp instance."""
     import asyncio
 
     try:
@@ -131,12 +131,12 @@ def shutdown_app(app):
             close_loggers()
 
 
-class TestVideoGrouperAppRefactored:
-    """Test the refactored VideoGrouperApp."""
+class TestSoccerCamAppRefactored:
+    """Test the refactored SoccerCamApp."""
 
     def test_initialization(self, mock_config, mock_camera):
-        """Test VideoGrouperApp initialization."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        """Test SoccerCamApp initialization."""
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         assert app.config == mock_config
         assert app.camera == mock_camera
@@ -161,13 +161,13 @@ class TestVideoGrouperAppRefactored:
         shutdown_app(app)
 
     def test_initialization_with_camera_creation(self, mock_config):
-        """Test VideoGrouperApp initialization with automatic camera creation."""
+        """Test SoccerCamApp initialization with automatic camera creation."""
         with patch("video_grouper.cameras.dahua.DahuaCamera") as mock_dahua:
             mock_camera_instance = Mock()
             mock_camera_instance.close = AsyncMock()
             mock_dahua.return_value = mock_camera_instance
 
-            app = VideoGrouperApp(mock_config)
+            app = SoccerCamApp(mock_config)
 
             assert app.camera == mock_camera_instance
             mock_dahua.assert_called_once()
@@ -178,7 +178,7 @@ class TestVideoGrouperAppRefactored:
     @pytest.mark.asyncio
     async def test_processor_lifecycle(self, mock_config, mock_camera):
         """Test processor lifecycle management."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         # Initialize should start all processors
         await app.initialize()
@@ -200,7 +200,7 @@ class TestVideoGrouperAppRefactored:
     @pytest.mark.asyncio
     async def test_add_download_task(self, mock_config, mock_camera):
         """Test adding download task through convenience method."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             recording_file = RecordingFile(
@@ -220,7 +220,7 @@ class TestVideoGrouperAppRefactored:
     @pytest.mark.asyncio
     async def test_add_video_task(self, mock_config, mock_camera):
         """Test adding video task through convenience method."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             combine_task = CombineTask(group_dir="/test/path")
@@ -236,7 +236,7 @@ class TestVideoGrouperAppRefactored:
     @pytest.mark.asyncio
     async def test_add_youtube_task(self, mock_config, mock_camera):
         """Test adding YouTube task through convenience method."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             upload_task = create_mock_youtube_upload_task("/test/path/group")
@@ -250,7 +250,7 @@ class TestVideoGrouperAppRefactored:
 
     def test_get_queue_sizes(self, mock_config, mock_camera):
         """Test getting queue sizes."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             sizes = app.get_queue_sizes()
@@ -279,7 +279,7 @@ class TestVideoGrouperAppRefactored:
         ``get_queue_size`` / ``get_in_progress_summary`` API as the rest."""
         from unittest.mock import MagicMock
 
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
         try:
             # Inject minimal TTT processor doubles so the code paths that
             # used to reach into the gone-after-refactor attributes execute.
@@ -305,7 +305,7 @@ class TestVideoGrouperAppRefactored:
 
     def test_get_processor_status(self, mock_config, mock_camera):
         """Test getting processor status."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             status = app.get_processor_status()
@@ -338,7 +338,7 @@ class TestVideoGrouperAppRefactored:
     @pytest.mark.asyncio
     async def test_integration_workflow(self, mock_config, mock_camera, temp_storage):
         """Test a complete workflow integration."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             # Use mock paths instead of creating actual files
@@ -378,7 +378,7 @@ class TestVideoGrouperAppRefactored:
 
         try:
             with pytest.raises(ValueError, match="Unknown camera type"):
-                VideoGrouperApp(mock_config)
+                SoccerCamApp(mock_config)
         finally:
             # Ensure loggers are closed even if exception occurs
             from video_grouper.utils.logger import close_loggers
@@ -388,7 +388,7 @@ class TestVideoGrouperAppRefactored:
     @pytest.mark.asyncio
     async def test_camera_close_on_shutdown(self, mock_config, mock_camera):
         """Test that camera is properly closed on shutdown."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             await app.initialize()
@@ -402,7 +402,7 @@ class TestVideoGrouperAppRefactored:
     @pytest.mark.asyncio
     async def test_storage_path_handling(self, mock_config, mock_camera):
         """Test storage path is properly handled."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             # Storage path should be absolute
@@ -448,7 +448,7 @@ class TestVideoGrouperAppRefactored:
         )
 
         try:
-            app = VideoGrouperApp(ntfy_config, camera=mock_camera)
+            app = SoccerCamApp(ntfy_config, camera=mock_camera)
 
             # VideoProcessor should have match_info_service and ntfy_processor wired
             assert app.video_processor.match_info_service is not None
@@ -460,7 +460,7 @@ class TestVideoGrouperAppRefactored:
         self, mock_config, mock_camera
     ):
         """When NTFY is disabled, VideoProcessor should have None for services."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             assert app.video_processor.match_info_service is None
@@ -501,7 +501,7 @@ class TestVideoGrouperAppRefactored:
         )
 
         try:
-            app = VideoGrouperApp(ntfy_config, camera=mock_camera)
+            app = SoccerCamApp(ntfy_config, camera=mock_camera)
 
             # UploadProcessor should have ntfy_service wired
             assert app.upload_processor.ntfy_service is not None
@@ -512,7 +512,7 @@ class TestVideoGrouperAppRefactored:
         self, mock_config, mock_camera
     ):
         """When NTFY is disabled, UploadProcessor should have None for ntfy_service."""
-        app = VideoGrouperApp(mock_config, camera=mock_camera)
+        app = SoccerCamApp(mock_config, camera=mock_camera)
 
         try:
             assert app.upload_processor.ntfy_service is None
@@ -576,7 +576,7 @@ class TestPipelinePlacement:
 
     def test_inactive_does_not_instantiate_processors(self, temp_storage, mock_camera):
         cfg = self._config_with_pipeline(temp_storage, enabled=False)
-        app = VideoGrouperApp(cfg, camera=mock_camera)
+        app = SoccerCamApp(cfg, camera=mock_camera)
         try:
             assert app.pipeline_processor is None
             assert app.pipeline_discovery_processor is None
@@ -586,7 +586,7 @@ class TestPipelinePlacement:
 
     def test_active_pipeline_runs_in_service(self, temp_storage, mock_camera):
         cfg = self._config_with_pipeline(temp_storage, enabled=True)
-        app = VideoGrouperApp(cfg, camera=mock_camera)
+        app = SoccerCamApp(cfg, camera=mock_camera)
         try:
             assert app.pipeline_processor is not None
             assert app.pipeline_discovery_processor is not None
@@ -607,4 +607,4 @@ class TestPipelinePlacement:
         )
         with patch("platform.system", return_value="Linux"):
             with pytest.raises(RuntimeError, match="runtime='tray'"):
-                VideoGrouperApp(cfg, camera=mock_camera)
+                SoccerCamApp(cfg, camera=mock_camera)

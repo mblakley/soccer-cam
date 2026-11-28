@@ -80,7 +80,7 @@ COPY video_grouper/ /app/video_grouper/
 
 ENV PATH="/app/.venv/bin:${PATH}"
 
-RUN printf '"""Version information for VideoGrouper."""\nVERSION = "%s"\nBUILD_NUMBER = "%s"\nFULL_VERSION = f"{VERSION}+{BUILD_NUMBER}"\n__version__ = VERSION\n__version_full__ = FULL_VERSION\n' \
+RUN printf '"""Version information for Soccer-Cam."""\nVERSION = "%s"\nBUILD_NUMBER = "%s"\nFULL_VERSION = f"{VERSION}+{BUILD_NUMBER}"\n__version__ = VERSION\n__version_full__ = FULL_VERSION\n' \
         "${VERSION}" "${BUILD_NUMBER}" > /app/video_grouper/version.py
 
 ENV VERSION=${VERSION}

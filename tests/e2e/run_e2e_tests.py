@@ -59,7 +59,7 @@ def run_standalone():
 
 
 def main():
-    print("Video Grouper End-to-End Test Runner")
+    print("Soccer-Cam End-to-End Test Runner")
     setup_test_environment()
     mode = sys.argv[1].lower() if len(sys.argv) > 1 else "standalone"
     success = False

@@ -452,7 +452,7 @@ def _default_storage_path() -> str:
     """
     if os.name == "nt":
         program_data = os.environ.get("ProgramData", r"C:\ProgramData")
-        return os.path.join(program_data, "VideoGrouper", "storage")
+        return os.path.join(program_data, "SoccerCam", "storage")
     return "/shared_data"
 
 

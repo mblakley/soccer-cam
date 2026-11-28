@@ -56,7 +56,7 @@ class UpdateJournalEntry:
       ``outcome == "deferred"`` (e.g. "download_queue depth=2").
     - ``nsis_phase`` / ``nsis_tail``: populated by the post-upgrade
       service when it reads the previous attempt's marker file and log
-      from ``%LOCALAPPDATA%\\VideoGrouper\\update\\``.
+      from ``%LOCALAPPDATA%\\SoccerCam\\update\\``.
     """
 
     id: str

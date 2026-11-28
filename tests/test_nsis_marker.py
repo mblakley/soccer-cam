@@ -56,5 +56,5 @@ def test_default_path_uses_program_data(monkeypatch):
     path = nsis_marker_path()
     assert "TestProgramData" in str(path)
     assert path.name == "nsis-phase.txt"
-    assert "VideoGrouper" in path.parts
+    assert "SoccerCam" in path.parts
     assert "update" in path.parts

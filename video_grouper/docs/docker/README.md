@@ -1,6 +1,6 @@
-# Docker Setup for VideoGrouper
+# Docker Setup for Soccer-Cam
 
-This document explains how to run VideoGrouper in Docker on Linux (or Windows via Docker Desktop's WSL2 backend). It covers:
+This document explains how to run Soccer-Cam in Docker on Linux (or Windows via Docker Desktop's WSL2 backend). It covers:
 
 - [Quick start](#quick-start) — get the pipeline running, no ball detection
 - [Volume mounts](#volume-mounts) — where data goes in and out
@@ -35,7 +35,7 @@ docker compose up -d
 #    pipeline status.
 
 # 4. Watch the logs
-docker compose logs -f video-grouper
+docker compose logs -f soccer-cam
 ```
 
 ### Path B: hand-edit `config.ini`
@@ -50,7 +50,7 @@ cp video_grouper/config.ini.dist shared_data/config.ini
 
 docker compose build
 docker compose up -d
-docker compose logs -f video-grouper
+docker compose logs -f soccer-cam
 ```
 
 The container polls the camera, downloads new clips, combines/trims them, prompts for game start/end via NTFY, and uploads to YouTube. Standard pipeline.
@@ -61,7 +61,7 @@ To rebuild from a specific version tag:
 docker build \
   --build-arg VERSION=1.0.0 \
   --build-arg BUILD_NUMBER=123 \
-  -t video-grouper -f video_grouper/Dockerfile .
+  -t soccer-cam -f video_grouper/Dockerfile .
 ```
 
 ---
@@ -166,7 +166,7 @@ auth_server_bind = 127.0.0.1
 auth_server_port = 8765
 ```
 
-In `docker-compose.yaml`, uncomment the port mapping for the `video-grouper` service:
+In `docker-compose.yaml`, uncomment the port mapping for the `soccer-cam` service:
 
 ```yaml
     ports:
@@ -200,7 +200,7 @@ GPU mode (requires NVIDIA Container Toolkit on the host; Docker Desktop on Windo
 ```bash
 docker run --rm --gpus all \
   -v $(pwd)/shared_data:/app/shared_data \
-  video-grouper
+  soccer-cam
 ```
 
 Or, to keep using `docker compose` with GPU, append a `deploy.resources.reservations.devices` block to your local `docker-compose.yaml` (it's intentionally not in the default — see [GPU acceleration](#gpu-acceleration)).
@@ -225,7 +225,7 @@ Plaintext model bytes never touch the disk.
 After a game runs through, check the logs:
 
 ```bash
-docker compose logs video-grouper | grep -E "ONNX session using|licensed.*tier"
+docker compose logs soccer-cam | grep -E "ONNX session using|licensed.*tier"
 # Expected on a GPU host:
 #   detect: licensed premium.video.ball_detection v0.1.0 (premium, provider=CUDAExecutionProvider)
 #   ONNX session using: ['CUDAExecutionProvider', 'CPUExecutionProvider']
@@ -288,7 +288,7 @@ The default `docker-compose.yaml` does **not** request a GPU because compose har
 
 ```yaml
 services:
-  video-grouper:
+  soccer-cam:
     deploy:
       resources:
         reservations:

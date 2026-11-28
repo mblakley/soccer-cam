@@ -1,4 +1,4 @@
-"""Windows Service wrapper for VideoGrouper."""
+"""Windows Service wrapper for Soccer-Cam."""
 
 import asyncio
 import logging
@@ -22,7 +22,7 @@ def _resolve_storage_cwd(config: "Config") -> Path:
 
     Must be the configured ``[STORAGE] path`` rather than the
     config-file's parent. The two are usually different: config.ini
-    lives under ``%ProgramData%\\VideoGrouper`` (for write-access
+    lives under ``%ProgramData%\\SoccerCam`` (for write-access
     reasons), but the user's storage tree is typically on a separate
     drive. If CWD points at the config dir, then DirectoryState's
     bare-basename fallback and any ``.lock`` file written via a
@@ -32,9 +32,9 @@ def _resolve_storage_cwd(config: "Config") -> Path:
     return Path(config.storage.path)
 
 
-class VideoGrouperService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "VideoGrouperService"
-    _svc_display_name_ = "VideoGrouper Service"
+class SoccerCamService(win32serviceutil.ServiceFramework):
+    _svc_name_ = "SoccerCamService"
+    _svc_display_name_ = "Soccer-Cam Service"
     _svc_description_ = "Automated soccer video processing pipeline"
 
     def __init__(self, args):
@@ -68,7 +68,7 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
         from video_grouper.utils.config import load_config
         from video_grouper.utils.locking import FileLock
         from video_grouper.utils.logger import setup_logging
-        from video_grouper.video_grouper_app import VideoGrouperApp
+        from video_grouper.video_grouper_app import SoccerCamApp
 
         setup_logging(level="INFO", app_name="video_grouper")
         logger = logging.getLogger(__name__)
@@ -84,9 +84,7 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
             try:
                 import winreg
 
-                key = winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE, r"Software\VideoGrouper"
-                )
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\SoccerCam")
                 storage_path = winreg.QueryValueEx(key, "StoragePath")[0]
                 winreg.CloseKey(key)
                 config_path = Path(storage_path) / "config.ini"
@@ -94,12 +92,12 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
                 pass
 
         if not config_path or not config_path.exists():
-            # Fallback to %PROGRAMDATA%\VideoGrouper. Writing config + state
+            # Fallback to %PROGRAMDATA%\SoccerCam. Writing config + state
             # under Program Files (the install dir) requires admin and litters
             # protected paths; ProgramData is the canonical Windows home for
             # per-machine app state.
             program_data = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
-            config_path = program_data / "VideoGrouper" / "config.ini"
+            config_path = program_data / "SoccerCam" / "config.ini"
 
         if not config_path.exists():
             # Phase 2 done-criterion: a fresh shared_data with no
@@ -130,14 +128,14 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
         # correctly. Windows services default to C:\WINDOWS\system32 which
         # breaks state.json lock files, video paths, and everything else.
         # NOTE: must use config.storage.path, not config_path.parent --
-        # the config typically lives under %ProgramData%\VideoGrouper but
+        # the config typically lives under %ProgramData%\SoccerCam but
         # the storage tree is usually on a separate drive.
         storage_dir = _resolve_storage_cwd(config)
         storage_dir.mkdir(parents=True, exist_ok=True)
         os.chdir(storage_dir)
         logger.info(f"Set working directory to {storage_dir}")
 
-        app = VideoGrouperApp(config, config_path=config_path)
+        app = SoccerCamApp(config, config_path=config_path)
 
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -157,10 +155,10 @@ class VideoGrouperService(win32serviceutil.ServiceFramework):
 def main():
     if len(sys.argv) == 1:
         servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(VideoGrouperService)
+        servicemanager.PrepareToHostSingle(SoccerCamService)
         servicemanager.StartServiceCtrlDispatcher()
     else:
-        win32serviceutil.HandleCommandLine(VideoGrouperService)
+        win32serviceutil.HandleCommandLine(SoccerCamService)
 
 
 if __name__ == "__main__":
