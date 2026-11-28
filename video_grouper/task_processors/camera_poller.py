@@ -384,23 +384,22 @@ class CameraPoller(PollingProcessor):
 
         self._last_poll_found_files = True
 
-        # Cap the number of files per poll to avoid overwhelming the pipeline.
-        # Sort by start time FIRST: the camera's own ordering is not
-        # guaranteed, so an unsorted slice keeps an arbitrary subset — which a
-        # wide first-run scan makes very visible. Sorting makes the cap mean
-        # "the oldest N", so ingest proceeds in recording order and the
-        # watermark can actually advance through the backlog poll by poll.
-        # startTime is zero-padded "%Y-%m-%d %H:%M:%S", so lexicographic
+        # `max_files_per_poll` caps how many files this poll QUEUES, and is
+        # applied inside the loop below once a file is known to be new work.
+        # Capping the raw listing instead starved discovery: while the
+        # watermark is held, every poll re-lists the recordings behind the
+        # hold, those already-known files filled the cap every time, and a
+        # newer recording was never reached at all.
+        #
+        # Sort by start time so the cap means "the oldest N new files": the
+        # camera's own ordering is not guaranteed, and ingesting in recording
+        # order is what lets the watermark advance through a backlog poll by
+        # poll. startTime is zero-padded "%Y-%m-%d %H:%M:%S", so lexicographic
         # ordering is chronological.
         files.sort(key=lambda f: str(f.get("startTime") or ""))
         max_files = getattr(self.config.app, "max_files_per_poll", 50)
-        if len(files) > max_files:
-            logger.warning(
-                f"CAMERA_POLLER: Found {len(files)} files, truncating to {max_files}"
-            )
-            files = files[:max_files]
 
-        logger.info(f"CAMERA_POLLER: Found {len(files)} new files to process.")
+        logger.info(f"CAMERA_POLLER: Camera listed {len(files)} file(s).")
         existing_dirs = [
             os.path.join(self.storage_path, d)
             for d in os.listdir(self.storage_path)
@@ -425,6 +424,8 @@ class CameraPoller(PollingProcessor):
             "home_connected": 0,
             "unparseable": 0,
             "settled": 0,
+            # New work beyond max_files_per_poll; picked up by a later poll.
+            "deferred": 0,
         }
 
         # Get connected timeframes for filtering
@@ -532,6 +533,26 @@ class CameraPoller(PollingProcessor):
                     )
                     continue
 
+                # Already known? A pure lookup, so a file that is NOT queued
+                # below (deferred by the cap) never leaves an empty group
+                # directory behind.
+                known_group = find_existing_group_for(file_start_time, existing_dirs)
+                if known_group is not None and DirectoryState(
+                    known_group
+                ).is_file_in_state(os.path.join(known_group, filename)):
+                    counts["already_known"] += 1
+                    logger.debug(
+                        "CAMERA_POLLER: File %s (end=%s) already known; not re-queued.",
+                        filename,
+                        file_end_time,
+                    )
+                    continue
+
+                # The cap counts only files that would actually be queued.
+                if counts["new_added"] >= max_files:
+                    counts["deferred"] += 1
+                    continue
+
                 group_dir = find_group_directory(
                     file_start_time, self.storage_path, existing_dirs
                 )
@@ -539,17 +560,7 @@ class CameraPoller(PollingProcessor):
                     existing_dirs.append(group_dir)
 
                 local_path = os.path.join(group_dir, filename)
-
                 dir_state = DirectoryState(group_dir)
-                if dir_state.is_file_in_state(local_path):
-                    counts["already_known"] += 1
-                    logger.info(
-                        "CAMERA_POLLER: File %s (end=%s) already known; "
-                        "HWM advanced past it, no re-download.",
-                        filename,
-                        file_end_time,
-                    )
-                    continue
 
                 counts["new_added"] += 1
 
@@ -611,22 +622,31 @@ class CameraPoller(PollingProcessor):
         total_seen = sum(counts.values())
         logger.info(
             "CAMERA_POLLER: poll summary -- %d files seen "
-            "(new=%d already_known=%d settled=%d runt=%d home_connected=%d "
-            "unparseable=%d)",
+            "(new=%d already_known=%d settled=%d deferred=%d runt=%d "
+            "home_connected=%d unparseable=%d)",
             total_seen,
             counts["new_added"],
             counts["already_known"],
             counts["settled"],
+            counts["deferred"],
             counts["runt"],
             counts["home_connected"],
             counts["unparseable"],
         )
+        if counts["deferred"]:
+            logger.info(
+                "CAMERA_POLLER: queued %d new file(s) (max_files_per_poll); "
+                "%d more deferred to later polls.",
+                counts["new_added"],
+                counts["deferred"],
+            )
 
         if (
             total_seen > 0
             and not counts["new_added"]
             and not counts["already_known"]
             and not counts["settled"]
+            and not counts["deferred"]
         ):
             # Every file the camera returned was discarded as a runt, home
             # footage, or unparseable. Nothing was queued, so nothing can ever

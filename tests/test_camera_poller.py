@@ -1649,3 +1649,123 @@ class TestCompletionWatermark:
         await poller._reconcile_files_from_camera()
 
         poller.download_processor.add_work.assert_not_called()
+
+
+def _camera_listing(name: str, start: datetime, end: datetime) -> dict:
+    """One entry as a camera's get_file_list returns it."""
+    return {
+        "path": f"/{name}",
+        "startTime": start.strftime("%Y-%m-%d %H:%M:%S"),
+        "endTime": end.strftime("%Y-%m-%d %H:%M:%S"),
+        "size": 5_000_000,
+    }
+
+
+async def _write_contiguous_group(storage, group_name, names, base, status):
+    """A group of back-to-back 30-minute recordings, all at *status*.
+
+    Path.mkdir, not os.makedirs: conftest patches the latter to a no-op.
+    Returns the (name, start, end) triples so a test can list them on the
+    camera too.
+    """
+    group_dir = os.path.join(storage, group_name)
+    Path(group_dir).mkdir(parents=True, exist_ok=True)
+    dir_state = DirectoryState(group_dir)
+    triples = []
+    for i, name in enumerate(names):
+        start = base + timedelta(minutes=30 * i)
+        end = start + timedelta(minutes=30)
+        path = os.path.join(group_dir, name)
+        await dir_state.add_file(
+            path,
+            RecordingFile(
+                start_time=start,
+                end_time=end,
+                file_path=path,
+                status=status,
+                metadata={"path": f"/{name}", "camera_name": "default"},
+            ),
+        )
+        triples.append((name, start, end))
+    return group_dir, triples
+
+
+class TestPerPollCapCountsOnlyNewWork:
+    """``max_files_per_poll`` bounds what a poll *queues*, not what it reads.
+
+    While the watermark is held (a download in flight, a stuck file), every
+    poll re-lists the recordings behind the hold. Capping the raw listing
+    meant those same already-known files filled the cap on every poll and a
+    newer recording was never discovered at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_files_held_behind_the_watermark_do_not_starve_new_ones(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        mock_config.app.max_files_per_poll = 3
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        # Five known, unsettled recordings (the watermark is held on them).
+        _, known = await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            [f"known{i}.dav" for i in range(5)],
+            base,
+            "pending",
+        )
+        # Two genuinely new recordings, a separate session later that day.
+        later = base + timedelta(hours=6)
+        new = [
+            ("new0.dav", later, later + timedelta(minutes=30)),
+            (
+                "new1.dav",
+                later + timedelta(minutes=30),
+                later + timedelta(minutes=60),
+            ),
+        ]
+        mock_camera.get_file_list = AsyncMock(
+            return_value=[_camera_listing(n, s, e) for n, s, e in known + new]
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        await poller._update_latest_processed_time(base - timedelta(hours=1))
+
+        await poller._sync_files_from_camera()
+
+        queued = sorted(
+            os.path.basename(c.args[0].file_path)
+            for c in poller.download_processor.add_work.call_args_list
+        )
+        assert queued == ["new0.dav", "new1.dav"], (
+            "the cap was consumed by already-known files and the new "
+            f"recordings were never discovered; queued={queued}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cap_still_bounds_new_work_oldest_first(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        mock_config.app.max_files_per_poll = 2
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        listing = [
+            _camera_listing(
+                f"n{i}.dav",
+                base + timedelta(minutes=30 * i),
+                base + timedelta(minutes=30 * (i + 1)),
+            )
+            for i in range(4)
+        ]
+        # Camera order is not guaranteed; hand them back newest-first.
+        mock_camera.get_file_list = AsyncMock(return_value=list(reversed(listing)))
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._sync_files_from_camera()
+
+        queued = [
+            os.path.basename(c.args[0].file_path)
+            for c in poller.download_processor.add_work.call_args_list
+        ]
+        assert queued == ["n0.dav", "n1.dav"]
