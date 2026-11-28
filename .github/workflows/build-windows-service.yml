@@ -14,6 +14,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       build_number: ${{ steps.version.outputs.build_number }}
+    env:
+      # The NSIS release the installer is built with (see "Cache NSIS").
+      NSIS_VERSION: "3.13"
+      NSIS_SHA256: ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8
 
     steps:
     - uses: actions/checkout@v7
@@ -109,12 +113,53 @@ jobs:
           --distpath=video_grouper/dist --workpath=video_grouper/build `
           video_grouper/installer/VideoGrouper.spec
 
-    - name: Install NSIS
-      run: choco install nsis -y
+    # NSIS is not on the windows-2025 runner image. It used to come from the
+    # Chocolatey community feed, which Chocolatey itself says not to rely on
+    # for organizational builds; on 2026-11-28 the feed answered 503, choco
+    # reported "installed 0/0 packages" and exited 0, and the build failed a
+    # step later. So: one pinned release, from the NSIS project's own
+    # SourceForge downloads, checked against its SHA-256 (recorded when
+    # pinned; the SHA-1 matched the one SourceForge publishes), and cached so
+    # an upstream outage only matters to the first run after a version bump.
+    # To upgrade: change NSIS_VERSION and NSIS_SHA256 in the job's env.
+    - name: Cache NSIS
+      id: nsis-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}\nsis
+        key: nsis-${{ env.NSIS_VERSION }}-${{ env.NSIS_SHA256 }}
+
+    - name: Download NSIS
+      if: steps.nsis-cache.outputs.cache-hit != 'true'
+      run: |
+        $zip = Join-Path $env:RUNNER_TEMP "nsis-$env:NSIS_VERSION.zip"
+        $url = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$env:NSIS_VERSION/nsis-$env:NSIS_VERSION.zip"
+        # SourceForge serves its download page instead of the file to
+        # browser-like user agents; a curl-style agent gets the redirect.
+        Invoke-WebRequest -Uri $url -OutFile $zip -UserAgent "curl/8" `
+          -MaximumRetryCount 5 -RetryIntervalSec 15
+        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $env:NSIS_SHA256) {
+          throw "NSIS $env:NSIS_VERSION download has SHA-256 $actual, expected $env:NSIS_SHA256"
+        }
+        Expand-Archive -Path $zip -DestinationPath (Join-Path $env:RUNNER_TEMP "nsis")
+
+    - name: Check NSIS
+      run: |
+        $makensis = Join-Path $env:RUNNER_TEMP "nsis\nsis-$env:NSIS_VERSION\makensis.exe"
+        if (-not (Test-Path $makensis)) {
+          throw "makensis.exe not found at $makensis"
+        }
+        $reported = (& $makensis -VERSION).Trim()
+        if ($reported -ne "v$env:NSIS_VERSION") {
+          throw "makensis reports $reported, expected v$env:NSIS_VERSION"
+        }
+        Add-Content -Path $env:GITHUB_ENV -Value "MAKENSIS=$makensis"
 
     - name: Build installer
       run: |
-        & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }} video_grouper/installer/installer.nsi
+        & $env:MAKENSIS /DVERSION=${{ env.VERSION }} /DBUILD_NUMBER=${{ env.BUILD_NUMBER }} video_grouper/installer/installer.nsi
+        if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
