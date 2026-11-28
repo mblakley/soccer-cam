@@ -86,9 +86,10 @@ UPLOAD_SETTLE_TIMEOUT_SECONDS = 180
 UPLOAD_SETTLE_POLL_SECONDS = 10
 
 # If modifying these scopes, delete the token.json file.
+# ``youtube`` already includes read access, so ``youtube.readonly`` is not
+# requested: Google's sensitive-scope review asks for the narrowest set.
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/youtube",  # Required for playlist operations
 ]
 API_SERVICE_NAME = "youtube"
