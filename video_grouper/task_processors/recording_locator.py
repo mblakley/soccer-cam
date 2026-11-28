@@ -1,5 +1,10 @@
-"""Locate a local recording group dir + its source video (the processed
-broadcast video, or ``combined.mp4``) from a TTT-supplied ``recording_group_dir``.
+"""Locate a local recording group dir + its source video from a TTT-supplied
+``recording_group_dir``.
+
+Clips and reels are cut from the trimmed timeline: the broadcast ``<slug>.mp4``
+once it has finished rendering from the current trim
+(:func:`ready_broadcast_for`), else the trimmed full-field ``<slug>-raw.mp4``.
+``combined.mp4`` is untrimmed and is never a clip/reel source.
 
 Used by any processor that needs to resolve a TTT-side recording reference
 (e.g., a clip request's ``game_session.recording_group_dir``, a highlight reel
@@ -18,6 +23,7 @@ full, untrimmed raw panorama.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -88,6 +94,74 @@ def _processed_video_in(directory: str) -> str | None:
             if os.path.isfile(processed):
                 return processed
     return None
+
+
+def _raw_video_in(directory: str) -> str | None:
+    """Return the trimmed full-field ``<slug>-raw.mp4`` in ``directory``."""
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return None
+    for name in names:
+        if name.endswith("-raw.mp4"):
+            return os.path.join(directory, name)
+    return None
+
+
+def find_trimmed_raw_video(recording_dir: str) -> str | None:
+    """Find the trimmed full-field ``<slug>-raw.mp4`` (the AutoCam input).
+
+    Same timeline as the processed broadcast video (game-clock), unlike
+    ``combined.mp4`` (the untrimmed concatenation). Looks directly inside
+    ``recording_dir`` then one level of subdirectory deep.
+    """
+    hit = _raw_video_in(recording_dir)
+    if hit:
+        return hit
+    try:
+        entries = sorted(os.listdir(recording_dir))
+    except OSError:
+        return None
+    for entry in entries:
+        subdir = os.path.join(recording_dir, entry)
+        if os.path.isdir(subdir):
+            hit = _raw_video_in(subdir)
+            if hit:
+                return hit
+    return None
+
+
+# Group statuses at which the broadcast render has finished.
+_RENDER_DONE_STATUSES = ("pipeline_complete", "ball_tracking_complete", "complete")
+
+
+def _render_finished(group_dir: str) -> bool:
+    try:
+        with open(os.path.join(group_dir, "state.json"), encoding="utf-8") as f:
+            return json.load(f).get("status") in _RENDER_DONE_STATUSES
+    except (OSError, ValueError):
+        return False
+
+
+def ready_broadcast_for(raw_path: str, group_dir: str) -> str:
+    """The broadcast ``<slug>.mp4`` beside a trimmed ``<slug>-raw.mp4`` when it
+    is finished and current, else the raw path itself (same trimmed timeline,
+    so the same clip offsets apply to either).
+
+    Finished: the group's render step has completed (its status), so a file
+    still being written by the render or AutoCam is never used. Current: it is
+    at least as new as the raw file, so after a re-trim an old broadcast on
+    the old timeline is never used.
+    """
+    if raw_path.endswith("-raw.mp4"):
+        processed = raw_path[: -len("-raw.mp4")] + ".mp4"
+        try:
+            current = os.path.getmtime(processed) >= os.path.getmtime(raw_path)
+        except OSError:
+            current = False
+        if current and _render_finished(group_dir):
+            return processed
+    return raw_path
 
 
 def find_processed_video(recording_dir: str) -> str | None:

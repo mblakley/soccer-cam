@@ -86,9 +86,10 @@ UPLOAD_SETTLE_TIMEOUT_SECONDS = 180
 UPLOAD_SETTLE_POLL_SECONDS = 10
 
 # If modifying these scopes, delete the token.json file.
+# ``youtube`` already includes read access, so ``youtube.readonly`` is not
+# requested: Google's sensitive-scope review asks for the narrowest set.
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/youtube",  # Required for playlist operations
 ]
 API_SERVICE_NAME = "youtube"
@@ -121,7 +122,7 @@ def _load_embedded_client_config():
     return {
         "installed": {
             "client_id": YT_CLIENT_ID,
-            "project_id": "team-tech-tools-hh",
+            "project_id": "team-tech-tools-app",
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",

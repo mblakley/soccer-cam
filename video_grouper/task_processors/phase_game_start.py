@@ -36,6 +36,7 @@ the inference stack — only the actual Reolink + phase-detection path needs it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -48,6 +49,99 @@ logger = logging.getLogger(__name__)
 # (mirrors the phase_detector.py knobs); the ``truncated_start`` guard in the
 # caller still blocks the only late-KO source.
 PHASE_KO_TRIM_BACKUP_SECONDS = int(os.environ.get("PHASE_KO_TRIM_BACKUP_SECONDS", "60"))
+
+
+# Hard ceiling on one detector run. The detector is a legitimate multi-minute
+# compute (a 96-min 4K combined video measured 7m54s in production on
+# 2026-08-03), so this is a safety valve for a genuinely wedged run, not a
+# latency budget: on expiry we log an ERROR and fall back to the NTFY walk (the
+# documented degraded path — never worse than manual), and detection is not
+# restarted for that game in this process. 0 (or any value <= 0) disables the
+# ceiling; a non-numeric value keeps the default.
+def _env_seconds(name: str, default: float) -> float:
+    """A non-negative seconds setting; a bad value falls back to the default
+    and a value <= 0 means disabled (0) instead of breaking the import."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.error("%s=%r is not a number; using %s", name, raw, default)
+        return default
+    return max(value, 0.0)
+
+
+PHASE_DETECT_TIMEOUT_SECONDS = _env_seconds("PHASE_DETECT_TIMEOUT_SECONDS", 3600)
+
+# Ceiling on the (optional) TTT event-tap fetch that precedes a run, so a slow
+# network can't hold the single-flight run open; on expiry: no hints.
+ANCHOR_FETCH_TIMEOUT_SECONDS = 90
+
+# In-flight detector runs keyed by normalized group dir. The post-combine event
+# hook and the StateAuditor's audit can request the same group within the same
+# second (observed 2026-08-03 11:47:05/06: two concurrent ~8-min runs decoding
+# the same 15 GB video); duplicates await the first run instead of starting
+# another.
+_INFLIGHT: dict = {}
+
+# Groups whose detector run hit PHASE_DETECT_TIMEOUT_SECONDS but whose decode is
+# still running: asyncio cannot interrupt the worker thread that ``to_thread``
+# started, so the decode keeps going after the timeout. While a group is in
+# this set, a new trigger falls straight back to the NTFY walk instead of
+# starting a second decode next to the abandoned one; the entry clears itself
+# when that thread finally finishes.
+_ORPHANED: set = set()
+
+# Groups with a decode running right now, whichever path started it (the
+# main run or a truncated_start / truncated_end re-run): at most one decode of
+# a game's video at a time.
+_DECODING: set = set()
+
+# Groups whose run timed out in this process: detection is not restarted for
+# them -- the NTFY walk already owns the game start (a rerun would take as long
+# again and could race the answer).
+_GAVE_UP: set = set()
+
+
+def _decode_busy(key: str) -> bool:
+    return key in _DECODING or key in _ORPHANED
+
+
+def _orphan(key: str, detector: asyncio.Future) -> None:
+    """``detector`` was abandoned (timeout or cancellation) but its thread is
+    still decoding: keep the group marked until it really ends."""
+    _ORPHANED.add(key)
+
+    def _release(t: asyncio.Future, _k: str = key) -> None:
+        _ORPHANED.discard(_k)
+        if not t.cancelled():
+            t.exception()  # retrieve it so asyncio doesn't log it as unhandled
+
+    detector.add_done_callback(_release)
+
+
+async def _guarded_rerun(group_dir: str, combined_video_path: str, **flags):
+    """A truncated_* re-run through the one-decode-per-game guard: skipped
+    (None) while another decode of this game is running or abandoned."""
+    key = _inflight_key(group_dir)
+    if _decode_busy(key):
+        logger.warning(
+            "phase game-start: a decode of %s is already running; skipping the "
+            "%s re-run (phases keep their current values)",
+            group_dir,
+            ", ".join(flags) or "detector",
+        )
+        return None
+    _DECODING.add(key)
+    try:
+        return await _run_detector(group_dir, combined_video_path, **flags)
+    finally:
+        _DECODING.discard(key)
+
+
+def _inflight_key(group_dir: str) -> str:
+    return os.path.normcase(os.path.abspath(group_dir))
 
 
 def _camera_is_reolink(config) -> bool:
@@ -289,7 +383,7 @@ async def resolve_truncated_start(
         return True
 
     try:
-        result = await _run_detector(
+        result = await _guarded_rerun(
             group_dir, combined_video_path, truncated_start=True
         )
     except Exception as e:  # noqa: BLE001 — never let the re-run break the flow
@@ -321,7 +415,9 @@ async def resolve_truncated_end(
         return False
 
     try:
-        result = await _run_detector(group_dir, combined_video_path, truncated_end=True)
+        result = await _guarded_rerun(
+            group_dir, combined_video_path, truncated_end=True
+        )
     except Exception as e:  # noqa: BLE001 — never let the re-run break the flow
         logger.warning(
             "phase game-start: truncated_end re-run failed for %s: %s", group_dir, e
@@ -364,19 +460,131 @@ async def maybe_resolve_phase_game_start(
     if not combined_video_path or not os.path.exists(combined_video_path):
         return False
 
-    # Parent event-tap anchors (best-effort, off the loop). Only fetched when
-    # this install is a logged-in TTT user; {} otherwise -> detector-only.
     import asyncio
 
-    anchors = await asyncio.to_thread(
-        _fetch_event_tap_anchors, config, group_dir, storage_path
+    # One detector run per group at a time: duplicate triggers (post-combine
+    # hook + StateAuditor firing together) share the first run's result instead
+    # of decoding the same multi-GB video twice in parallel.
+    key = _inflight_key(group_dir)
+    if key in _GAVE_UP:
+        logger.info(
+            "phase game-start: detection timed out earlier for %s; the NTFY walk "
+            "owns its game start",
+            group_dir,
+        )
+        return False
+    task = _INFLIGHT.get(key)
+    if task is not None and task.get_loop() is not asyncio.get_running_loop():
+        _INFLIGHT.pop(key, None)  # left over from a closed event loop
+        task = None
+    if task is None and _decode_busy(key):
+        logger.warning(
+            "phase game-start: a detector run is still decoding %s; not starting "
+            "another — falling back to the NTFY walk",
+            group_dir,
+        )
+        return False
+    if task is None:
+        task = asyncio.create_task(
+            _detect_and_resolve(group_dir, combined_video_path, config, storage_path)
+        )
+        _INFLIGHT[key] = task
+
+        def _clear_inflight(_t: asyncio.Task, _k: str = key) -> None:
+            _INFLIGHT.pop(_k, None)
+
+        task.add_done_callback(_clear_inflight)
+    else:
+        logger.info(
+            "phase game-start: detection already in flight for %s; "
+            "awaiting that run instead of starting another",
+            group_dir,
+        )
+    # shield: a cancelled duplicate caller must not cancel the shared run.
+    return await asyncio.shield(task)
+
+
+async def _detect_and_resolve(
+    group_dir: str,
+    combined_video_path: str,
+    config,
+    storage_path: str | None,
+) -> bool:
+    """One full detector run + offset write for a group (single-flight body).
+
+    Never raises: every failure path logs and returns False (the caller falls
+    back to the NTFY walk, which can never be worse than today)."""
+    import asyncio
+    import time
+
+    from video_grouper.models import MatchInfo
+
+    # Parent event-tap anchors (best-effort, off the loop). Only fetched when
+    # this install is a logged-in TTT user; {} otherwise -> detector-only.
+    try:
+        anchors = await asyncio.wait_for(
+            asyncio.to_thread(
+                _fetch_event_tap_anchors, config, group_dir, storage_path
+            ),
+            timeout=ANCHOR_FETCH_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning("phase game-start: anchor fetch timed out; detector only")
+        anchors = {}
+
+    # The detector is a multi-minute compute on a full game (measured 7m54s for
+    # a 96-min combined video). Announce it so an operator watching the log can
+    # tell "running" from "lost" — before this line existed the run was
+    # invisible until it finished (2026-08-03 incident).
+    logger.info(
+        "phase game-start: running the phase detector on %s "
+        "(multi-minute compute on a full game; timeout %ss)",
+        combined_video_path,
+        PHASE_DETECT_TIMEOUT_SECONDS or "disabled",
+    )
+    t0 = time.monotonic()
+    key = _inflight_key(group_dir)
+    _DECODING.add(key)
+    detector = asyncio.ensure_future(
+        _run_detector(group_dir, combined_video_path, anchors=anchors)
     )
 
+    def _decoded(_t: asyncio.Future, _k: str = key) -> None:
+        _DECODING.discard(_k)
+
+    detector.add_done_callback(_decoded)
     try:
-        result = await _run_detector(group_dir, combined_video_path, anchors=anchors)
-    except Exception as e:  # noqa: BLE001 — never let detection break the flow
-        logger.warning("phase game-start: detector failed for %s: %s", group_dir, e)
+        # shield: on timeout wait_for cancels only the wrapper, so ``detector``
+        # still completes and can clear the orphan marker below.
+        result = await asyncio.wait_for(
+            asyncio.shield(detector),
+            timeout=PHASE_DETECT_TIMEOUT_SECONDS or None,
+        )
+    except asyncio.CancelledError:
+        # The shared run was cancelled (shutdown/restart) but the decode thread
+        # keeps going: mark it so nothing starts a second decode beside it.
+        _orphan(key, detector)
+        raise
+    except TimeoutError:
+        _orphan(key, detector)
+        _GAVE_UP.add(key)
+        logger.error(
+            "phase game-start: detector exceeded %ss for %s — abandoning phase "
+            "detection, falling back to the NTFY walk (the decode thread cannot be "
+            "interrupted; new triggers for this group skip detection until it ends)",
+            PHASE_DETECT_TIMEOUT_SECONDS,
+            group_dir,
+        )
         return False
+    except Exception as e:  # noqa: BLE001 — never let detection break the flow
+        logger.warning(
+            "phase game-start: detector failed for %s after %.1fs: %s",
+            group_dir,
+            time.monotonic() - t0,
+            e,
+        )
+        return False
+    elapsed = time.monotonic() - t0
 
     # Auto-trim gate = ``ko_trustworthy``, NOT ``ok`` (decision 2026-07-01). We only
     # trim on KO, so the KO-specific trust flag is the right gate: it accepts a game
@@ -398,7 +606,9 @@ async def maybe_resolve_phase_game_start(
     # itself unsure (ko_trustworthy False -> the NTFY walk below).
     if not result or not result.get("ko_trustworthy"):
         logger.info(
-            "phase game-start: KO not trustworthy for %s (falling back to the NTFY walk)",
+            "phase game-start: detector finished in %.1fs; KO not trustworthy for %s "
+            "(falling back to the NTFY walk)",
+            elapsed,
             group_dir,
         )
         return False
@@ -418,11 +628,12 @@ async def maybe_resolve_phase_game_start(
 
     logger.info(
         "phase game-start: set start_time_offset=%s for %s "
-        "(kickoff=%.1fs - %ds backup)",
+        "(kickoff=%.1fs - %ds backup; detector took %.1fs)",
         offset,
         group_dir,
         float(kickoff),
         PHASE_KO_TRIM_BACKUP_SECONDS,
+        elapsed,
     )
     return True
 

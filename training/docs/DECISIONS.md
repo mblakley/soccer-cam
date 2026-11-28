@@ -79,6 +79,49 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-11-26: Product behavior for the game-day loop with team-tech-tools (Mark)
+
+**Context.** A cross-repo audit (code + a full local run of TTT `development`) found the loop
+from recording to shared reel broken at several joints. Verified on soccer-cam `main`:
+`ScheduleService.find_game_for_recording` skips any TTT game without `start_time`, and TTT never
+sets one, so the "TTT schedule is authoritative" branch of `MatchInfoService` never matches and
+every recording falls back to direct TeamSnap/PlayMetrics; `TTTReporter.auto_match_video` then
+sends TTT only `team_id` + `video_url` + `recorded_at`, so TTT re-guesses and also misses. Moment
+clips are cut from the trimmed panorama (`get_trimmed_video_path` → `*-raw.mp4`) and highlight
+reels from `combined.mp4` (`find_combined_video`). Heat moved from TeamSnap to Byga (Google
+Calendar) in 2026-11; soccer-cam has no calendar source (`icalendar` is a dependency imported
+nowhere).
+
+**Decided:**
+- **Matching** stays date/time against the schedule (the existing `select_best_game` logic). TTT
+  games will carry a real `start_time`; when soccer-cam has matched a TTT game it reports **that
+  game** to TTT instead of letting TTT re-match from the recording time.
+- **Calendar feeds (Byga / Google Calendar / iCal)** are supported in **both** repos: a TTT
+  schedule provider (the authoritative path), and a soccer-cam fallback source alongside
+  PlayMetrics/TeamSnap for camera owners not using TTT.
+- **Moment clips and highlight reels are cut from the broadcast (ball-following) view**, not the
+  180° panorama. Clip requests already prefer the processed video
+  (`recording_locator.find_processed_video`); clips and reels follow the same rule, mapping times
+  onto the processed (trimmed) timeline.
+- **Reel rendering**: the soccer-cam install of the team's camera manager — the one that recorded
+  the game — renders any reel a team member builds, not only reels created by its own account
+  (TTT's claim is currently creator-only).
+- Matching TTT-side decisions (guardian access, Moment Tagger, onboarding, public share links) are
+  recorded in team-tech-tools `.claude/plans/business-roadmap/ROADMAP.md`, "Decided 2026-11-26".
+
+**Implemented 2026-11-27 (clips + reels from the broadcast view).** Reels are cut by
+`highlight_reel_processor.reel_source_for`: the broadcast `<slug>.mp4`, falling back to the
+trimmed full-field `<slug>-raw.mp4`; game clips a coach cut from the full-field upload
+(`video_type="full"`) come from `<slug>-raw.mp4`. Moment clips come from the broadcast once it has
+rendered (`recording_locator.broadcast_for_raw`). Finding: reels were cut from `combined.mp4`,
+which is **untrimmed**, while every clip offset is on the trimmed timeline (moment clips are
+placed from each tag's trimmed offset in `ClipDiscoveryProcessor`; game clips are cut on the
+uploaded game video), so reel clips landed early by the length of the trimmed-off pre-game
+footage. `combined.mp4` is no longer a reel source; a reel whose recording has no trimmed video
+yet reports a blocker and waits instead.
+
+---
+
 ## 2026-08-17: Non-uniform camera warp DECLINED for image quality; the mesh READ is adopted as a calibration input
 
 **The proposal.** The Duo 3's 257×257 VPE warp mesh can now be read, modified, written and verified
@@ -1553,6 +1596,25 @@ on far balls. The earlier "~0.08 MP / fits-on-G:" sizing came from this default 
   vs AutoCam at each TW) is the downstream resolution experiment that selects the production TW.
 - At ~2.7 MP/frame the pre-decoded set is hundreds of GB→>1 TB and does **not** fit on G:, so
   shard-rotation streaming (`warped_pack.ShardRotator`) is required.
+
+---
+
+## 2026-07-02: Game-start / trim default = phase_detection (confirmed live)
+
+**Context:** STATUS.md (2026-06-30) left an OPEN DECISION — flip the game-start/trim default to the
+phase detector, or keep NTFY and use phases for post-trim display only. The trim-safety bar was met
+(gate `ko_trustworthy`, backup 60s; every trusted, non-truncated KO is early/tiny, within the 60s
+margin); the residual gap is display-quality accuracy (~64% on combined/untrimmed video), which the
+S3 verify-loop + human-verify catches.
+
+**Decision (Mark, 2026-07-02): the default is `phase_detection`.** This was already the shipped state
+on `main` — `[PROCESSING] game_start_method = phase_detection` has been the default since S1
+(`e6a342d`), refined by `fb61a75` (60s backup, decoupled from the NTFY 240s), `6385671` (gate =
+`ko_trustworthy`, not `ok`), `99801b8` / `9ef524d` (truncated-start), `3811224` (parent event-tap
+anchors). Reolink-only; Dahua and any rejected / low-confidence fit fall back to the NTFY walk, so
+behavior is never worse than NTFY. This entry records the decision as made and supersedes the
+"suspended, stays NTFY" note in PHASE_DETECTION_INTEGRATION.md (2026-06-18). Verified 2026-07-02: 131
+phase / NTFY / trim / reprocess unit tests green.
 
 ---
 

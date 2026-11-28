@@ -1,9 +1,17 @@
 # Plan: Game-phase detection → production pipeline + TTT verify-loop
 
-**Status:** draft for review (2026-06-18). Cross-repo: **soccer-cam** (OSS) + **team-tech-tools** (closed).
+**Status:** S0/S1 **SHIPPED** — game-start default = `phase_detection` on `main` (confirmed 2026-07-02);
+S2–S4 + T1 landed; T2 in progress. Cross-repo: **soccer-cam** (OSS) + **team-tech-tools** (closed).
 **Goal:** make the offline game-phase detector a first-class production feature that (1) can replace the
 NTFY "did the game start?" walk, (2) publishes phase timestamps to TTT for display, and (3) is
 human-verified + correctable through a TTT-triggered, NTFY-screenshot review loop.
+
+> **UPDATE 2026-07-02 — suspension lifted; default flipped.** The 2026-06-18 pivot below (decision 1
+> "suspended", game-start stays NTFY) is **superseded.** The untrimmed-KO detector cleared the
+> trim-safety bar (gate `ko_trustworthy` + 60s backup + Reolink-only + Dahua→NTFY + truncated-start
+> option B); Mark confirmed the flip on 2026-07-02; `[PROCESSING] game_start_method = phase_detection`
+> is the shipped default on `main`. See DECISIONS.md 2026-07-02. The remaining
+> accuracy gap is display-quality (S3 verify-loop + human-verify), not trim-safety.
 
 ---
 
@@ -59,6 +67,24 @@ task**: make KO/HT/2H/END robust on the untrimmed combined video (warm-up before
 END), and tighten the sanity gate so confident-wrong far-KOs are rejected.
 
 ---
+
+## UPDATE 2026-11-27 — one decode per game, and a ceiling
+
+The detector decodes the whole game (7m54s for a 96-min 4K video, 2026-08-03), and two triggers
+(the post-combine hook and the StateAuditor) once started two decodes of the same 15 GB file.
+Now (`task_processors/phase_game_start.py`):
+
+- **Single-flight per game.** Concurrent triggers share one run; the truncated_start /
+  truncated_end re-runs go through the same guard and skip their re-run (the start offset is still
+  written) while another decode of that game is running or abandoned.
+- **`PHASE_DETECT_TIMEOUT_SECONDS`** (env, default 3600; `0` or less disables it; a non-numeric
+  value keeps the default) is a safety valve for a wedged run, not a latency budget. On expiry the
+  run falls back to the NTFY walk and detection is **not restarted for that game in this process**
+  (the NTFY answer owns the start; a rerun would take as long again and could race it). The decode
+  thread can't be interrupted, so it is marked abandoned until it really ends — the same happens
+  if the run is cancelled (shutdown) — and nothing starts a second decode beside it.
+- The optional TTT event-tap fetch before a run is capped at 90 s (then detector-only).
+- A log line announces each run with its timeout, so "running" is distinguishable from "lost".
 
 ## What already exists (reuse-first — do NOT reinvent)
 

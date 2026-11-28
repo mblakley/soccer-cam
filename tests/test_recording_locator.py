@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from video_grouper.task_processors import recording_locator
 from video_grouper.task_processors.recording_locator import (
     find_combined_video,
     find_processed_video,
@@ -155,3 +156,56 @@ def test_find_processed_video_ignores_combined_only(tmp_path):
 
 def test_find_processed_video_unreadable_dir(tmp_path):
     assert find_processed_video(str(tmp_path / "does-not-exist")) is None
+
+
+def _group_with(tmp_path, status):
+    import json
+
+    (tmp_path / "state.json").write_text(json.dumps({"status": status}))
+    raw = tmp_path / "heat-vs-rivals-home-12-05-2026-raw.mp4"
+    raw.write_bytes(b"0")
+    return raw, tmp_path / "heat-vs-rivals-home-12-05-2026.mp4"
+
+
+def test_ready_broadcast_is_used_once_rendered_and_current(tmp_path):
+    raw, broadcast = _group_with(tmp_path, "pipeline_complete")
+    # Before it exists: clip from the trimmed full-field video.
+    assert recording_locator.ready_broadcast_for(str(raw), str(tmp_path)) == str(raw)
+    broadcast.write_bytes(b"0")
+    # Finished + newer than the trim: the broadcast view (decided 2026-11-26).
+    assert recording_locator.ready_broadcast_for(str(raw), str(tmp_path)) == str(
+        broadcast
+    )
+
+
+def test_a_broadcast_mid_render_is_not_ready(tmp_path):
+    raw, broadcast = _group_with(tmp_path, "trimmed")
+    broadcast.write_bytes(b"0")
+    assert recording_locator.ready_broadcast_for(str(raw), str(tmp_path)) == str(raw)
+
+
+def test_a_stale_broadcast_is_not_ready(tmp_path):
+    import os
+
+    raw, broadcast = _group_with(tmp_path, "pipeline_complete")
+    broadcast.write_bytes(b"0")
+    st = os.stat(raw)
+    os.utime(broadcast, (st.st_atime, st.st_mtime - 60))
+    assert recording_locator.ready_broadcast_for(str(raw), str(tmp_path)) == str(raw)
+
+
+def test_ready_broadcast_leaves_other_paths_alone(tmp_path):
+    other = tmp_path / "combined.mp4"
+    assert recording_locator.ready_broadcast_for(str(other), str(tmp_path)) == str(
+        other
+    )
+
+
+def test_find_trimmed_raw_video_in_game_subdir(tmp_path):
+    game = tmp_path / "2026.12.05 - Heat vs Rivals (home)"
+    game.mkdir()
+    (tmp_path / "combined.mp4").write_bytes(b"0")
+    raw = game / "heat-vs-rivals-home-12-05-2026-raw.mp4"
+    raw.write_bytes(b"0")
+    assert recording_locator.find_trimmed_raw_video(str(tmp_path)) == str(raw)
+    assert recording_locator.find_trimmed_raw_video(str(game / "missing")) is None
