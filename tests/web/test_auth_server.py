@@ -691,6 +691,55 @@ def test_post_login_password_rejects_cross_origin(client):
     assert resp.status_code == 403
 
 
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"origin": "http://localhost:3000"},
+        {"referer": "http://localhost:3000/page"},
+        {"origin": "http://127.0.0.1:3000"},
+        # No port = port 80, which is not the dashboard's 8765.
+        {"origin": "http://localhost"},
+    ],
+    ids=["origin-other-port", "referer-other-port", "loopback-alias", "no-port"],
+)
+def test_post_rejects_same_host_on_another_port(client, storage, headers):
+    """Another program's page on this machine (same loopback host, a
+    different port) is a different origin and must not drive the dashboard."""
+    _write_tokens(
+        storage,
+        jwt=_make_jwt(exp=int(time.time()) + 60),
+        expires_at=float(time.time() + 60),
+    )
+    resp = client.post("/logout", headers=headers, follow_redirects=False)
+    assert resp.status_code == 403
+    assert "does not match this server" in resp.text
+    assert (storage / "ttt" / "tokens.json").exists()
+
+
+def test_post_accepts_same_origin_on_a_configured_port(storage):
+    """The port comes from the request's Host, not a hardcoded 8765."""
+    _write_tokens(
+        storage,
+        jwt=_make_jwt(exp=int(time.time()) + 60),
+        expires_at=float(time.time() + 60),
+    )
+    app = create_app(_ttt_config(), str(storage))
+    with TestClient(app, base_url="http://127.0.0.1:9123") as c:
+        refused = c.post(
+            "/logout",
+            headers={"origin": "http://127.0.0.1:8765"},
+            follow_redirects=False,
+        )
+        assert refused.status_code == 403
+        accepted = c.post(
+            "/logout",
+            headers={"origin": "http://127.0.0.1:9123"},
+            follow_redirects=False,
+        )
+    assert accepted.status_code == 303
+    assert not (storage / "ttt" / "tokens.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # Phase 0b: auth-needed banner + flag helpers
 # ---------------------------------------------------------------------------
