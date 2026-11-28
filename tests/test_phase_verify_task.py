@@ -1,7 +1,7 @@
 """S3: PhaseVerifyTask — per-boundary Correct/Not-Correct + TTT write-back + no-secret metadata."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -56,33 +56,30 @@ def test_metadata_never_carries_secrets():
 
 
 @pytest.mark.asyncio
-@patch("video_grouper.task_processors.phase_ttt_push.push_phase_verified")
-async def test_process_response_correct_chains(mock_push):
+async def test_process_response_correct_chains(fake_integrations):
     task = _task([["kickoff", 10.0], ["end", 5640.0]])
     result = await task.process_response("Correct: kickoff at 0:10")
     assert result.success and result.should_continue
     assert result.metadata["next_remaining"] == [["end", 5640.0]]
-    args = mock_push.call_args.args
-    assert args[2] == "kickoff" and args[3] == "correct"
+    ((_, phase, verdict),) = fake_integrations.recordings.verdicts
+    assert (phase, verdict) == ("kickoff", "correct")
 
 
 @pytest.mark.asyncio
-@patch("video_grouper.task_processors.phase_ttt_push.push_phase_verified")
-async def test_process_response_not_correct_last_stops(mock_push):
+async def test_process_response_not_correct_last_stops(fake_integrations):
     task = _task([["end", 5640.0]])
     result = await task.process_response("Not correct: end at 94:00")
     assert result.success and not result.should_continue
-    args = mock_push.call_args.args
-    assert args[2] == "end" and args[3] == "not_correct"
+    ((_, phase, verdict),) = fake_integrations.recordings.verdicts
+    assert (phase, verdict) == ("end", "not_correct")
 
 
 @pytest.mark.asyncio
-@patch("video_grouper.task_processors.phase_ttt_push.push_phase_verified")
-async def test_process_response_unrecognized(mock_push):
+async def test_process_response_unrecognized(fake_integrations):
     task = _task([["kickoff", 10.0]])
     result = await task.process_response("huh?")
     assert not result.success
-    mock_push.assert_not_called()
+    assert fake_integrations.recordings.verdicts == []
 
 
 @pytest.mark.asyncio

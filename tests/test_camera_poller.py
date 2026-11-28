@@ -2033,3 +2033,47 @@ class TestSettledGroupsMatchTheAuditor:
         )
 
         assert state_auditor._DOWNLOAD_DONE_STATUSES == SETTLED_GROUP_STATUSES
+
+
+# ---------------------------------------------------------------------------
+# Multi-computer: the device link decides which cameras this install polls
+# (against the interface -- FakeDeviceLink behind a DeviceLinkProcessor)
+# ---------------------------------------------------------------------------
+
+
+async def _wired_poller(temp_storage, mock_config, mock_camera, camera_enabled):
+    from video_grouper.integrations.device_link.fake import FakeDeviceLink
+    from video_grouper.task_processors.device_link_processor import (
+        DeviceLinkProcessor,
+    )
+
+    link = FakeDeviceLink.replying(camera_enabled=camera_enabled)
+    device = DeviceLinkProcessor(temp_storage, mock_config, link)
+    await device.discover_work()  # one heartbeat
+    poller = _make_poller(temp_storage, mock_config, mock_camera)
+    poller.is_camera_enabled = device.is_camera_enabled
+    return poller
+
+
+@pytest.mark.asyncio
+async def test_camera_disabled_on_this_machine_is_not_polled(
+    temp_storage, mock_config, mock_camera
+):
+    poller = await _wired_poller(
+        temp_storage, mock_config, mock_camera, {"default": False}
+    )
+    await poller.discover_work()
+    mock_camera.check_availability.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "camera_enabled", [None, {}, {"default": True}, {"other-camera": False}]
+)
+async def test_camera_enabled_or_unknown_is_polled(
+    temp_storage, mock_config, mock_camera, camera_enabled
+):
+    mock_camera.check_availability.return_value = False
+    poller = await _wired_poller(temp_storage, mock_config, mock_camera, camera_enabled)
+    await poller.discover_work()
+    mock_camera.check_availability.assert_called_once()

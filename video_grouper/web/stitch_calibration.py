@@ -113,6 +113,7 @@ from video_grouper.utils.config import CameraConfig, load_config
 from video_grouper.utils.stitch_remap import (
     SeamCalibrationError,
     build_v2_profile,
+    local_profile_path,
     read_dx_anchors,
 )
 from video_grouper.web import chrome
@@ -1268,13 +1269,14 @@ def build_router(config_path: Path, storage_path: Path | None = None) -> APIRout
             raise HTTPException(400, str(exc)) from exc
 
         body_text = json.dumps(profile, indent=2)
-        # Two writes, on purpose. The first is the path the pipeline already
-        # reads (`seam_realign_profile_path`), so a calibration takes effect.
-        # The second is an append-only history keyed by deployment, so if the
+        # Two writes, on purpose. The first is the install's profile file
+        # (`local_profile_path`; the device link installs profiles pulled from
+        # TTT at the same file, newer wins). It takes effect on renders when the
+        # pipeline's `stitch_correct.stitch_profile_path` points at it. The second is an append-only history keyed by deployment, so if the
         # seam turns out to differ per tripod placement the evidence is already
         # collected instead of having been overwritten one calibration at a
         # time.
-        target = storage / "stitch_profile.json"
+        target = local_profile_path(storage)
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(".json.tmp")
         tmp.write_text(body_text, encoding="utf-8")

@@ -2401,3 +2401,68 @@ upload and leaves nothing to read.
 be read -- treated as long) and the channel isn't verified. Clips and reels upload normally. Long
 uploads park and re-probe as before and resume once the owner verifies at youtube.com/verify. The
 setup wizard still requires verification, because full games need it.
+## Decision: soccer-cam reaches TTT only through ports; TTT stays optional (2026-11-27)
+
+**Context.** `TTTApiClient` had grown to 79 public methods over ~69 TTT operations, used directly by
+~16 modules, with four places constructing their own client. A review on 2026-11-27 (verified with
+`grep -w` over `video_grouper/`, `training/`, `run.py`) found 31 methods that do nothing at runtime
+(23 never called, 2 only internally, 6 reachable only from dead code), three calls to routes TTT never
+built, and onboarding bugs: OAuth/magic-link sessions discard the refresh token; per-instance token
+loading means a browser sign-in doesn't reach the running app; sign-in neither enables TTT nor
+registers the device (`camera_id` is hand-typed); pipeline tasks persisted the TTT password into queue
+state (fixed in #155). Mark: "TTT should be optional from soccer-cam. Soccer-cam should be able to
+provide the info to TTT through a minimal interface", and "clear, generic interfaces, so we can
+support various different implementations without making a ton of changes throughout the entire app".
+
+**Decided.** Six ports beside the existing `IScheduleSource` — `IAccount`, `IDeviceLink`,
+`IRecordingSink`, `IWorkSource`, `IEntitlements`, `IPhaseHintSource` — about 25 methods in all. Each
+has a TTT implementation, a Null implementation (TTT off or not signed in) and a Fake for tests.
+Implementations self-register as in `video_grouper/schedule/`; one composition point builds them and
+owns the single shared TTT session; consumers receive ports and never construct a TTT client or read
+`[TTT]` config. Dead client methods are deleted as each port replaces them. Plan and phase order:
+`.claude/plans/ttt-integration-ports/PLAN.md`.
+
+**Why ports, not a slimmer client.** TTT is one optional provider; the jobs (report recordings, take
+remote work, check entitlements) are soccer-cam's. A port makes "TTT off" a real implementation with
+tested behaviour instead of scattered `if client:` checks, and lets another provider plug in without
+touching consumers.
+
+**Guard.** `tests/contracts/test_ttt_api_contract.py` (#152) checks every remaining TTT call against
+TTT's API, so the refactor can't silently break a route. Device sign-in (TTT-minted session over a
+PKCE loopback flow, no Supabase in soccer-cam) is built separately and becomes `IAccount`'s TTT
+implementation.
+
+## Decision: devices register themselves with TTT through one idempotent route; dormant TTT features revived (2026-11-27)
+
+**Context.** The phase-5 review (IDeviceLink) found: `[TTT] camera_id` is hand-typed and nothing writes
+it, so recording reports silently do nothing without it; TTT's camera create route inserts on every
+call (no dedupe; no serial on `CameraCreate`), machine/service upserts are select-then-insert, and
+multi-team users land on an arbitrary team. It also found two features that existed only on paper:
+the system-metrics heartbeat (read a nonexistent `config.ttt.service_id`, so it never ran) and
+pulling stitch profiles saved in TTT's calibration tool down to the device (never wired).
+
+**Decided (Mark).**
+- A **new idempotent TTT route** registers this machine and its cameras (keyed on team + camera
+  serial; unique index) plus the machine-camera link and returns the ids; soccer-cam calls it and
+  fills camera ids itself. Chosen over chaining existing routes (duplicates on retry, name
+  collisions on "default", no serial dedupe).
+- **Revive the metrics heartbeat** (done: `DeviceHealth` over `heartbeat-enhanced`).
+- **Build the stitch-profile pull.**
+- **Fix TTT's device-link authorization now** (separate TTT PR): camera status / command routes ran
+  with a service session and never checked that the caller manages the camera.
+
+## Decision: cameras are identified by serial, managed by camera managers, and joined by possession (2026-11-27)
+
+**Corrects the same-day entry above** ("a camera belongs to its person"). Mark: "The camera is
+'managed' by a person in the camera manager role. Multiple camera managers might manage the same
+camera, and might record multiple different teams." And on joining: "If someone has possession of
+the camera, they should be able to upload to their teams."
+
+**Decided.** A TTT camera has no single owner: its identity is its serial (unique), it is linked to
+every team it records for, and it is managed by any camera manager / team admin of a linked team.
+Device registration (`POST /api/internal/device-link/register`) upserts by serial and links the
+caller's teams. Registering a serial that already exists **joins** it (the caller's teams are
+linked; they can upload for their teams; other teams' recordings stay private to those teams).
+Possession evidence: soccer-cam reports each camera's serial **and MAC address read from the camera
+over the network**; once TTT has a MAC for a serial, a join must match it (a printed serial alone is
+not enough). soccer-cam sends `mac_address` and logs any camera TTT refuses.

@@ -251,20 +251,22 @@ def _download_artifact(url: str, http_client: httpx.Client | None = None) -> byt
 
 
 class SecureLoader:
-    """Acquire a license from TTT, download the encrypted artifact, decrypt it,
-    and produce an `onnxruntime.InferenceSession` ready for inference.
+    """Acquire a licence through the entitlements port, download the encrypted
+    artifact, decrypt it, and produce an `onnxruntime.InferenceSession`.
 
-    The TTT client must already be authenticated — `acquire(...)` raises if not.
+    The licence is verified here against soccer-cam's own trust anchors
+    (``public_keys``) and bound to ``entitlements.licensee()`` -- the provider
+    is never trusted to say a licence is valid.
     """
 
     def __init__(
         self,
-        ttt_client,
+        entitlements,
         public_keys: list[str],
         http_client: httpx.Client | None = None,
         state_storage_path: str | None = None,
     ):
-        self._ttt = ttt_client
+        self._entitlements = entitlements
         self._public_keys = list(public_keys)
         self._http = http_client
         # When set, every successful acquire is recorded for the tray UI.
@@ -276,11 +278,14 @@ class SecureLoader:
         channel: str | None = None,
         pipeline_version: str | None = None,
     ) -> LoadedModel:
-        if not self._ttt.is_authenticated():
-            raise SecureLoaderError("TTT client is not authenticated")
+        if not self._entitlements.available:
+            raise SecureLoaderError(
+                "No entitlements provider is signed in (sign in to Team Tech "
+                "Tools from the dashboard)"
+            )
 
         try:
-            license_response = self._ttt.acquire_model_license(
+            license_response = self._entitlements.license_model(
                 model_key, channel=channel, pipeline_version=pipeline_version
             )
         except Exception as exc:
@@ -288,9 +293,9 @@ class SecureLoader:
                 f"Could not acquire license for {model_key}: {exc}"
             ) from exc
 
-        user_id = self._ttt.current_user_id()
+        user_id = self._entitlements.licensee()
         if not user_id:
-            raise SecureLoaderError("TTT client returned no user_id")
+            raise SecureLoaderError("Entitlements provider returned no licensee")
 
         manifest = _verify_license(license_response, self._public_keys, user_id)
 

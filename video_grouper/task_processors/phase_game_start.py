@@ -272,34 +272,19 @@ def _group_recording_start(group_dir: str, storage_path: str | None):
         return None
 
 
-def _fetch_event_tap_anchors(config, group_dir: str, storage_path: str | None) -> dict:
-    """Parent event-tap phase anchors for this recording's game session, or {}.
+async def _fetch_event_tap_anchors(group_dir: str, storage_path: str | None) -> dict:
+    """Parent event-tap phase anchors for this recording's game, or {}.
 
-    ONLY fetches when the install is logged in as a TTT user: reuses
-    ``_authed_client_and_session`` (which returns a client only when
-    ``client.is_authenticated()``), so a non-TTT / logged-out install never calls
-    TTT and runs detector-only. Runs sync (call from a thread). Best-effort: any
-    failure -> {} (never worse than the detector alone)."""
+    The taps come from the phase-hint port (TTT when this install is signed in;
+    nothing otherwise -> detector-only). Turning them into anchors is ours.
+    Best-effort: any failure -> {} (never worse than the detector alone)."""
     try:
         from video_grouper.inference.event_tap_anchors import build_anchors
-        from video_grouper.task_processors.phase_ttt_push import (
-            _authed_client_and_session,
-        )
+        from video_grouper.integrations import active
 
-        ttt = getattr(config, "ttt", None)
-        _dump = getattr(ttt, "model_dump", None)
-        ttt_config = _dump() if callable(_dump) else ttt
-        client, session = _authed_client_and_session(
-            ttt_config, group_dir, str(storage_path or "")
-        )
-        if client is None or session is None:
-            return {}  # TTT disabled, not logged in, or no session -> no fetch
-        raw = client.get_sync_anchors(session["id"]) or []
-        taps = [
-            a
-            for a in raw
-            if isinstance(a, dict) and a.get("anchor_type") == "event_tap"
-        ]
+        taps = await active().phase_hints.event_taps(group_dir)
+        if not taps:
+            return {}
         recording_start = _group_recording_start(group_dir, storage_path)
         anchors = build_anchors(taps, recording_start)
         if anchors:
@@ -332,23 +317,13 @@ def _phase_payload(result: dict) -> dict:
 
 async def _persist_and_push(config, group_dir, storage_path, result) -> None:
     """Persist the fused phases to group state and best-effort push them to TTT."""
-    import asyncio
 
     _persist_phases(group_dir, storage_path, result)
     try:
-        from video_grouper.task_processors.phase_ttt_push import push_phases_to_ttt
+        from video_grouper.integrations import active
 
-        ttt = getattr(config, "ttt", None)
-        _dump = getattr(ttt, "model_dump", None)
-        ttt_config = _dump() if callable(_dump) else ttt
-        await asyncio.to_thread(
-            push_phases_to_ttt,
-            ttt_config,
-            os.path.basename(group_dir.rstrip("/\\")),
-            _phase_payload(result),
-            str(storage_path or ""),
-        )
-    except Exception as e:  # noqa: BLE001 — the TTT push is best-effort
+        await active().recordings.phases(group_dir, _phase_payload(result))
+    except Exception as e:  # noqa: BLE001 — the report is best-effort
         logger.warning(
             "phase game-start: truncated TTT push failed for %s: %s", group_dir, e
         )
@@ -519,13 +494,12 @@ async def _detect_and_resolve(
 
     from video_grouper.models import MatchInfo
 
-    # Parent event-tap anchors (best-effort, off the loop). Only fetched when
-    # this install is a logged-in TTT user; {} otherwise -> detector-only.
+    # Parent event-tap anchors (best-effort). {} when there's no hint source
+    # or nobody tapped -> detector-only. Capped so a slow hint source can't
+    # hold the single-flight run open.
     try:
         anchors = await asyncio.wait_for(
-            asyncio.to_thread(
-                _fetch_event_tap_anchors, config, group_dir, storage_path
-            ),
+            _fetch_event_tap_anchors(group_dir, storage_path),
             timeout=ANCHOR_FETCH_TIMEOUT_SECONDS,
         )
     except TimeoutError:

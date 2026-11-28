@@ -508,7 +508,6 @@ class TTTConfig(BaseModel):
     plugin_refresh_headroom_days: int = 7
     plugin_sync_interval: int = 3600
     camera_id: str = ""
-    ttt_sync_enabled: bool = False
     heartbeat_interval: int = 30
     job_polling_enabled: bool = False
     job_poll_interval: int = 30

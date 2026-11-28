@@ -381,3 +381,19 @@ class TestUnreadableConfigIsLeftAlone:
 
         assert cm.migrate_config_file(path) == []
         assert "SCHEMA" not in path.read_text(encoding="utf-8")
+
+
+class TestRetiredSettings:
+    """A setting that no longer exists needs no migration: the config models
+    ignore unknown keys, so an existing config.ini that still carries one
+    loads, and the value is simply not read."""
+
+    def test_ttt_sync_enabled_still_loads_and_is_gone(self, tmp_path):
+        path = _write(
+            tmp_path,
+            LIVE_CONFIG + "\n[TTT]\nenabled = true\nttt_sync_enabled = true\n",
+        )
+        config = load_config(path)
+        assert config.ttt.enabled is True
+        assert "ttt_sync_enabled" not in type(config.ttt).model_fields
+        assert not hasattr(config.ttt, "ttt_sync_enabled")

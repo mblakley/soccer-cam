@@ -30,12 +30,13 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from video_grouper.integrations.recordings import StepReport
 from video_grouper.pipeline import create_step, get_step_meta
 from video_grouper.pipeline.base import StepContext, StepSpec
 from video_grouper.pipeline.manifest import PipelineManifest
 
 if TYPE_CHECKING:
-    from video_grouper.api_integrations.ttt_reporter import TTTReporter
+    from video_grouper.integrations.recordings import IRecordingSink
     from video_grouper.pipeline.resources import ResourceManager
 
 logger = logging.getLogger(__name__)
@@ -106,20 +107,21 @@ class PipelineRunner:
         specs: list[StepSpec],
         runtime: str = "service",
         resource_manager: ResourceManager | None = None,
-        ttt_reporter: TTTReporter | None = None,
-        ttt_recording_id: str | None = None,
+        recordings: IRecordingSink | None = None,
         pipeline_preset: str | None = None,
     ):
         self.specs = list(specs)
         self.runtime = runtime
         self.resource_manager = resource_manager
-        self._ttt_reporter = ttt_reporter
-        self._ttt_recording_id = ttt_recording_id
+        # Where step progress is reported (None: nowhere).
+        self._recordings = recordings
+        self._group_dir: str | None = None
         self._pipeline_preset = pipeline_preset
 
     async def run(
         self, input_path: str, output_path: str, ctx: StepContext
     ) -> PipelineResult:
+        self._group_dir = str(ctx.group_dir)
         manifest = PipelineManifest.load_or_init(ctx.group_dir, input_path, output_path)
         # Rebuild the working artifact map from the immutable source; skipped
         # steps are replayed on top so a re-run never sees its own stale output.
@@ -328,22 +330,24 @@ class PipelineRunner:
         status: str,
         error: str | None = None,
     ) -> None:
-        """Best-effort TTT step upsert. Never raises; never blocks the pipeline."""
-        if self._ttt_reporter is None or self._ttt_recording_id is None:
+        """Best-effort step report. Never raises; never blocks the pipeline."""
+        if self._recordings is None or self._group_dir is None:
             return
         label = _STEP_LABELS.get(step_type, step_type.replace("_", " ").title())
         try:
-            await self._ttt_reporter.update_recording_step(
-                self._ttt_recording_id,
-                step_id=step_id,
-                step_type=step_type,
-                label=label,
-                status=status,
-                error=error,
-                pipeline_preset=self._pipeline_preset,
+            await self._recordings.progress(
+                self._group_dir,
+                StepReport(
+                    step_id=step_id,
+                    step_type=step_type,
+                    label=label,
+                    status=status,
+                    error=error,
+                    pipeline_preset=self._pipeline_preset,
+                ),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("pipeline: TTT step report failed (ignored): %s", exc)
+            logger.debug("pipeline: step report failed (ignored): %s", exc)
 
     def _fail(
         self,

@@ -51,8 +51,16 @@ class PipelineProcessor(QueueProcessor):
         runtime: str = "service",
         resource_manager=None,
         ntfy_processor=None,
+        integrations=None,
     ):
         super().__init__(storage_path, config)
+        # The app hands in its integrations so one TTT session backs every
+        # port; a standalone processor resolves its own.
+        if integrations is None:
+            from video_grouper.integrations import build_integrations
+
+            integrations = build_integrations(config, storage_path)
+        self.integrations = integrations
         self.upload_processor = upload_processor
         self.runtime = runtime
         # Used by the reactive corruption-recovery path to warn the camera
@@ -70,8 +78,6 @@ class PipelineProcessor(QueueProcessor):
                 ram_heavy_concurrency=config.pipeline.ram_heavy_concurrency,
             )
         self.resource_manager = resource_manager
-        # Set post-construction by the app (same pattern as other processors).
-        self.ttt_reporter = None
         # Only one game runs at a time within this processor (cross-game
         # parallelism is future work; the ResourceManager is the seam for it).
         self._semaphore = asyncio.Semaphore(1)
@@ -99,13 +105,11 @@ class PipelineProcessor(QueueProcessor):
             # the new and legacy completion statuses so a mixed-history install
             # never re-runs a completed game.
             state_file = item.group_dir / "state.json"
-            ttt_recording_id: str | None = None
             if state_file.exists():
                 try:
                     with open(state_file) as f:
                         state_data_preflight = json.load(f)
                     current_status = state_data_preflight.get("status")
-                    ttt_recording_id = state_data_preflight.get("ttt_recording_id")
                 except (json.JSONDecodeError, OSError) as e:
                     logger.warning(
                         "PIPELINE: could not read state.json for %s "
@@ -150,6 +154,16 @@ class PipelineProcessor(QueueProcessor):
                 team_name=team_name,
                 storage_path=Path(item.storage_path or self.storage_path),
                 ttt_config=ttt_dump,
+                entitlements=self.integrations.entitlements,
+                recordings=self.integrations.recordings,
+                signing_public_keys=list(
+                    getattr(
+                        getattr(self.config, "ttt", None),
+                        "plugin_signing_public_keys",
+                        [],
+                    )
+                    or []
+                ),
             )
             # A team may override which steps run on its games
             # ([TEAM.<key>] pipeline). Resolved here because this is the only
@@ -173,8 +187,7 @@ class PipelineProcessor(QueueProcessor):
                 step_specs,
                 runtime=self.runtime,
                 resource_manager=self.resource_manager,
-                ttt_reporter=getattr(self, "ttt_reporter", None),
-                ttt_recording_id=ttt_recording_id,
+                recordings=self.integrations.recordings,
                 pipeline_preset=pipeline_preset,
             )
             result = await runner.run(item.input_path, item.output_path, ctx)

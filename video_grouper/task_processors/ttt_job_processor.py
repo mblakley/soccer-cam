@@ -1,9 +1,14 @@
-"""TTT processing job processor -- polls TTT for pending jobs and executes them."""
+"""Processing-job processor -- runs a recording through download -> upload.
+
+Jobs arrive from the work source (``IWorkSource``, kind ``process_recording``)
+via the work poller; claim / progress / complete / fail go back through it."""
 
 import asyncio
 import logging
 import os
 
+from ..integrations.work import PROCESS_RECORDING, IWorkSource, WorkItem
+from ..integrations.work.sources.null import NullWorkSource
 from ..utils.config import Config
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
@@ -13,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 
 class TTTJobProcessor(QueueProcessor):
-    """Drains the TTT processing-job queue.
+    """Drains the processing-job queue.
 
-    Service registration + heartbeats are owned by :class:`TTTPoller`
-    (they're cheap calls on the poll cadence). This processor's job is
+    Announcing this install as a job-taking service, and its heartbeat, are
+    the device link's (:class:`DeviceLinkProcessor`). This processor's job is
     purely the per-task pipeline: claim → download → combine → trim →
     upload. The entire flow runs under ``ram_heavy``.
     """
@@ -25,7 +30,7 @@ class TTTJobProcessor(QueueProcessor):
         self,
         storage_path: str,
         config: Config,
-        ttt_client=None,
+        work: IWorkSource | None = None,
         camera=None,
         download_processor=None,
         video_processor=None,
@@ -33,13 +38,12 @@ class TTTJobProcessor(QueueProcessor):
         resource_manager=None,
     ):
         super().__init__(storage_path, config)
-        self.ttt_client = ttt_client
+        self.work: IWorkSource = work or NullWorkSource()
         self.camera = camera
         self.download_processor = download_processor
         self.video_processor = video_processor
         self.upload_processor = upload_processor
         self.resource_manager = resource_manager
-        self._service_id: str | None = None  # set by TTTPoller via setter
 
     @property
     def queue_type(self) -> QueueType:
@@ -49,65 +53,56 @@ class TTTJobProcessor(QueueProcessor):
         return item.ttt_id
 
     async def process_item(self, item: TTTJobTask) -> None:
-        if self.ttt_client is None:
-            raise RuntimeError("TTTJobProcessor needs a ttt_client; check TTT config")
         if self.resource_manager is not None:
             async with self.resource_manager.acquire(("ram_heavy",)):
-                await self._process_job(self.ttt_client, item.payload)
+                await self._process_job(item.payload)
         else:
-            await self._process_job(self.ttt_client, item.payload)
+            await self._process_job(item.payload)
 
-    async def _process_job(self, ttt_client, job: dict) -> None:
-        """Process a single TTT job through the pipeline."""
+    async def _process_job(self, job: dict) -> None:
+        """Process a single job through the pipeline."""
         job_id = job["id"]
+        work_item = WorkItem(PROCESS_RECORDING, job_id, job)
         try:
             # Claim the job
             try:
-                await asyncio.to_thread(ttt_client.claim_job, job_id)
-                logger.info("TTT_JOBS: Claimed job %s", job_id)
+                claimed = await self.work.claim(work_item)
             except Exception as e:
                 logger.error("TTT_JOBS: Failed to claim job %s: %s", job_id, e)
                 return
+            if claimed is None:
+                logger.info("TTT_JOBS: Job %s taken by another worker", job_id)
+                return
+            logger.info("TTT_JOBS: Claimed job %s", job_id)
 
             config = job.get("config", {})
 
             # Step 1: Report downloading status
             await self._update_progress(
-                ttt_client,
-                job_id,
-                "downloading",
-                {"percent": 0, "message": "Starting download from camera"},
+                work_item, "downloading", 0, "Starting download from camera"
             )
 
             group_dir = await self._resolve_or_create_group(job, config)
             if not group_dir:
                 await self._fail_job(
-                    ttt_client, job_id, "Could not resolve recording group directory"
+                    work_item, "Could not resolve recording group directory"
                 )
                 return
 
             # Step 2: Wait for combine (or trigger it)
             await self._update_progress(
-                ttt_client,
-                job_id,
-                "combining",
-                {"percent": 30, "message": "Combining video files"},
+                work_item, "combining", 30, "Combining video files"
             )
             combined_path = await self._wait_for_combined(group_dir)
             if not combined_path:
-                await self._fail_job(ttt_client, job_id, "Combined video not found")
+                await self._fail_job(work_item, "Combined video not found")
                 return
 
             # Step 3: Trim if config specifies trim times
             trim_start = config.get("trim_start")
             trim_end = config.get("trim_end")
             if trim_start is not None:
-                await self._update_progress(
-                    ttt_client,
-                    job_id,
-                    "trimming",
-                    {"percent": 50, "message": "Trimming video"},
-                )
+                await self._update_progress(work_item, "trimming", 50, "Trimming video")
                 trimmed_path = await self._trim_video(
                     group_dir, combined_path, trim_start, trim_end
                 )
@@ -117,42 +112,37 @@ class TTTJobProcessor(QueueProcessor):
 
             # Step 4: Upload
             await self._update_progress(
-                ttt_client,
-                job_id,
-                "uploading",
-                {"percent": 70, "message": "Uploading to YouTube"},
+                work_item, "uploading", 70, "Uploading to YouTube"
             )
             youtube_url = await self._upload_video(group_dir, upload_path, config)
 
             # Step 5: Complete
             result = {"youtube_url": youtube_url} if youtube_url else {}
-            await asyncio.to_thread(ttt_client.complete_job, job_id, result)
+            await self.work.complete(work_item, result)
             logger.info("TTT_JOBS: Completed job %s", job_id)
 
         except Exception as e:
             logger.error(
                 "TTT_JOBS: Error processing job %s: %s", job_id, e, exc_info=True
             )
-            await self._fail_job(ttt_client, job_id, str(e))
+            await self._fail_job(work_item, str(e))
 
     async def _update_progress(
-        self, ttt_client, job_id: str, status: str, progress: dict
+        self, job: WorkItem, status: str, percent: int, message: str
     ) -> None:
-        """Update job progress in TTT."""
+        """Report job progress. Failures are logged, not raised."""
         try:
-            await asyncio.to_thread(
-                ttt_client.update_job_progress, job_id, status, progress
-            )
+            await self.work.progress(job, status, percent, {"message": message})
         except Exception as e:
-            logger.warning("TTT_JOBS: Failed to update progress for %s: %s", job_id, e)
+            logger.warning("TTT_JOBS: Failed to update progress for %s: %s", job.id, e)
 
-    async def _fail_job(self, ttt_client, job_id: str, error: str) -> None:
-        """Mark a job as failed in TTT."""
+    async def _fail_job(self, job: WorkItem, error: str) -> None:
+        """Report a job as failed. Failures to report are logged, not raised."""
         try:
-            await asyncio.to_thread(ttt_client.fail_job, job_id, error)
-            logger.warning("TTT_JOBS: Job %s failed: %s", job_id, error)
+            await self.work.fail(job, error)
+            logger.warning("TTT_JOBS: Job %s failed: %s", job.id, error)
         except Exception as e:
-            logger.error("TTT_JOBS: Failed to report failure for %s: %s", job_id, e)
+            logger.error("TTT_JOBS: Failed to report failure for %s: %s", job.id, e)
 
     async def _resolve_or_create_group(self, job: dict, config: dict) -> str | None:
         """Resolve or create the recording group directory for this job."""

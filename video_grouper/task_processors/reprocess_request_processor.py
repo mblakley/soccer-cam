@@ -1,6 +1,10 @@
-"""ReprocessRequestProcessor — claims a TTT reprocess request, resolves
+"""ReprocessRequestProcessor — claims a reprocess request, resolves
 the recording's local group dir, writes the marker the local
 pipeline_processor honors.
+
+Requests arrive from the work source (``IWorkSource``, kind ``reprocess``)
+via the work poller; claim / details (the recording) / complete / fail go
+back through it.
 
 QueueProcessor pattern. The "claim + write marker" work runs as
 ``process_item`` (light enough that the ``ram_heavy`` acquire is
@@ -16,6 +20,8 @@ import json
 import logging
 from pathlib import Path
 
+from ..integrations.work import REPROCESS, IWorkSource, WorkItem
+from ..integrations.work.sources.null import NullWorkSource
 from ..utils.config import Config
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
@@ -41,12 +47,12 @@ class ReprocessRequestProcessor(QueueProcessor):
         self,
         storage_path: str,
         config: Config,
-        ttt_client=None,
+        work: IWorkSource | None = None,
         resource_manager=None,
         on_verify_phases=None,
     ):
         super().__init__(storage_path, config)
-        self.ttt_client = ttt_client
+        self.work: IWorkSource = work or NullWorkSource()
         self.resource_manager = resource_manager
         # S3: async callback (group_dir -> None) that starts the NTFY phase
         # verify-loop. Wired to NtfyProcessor.request_phase_verify by the app;
@@ -59,12 +65,12 @@ class ReprocessRequestProcessor(QueueProcessor):
         return QueueType.TTT_REPROCESS_REQUEST
 
     def get_item_key(self, item: ReprocessRequestTask) -> str:
-        # Dedup on the TTT request id so a re-poll of the same row
+        # Dedup on the request id so a re-poll of the same row
         # doesn't double-claim.
         return item.ttt_id
 
     async def process_item(self, item: ReprocessRequestTask) -> None:
-        """Claim the TTT row, find the local group dir, write the
+        """Claim the request, find the local group dir, write the
         ``reprocess_request.json`` marker.
 
         Wrapped in the shared ``ram_heavy`` gate even though the work
@@ -74,27 +80,28 @@ class ReprocessRequestProcessor(QueueProcessor):
         narrow window where two reprocess marker writes for the same
         recording could land back-to-back.
         """
-        if self.ttt_client is None:
-            raise RuntimeError(
-                "ReprocessRequestProcessor needs a ttt_client; check TTT config"
-            )
 
         async def _do_work() -> None:
             ttt_id = item.ttt_id
 
             try:
-                claimed = await asyncio.to_thread(
-                    self.ttt_client.claim_reprocess_request, ttt_id
+                claimed = await self.work.claim(
+                    WorkItem(REPROCESS, ttt_id, item.payload)
                 )
             except Exception as exc:
                 # Lost the race or the row is gone — quiet success.
                 logger.debug("reprocess: claim %s failed (%s)", ttt_id, exc)
                 return
+            if claimed is None:
+                logger.debug("reprocess: claim %s lost to another worker", ttt_id)
+                return
+            # From here on the request is the claimed row.
+            request = WorkItem(REPROCESS, ttt_id, claimed, status="claimed")
 
-            group_dir = await self._resolve_group_dir(claimed)
+            group_dir = await self._resolve_group_dir(request)
             if group_dir is None:
                 await self._report_failure(
-                    ttt_id,
+                    request,
                     "Could not resolve local recording_group_dir for this "
                     "recording. Make sure the camera-manager box has the "
                     "source video.",
@@ -108,16 +115,16 @@ class ReprocessRequestProcessor(QueueProcessor):
             # producer the app wires in.
             kind = claimed.get("kind") or "stabilization"
             if kind == "phase_correction":
-                await self._handle_phase_correction(ttt_id, claimed, group_dir)
+                await self._handle_phase_correction(request, group_dir)
                 return
             if kind == "verify_phases":
-                await self._handle_verify_phases(ttt_id, group_dir)
+                await self._handle_verify_phases(request, group_dir)
                 return
             if kind in ("truncated_start", "truncated_end"):
-                await self._handle_truncated(ttt_id, group_dir, kind)
+                await self._handle_truncated(request, group_dir, kind)
                 return
             if kind == "restart":
-                await self._handle_restart(ttt_id, claimed, group_dir)
+                await self._handle_restart(request, group_dir)
                 return
 
             local_request = {
@@ -151,22 +158,22 @@ class ReprocessRequestProcessor(QueueProcessor):
     _PHASE_KEYS = ("kickoff", "halftime", "second_half", "end")
 
     async def _handle_phase_correction(
-        self, ttt_id: str, claimed: dict, group_dir: Path
+        self, request: WorkItem, group_dir: Path
     ) -> None:
         """Apply a camera-manager phase edit: overwrite the local phases with the
         corrected (human) values and re-confirm them to TTT.
 
-        The corrected boundaries ride in ``claimed["phases"]`` as
+        The corrected boundaries ride in the request's ``phases`` as
         ``{kickoff/halftime/second_half/end: seconds}`` (trimmed-video time, any
         subset). Phases are display-only (decision 4), so nothing downstream
         consumes them yet — no re-trim/re-render is triggered here; that arrives
         with the first phase consumer.
         """
-        raw = claimed.get("phases") or {}
+        raw = request.payload.get("phases") or {}
         times = {k: float(raw[k]) for k in self._PHASE_KEYS if raw.get(k) is not None}
         if not times:
             await self._report_failure(
-                ttt_id, "phase_correction request carried no phase times"
+                request, "phase_correction request carried no phase times"
             )
             return
         payload = {"source": "human", "ok": True, "times": times}
@@ -185,16 +192,16 @@ class ReprocessRequestProcessor(QueueProcessor):
         await self._repush_phases(group_dir, payload)
 
         try:
-            await asyncio.to_thread(
-                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
-            )
+            await self.work.complete(request, {})
         except Exception as exc:  # noqa: BLE001
             logger.warning("phase_correction: could not report completion (%s)", exc)
         logger.info(
             "phase_correction: applied human phases %s to %s", times, group_dir.name
         )
 
-    async def _handle_truncated(self, ttt_id: str, group_dir: Path, kind: str) -> None:
+    async def _handle_truncated(
+        self, request: WorkItem, group_dir: Path, kind: str
+    ) -> None:
         """Re-run the detector with the human-supplied truncation flag (from the T2
         "already started" / "ended early" control) and re-push corrected phases.
 
@@ -259,38 +266,22 @@ class ReprocessRequestProcessor(QueueProcessor):
             await self._repush_phases(group_dir, payload)
 
         try:
-            await asyncio.to_thread(
-                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
-            )
+            await self.work.complete(request, {})
         except Exception as exc:  # noqa: BLE001
             logger.warning("truncated: could not report completion (%s)", exc)
         logger.info("%s applied to %s", kind, group_dir.name)
 
     async def _repush_phases(self, group_dir: Path, payload: dict) -> None:
-        """Re-confirm the (now source=human) phases to the TTT game session."""
-        from video_grouper.task_processors.phase_ttt_push import (
-            phases_to_session_fields,
-        )
+        """Re-report the (now source=human) phases. Best-effort; never raises."""
+        from video_grouper.integrations import active
 
-        fields = phases_to_session_fields(payload)
-        if not fields:
-            return
-        try:
-            session = await asyncio.to_thread(
-                self.ttt_client.get_game_session_by_dir, group_dir.name
-            )
-            if session and session.get("id"):
-                await asyncio.to_thread(
-                    self.ttt_client.update_game_session_phases, session["id"], **fields
-                )
-        except Exception as exc:  # noqa: BLE001 — re-push is best-effort
-            logger.warning("phase_correction: TTT re-push failed (%s)", exc)
+        await active().recordings.phases(str(group_dir), payload)
 
     # ------------------------------------------------------------------
     # S3: verify-phases trigger
     # ------------------------------------------------------------------
 
-    async def _handle_verify_phases(self, ttt_id: str, group_dir: Path) -> None:
+    async def _handle_verify_phases(self, request: WorkItem, group_dir: Path) -> None:
         """Start the NTFY verify-loop for this recording (S3).
 
         The loop itself runs asynchronously in NtfyProcessor (one Correct/
@@ -299,7 +290,7 @@ class ReprocessRequestProcessor(QueueProcessor):
         """
         if self.on_verify_phases is None:
             await self._report_failure(
-                ttt_id,
+                request,
                 "Phase verification is unavailable on this install (NTFY not configured).",
             )
             return
@@ -307,13 +298,11 @@ class ReprocessRequestProcessor(QueueProcessor):
             await self.on_verify_phases(group_dir)
         except Exception as exc:  # noqa: BLE001
             await self._report_failure(
-                ttt_id, f"Could not start phase verification: {exc}"
+                request, f"Could not start phase verification: {exc}"
             )
             return
         try:
-            await asyncio.to_thread(
-                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
-            )
+            await self.work.complete(request, {})
         except Exception as exc:  # noqa: BLE001
             logger.warning("verify_phases: could not report completion (%s)", exc)
         logger.info("verify_phases: started verify-loop for %s", group_dir.name)
@@ -322,24 +311,22 @@ class ReprocessRequestProcessor(QueueProcessor):
     # Restart handler (kind="restart")
     # ------------------------------------------------------------------
 
-    async def _handle_restart(
-        self, ttt_id: str, claimed: dict, group_dir: Path
-    ) -> None:
+    async def _handle_restart(self, request: WorkItem, group_dir: Path) -> None:
         """Handle a TTT-initiated pipeline restart from a specific step.
 
-        ``claimed["phases"]`` is reused as a generic payload:
+        The request's ``phases`` field is reused as a generic payload:
         ``{"from_step": str, "config_preset": str | None}``.
         ``from_step`` is one of: "download", "combine", "trim", a pipeline
         manifest step id (e.g. "ball_detect", "render"), or "upload".
         ``config_preset`` is an optional preset name ("homegrown", "autocam").
         """
-        payload = claimed.get("phases") or {}
+        payload = request.payload.get("phases") or {}
         from_step = str(payload.get("from_step") or "").strip()
         config_preset = payload.get("config_preset") or None
 
         if not from_step:
             await self._report_failure(
-                ttt_id, "restart request missing required from_step field"
+                request, "restart request missing required from_step field"
             )
             return
 
@@ -350,14 +337,12 @@ class ReprocessRequestProcessor(QueueProcessor):
                 "restart: %s failed (from_step=%r): %s", group_dir.name, from_step, exc
             )
             await self._report_failure(
-                ttt_id, f"restart from {from_step!r} failed: {exc}"
+                request, f"restart from {from_step!r} failed: {exc}"
             )
             return
 
         try:
-            await asyncio.to_thread(
-                self.ttt_client.update_reprocess_status, ttt_id, "completed", None, None
-            )
+            await self.work.complete(request, {})
         except Exception as exc:  # noqa: BLE001
             logger.warning("restart: could not report completion (%s)", exc)
         logger.info(
@@ -509,16 +494,13 @@ class ReprocessRequestProcessor(QueueProcessor):
     # Helpers
     # ------------------------------------------------------------------
 
-    async def _resolve_group_dir(self, claimed: dict) -> Path | None:
+    async def _resolve_group_dir(self, request: WorkItem) -> Path | None:
+        recording_id = request.payload["recording_id"]
         try:
-            recording = await asyncio.to_thread(
-                self.ttt_client.get_camera_recording, claimed["recording_id"]
-            )
+            recording = (await self.work.details(request)).get("recording") or {}
         except Exception as exc:
             logger.warning(
-                "reprocess: could not fetch recording %s (%s)",
-                claimed["recording_id"],
-                exc,
+                "reprocess: could not fetch recording %s (%s)", recording_id, exc
             )
             return None
         file_group = recording.get("file_group")
@@ -542,14 +524,8 @@ class ReprocessRequestProcessor(QueueProcessor):
                 "reprocess: could not nudge state.json at %s (%s)", state_path, exc
             )
 
-    async def _report_failure(self, ttt_id: str, message: str) -> None:
+    async def _report_failure(self, request: WorkItem, message: str) -> None:
         try:
-            await asyncio.to_thread(
-                self.ttt_client.update_reprocess_status,
-                ttt_id,
-                "failed",
-                None,
-                message,
-            )
+            await self.work.fail(request, message)
         except Exception as exc:
             logger.warning("reprocess: could not report failure (%s)", exc)
