@@ -1,6 +1,9 @@
+import errno
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, TypedDict
+
+import httpx
 
 
 class CameraUnreachableError(Exception):
@@ -16,6 +19,23 @@ class CameraUnreachableError(Exception):
     stuck `download_failed` and CameraPoller's high-water mark
     advanced past them so they were never rediscovered.
     """
+
+
+def describe_download_error(exc: BaseException) -> str:
+    """A download exception as a short phrase a person can act on.
+
+    Names the two causes people can do something about -- the disk filling
+    up and a timeout -- in plain words, and otherwise keeps the exception's
+    own message (plus its type, which is often the only clue an empty
+    ``ConnectionResetError()`` gives).
+    """
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return f"local disk full while writing the download ({exc})"
+    if isinstance(exc, TimeoutError | httpx.TimeoutException):
+        detail = str(exc)
+        return f"timed out ({detail})" if detail else "timed out"
+    detail = str(exc)
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
 
 
 class DeviceInfo(TypedDict):
@@ -81,10 +101,29 @@ class Camera(ABC):
         """Get size of a file on the camera."""
         pass
 
+    #: Why the most recent ``download_file`` call failed, as a short phrase a
+    #: person deciding whether to give up on the footage can act on ("HTTP 500
+    #: from the camera", "disk full ..."). None before any download and after
+    #: a success. ``download_file`` keeps returning a bare bool for its
+    #: callers; this is the side channel for the reason, which
+    #: DownloadProcessor stores on the file for the dashboard.
+    last_download_error: str | None = None
+
     @abstractmethod
     async def download_file(self, remote_path: str, local_path: str) -> bool:
-        """Download a file from the camera."""
+        """Download a file from the camera.
+
+        Implementations clear :attr:`last_download_error` when they start and
+        set it (via :meth:`_download_failed`) on every path that returns
+        False.
+        """
         pass
+
+    def _download_failed(self, reason: str) -> bool:
+        """Record why this download failed and return False, for
+        ``return self._download_failed("...")`` on a failure path."""
+        self.last_download_error = reason
+        return False
 
     @abstractmethod
     async def stop_recording(self) -> bool:

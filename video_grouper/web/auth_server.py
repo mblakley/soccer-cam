@@ -1109,24 +1109,31 @@ def _render_stuck_downloads_section(stuck: list[dict]) -> str:
     rows = []
     for item in stuck:
         attempts = int(item.get("failed_attempts") or 0)
-        attempts_html = (
-            f"{attempts} round{'s' if attempts != 1 else ''}" if attempts else "&mdash;"
+        failed = (
+            [f"Failed {attempts} round{'s' if attempts != 1 else ''}"]
+            if attempts
+            else []
         )
-        err = item.get("last_error")
         when = _fmt_when(item.get("last_failed_at"))
+        if when:
+            failed.append(f"last {html.escape(when)}")
+        err = item.get("last_error")
         err_html = (
             f'<span class="err">{html.escape(str(err))}</span>'
             if err
             else '<span class="faint">No error recorded</span>'
         )
-        if when:
-            err_html += f'<div class="hint">{html.escape(when)}</div>'
+        # Two data columns: everything about the recording stacks in the
+        # first. A phone has room for little more, and a table wider than
+        # the screen widens the whole page with it.
         rows.append(
             "<tr>"
             f'<td class="wrap-anywhere"><code>{html.escape(str(item["file_name"]))}'
-            f'</code><div class="hint mono">{_stuck_where(item)}</div></td>'
-            f"<td>{_fmt_recorded(item.get('start_time'), item.get('end_time'))}</td>"
-            f'<td class="nowrap">{attempts_html}</td>'
+            f'</code><div class="hint mono">{_stuck_where(item)}</div>'
+            '<div class="hint">'
+            f"{_fmt_recorded(item.get('start_time'), item.get('end_time'))}</div>"
+            + (f'<div class="hint">{", ".join(failed)}</div>' if failed else "")
+            + "</td>"
             f'<td class="wrap-anywhere">{err_html}</td>'
             '<td><form method="post" action="/downloads/skip">'
             f'<input type="hidden" name="group" value="{html.escape(str(item["group"]))}">'
@@ -1140,8 +1147,9 @@ def _render_stuck_downloads_section(stuck: list[dict]) -> str:
         "audit pass. Until one downloads or you skip it, it holds its "
         "camera&rsquo;s watermark, so later games are not archived. Skip only "
         "footage you are prepared to lose.</p>"
-        "<table><tr><th>Recording</th><th>Recorded</th><th>Failed</th>"
-        "<th>Last error</th><th></th></tr>" + "".join(rows) + "</table>"
+        "<table><tr><th>Recording</th><th>Last error</th><th></th></tr>"
+        + "".join(rows)
+        + "</table>"
     )
 
 

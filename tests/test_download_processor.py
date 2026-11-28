@@ -732,3 +732,48 @@ class TestRepeatedFailureAndSkip:
         state = DirectoryState(group_dir).files[file_path]
         assert (state.status, state.failed_attempts) == ("skipped", 0)
         assert state.skipped_by == "dashboard"
+
+
+class TestCameraFailureReasonIsStored:
+    """When download_file returns False, the camera's own reason is what the
+    file records -- not "Download failed for <name>", which only repeats the
+    name the dashboard already shows."""
+
+    @pytest.mark.asyncio
+    async def test_the_cameras_reason_is_stored(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.download_file = AsyncMock(return_value=False)
+        mock_camera.last_download_error = "HTTP 500 from the camera"
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        with pytest.raises(
+            RuntimeError, match="Download failed for gone.dav: HTTP 500"
+        ):
+            await processor.process_item(rec)
+
+        state = DirectoryState(group_dir).files[file_path]
+        assert state.error_message == "HTTP 500 from the camera"
+
+    @pytest.mark.asyncio
+    async def test_no_reason_from_the_camera_says_so(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        from video_grouper.task_processors.download_processor import (
+            NO_FAILURE_REASON,
+        )
+
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.download_file = AsyncMock(return_value=False)
+        mock_camera.last_download_error = None
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        with pytest.raises(RuntimeError):
+            await processor.process_item(rec)
+
+        state = DirectoryState(group_dir).files[file_path]
+        assert state.error_message == NO_FAILURE_REASON
+        assert "gone.dav" not in state.error_message

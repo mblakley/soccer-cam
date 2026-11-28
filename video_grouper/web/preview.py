@@ -49,8 +49,9 @@ _STUCK = [
         "start_time": "2026-08-22T09:30:00",
         "end_time": "2026-08-22T10:15:00",
         "failed_attempts": 6,
-        "last_error": "Download failed for "
-        "RecM09_20260822_093000_101500_6D28808_2F4A1B20.mp4",
+        # What a corrupt segment on the card looks like through the HTTP
+        # fast path: the camera stops serving partway, every time.
+        "last_error": "HTTP transfer stopped short: 412,090,368 of 786,432,000 bytes",
         "last_failed_at": "2026-08-23T07:41:12",
     }
 ]

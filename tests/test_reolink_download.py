@@ -1276,3 +1276,192 @@ class TestDownloadProtocolToggle:
 
         assert len(calls) == 1
         MockBaichuan.assert_called_once()
+
+
+class TestFailureNotes:
+    """Every Reolink failure path leaves a short note, collected for one
+    download and reported as ReolinkCamera.last_download_error. The download
+    runs in a worker thread on its own loop, so these also pin that the
+    collector crosses that boundary."""
+
+    @pytest.mark.asyncio
+    async def test_http_error_status(self, tmp_path):
+        from video_grouper.cameras.reolink_download import collect_failure_notes
+
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        client = _make_http_client(stream_resp=_make_stream_resp(500))
+        with collect_failure_notes() as notes, _patch_async_client(client):
+            await _download_via_http_async(HOST, 80, SDA_FILE, str(tmp_path / "o.mp4"))
+        assert notes == ["HTTP 500 from the camera"]
+
+    @pytest.mark.asyncio
+    async def test_http_size_mismatch(self, tmp_path):
+        from video_grouper.cameras.reolink_download import collect_failure_notes
+
+        stream = _make_stream_resp(
+            200, body=b"x" * 100, headers={"content-length": "999"}
+        )
+        client = _make_http_client(get_side_effect=[_get_resp(200)], stream_resp=stream)
+        with collect_failure_notes() as notes, _patch_async_client(client):
+            await _download_via_http_async(HOST, 80, SDA_FILE, str(tmp_path / "o.mp4"))
+        assert notes == ["HTTP transfer stopped short: 100 of 999 bytes"]
+
+    @pytest.mark.asyncio
+    async def test_http_local_write_fails_disk_full(self, tmp_path):
+        import errno
+
+        from video_grouper.cameras.reolink_download import collect_failure_notes
+
+        _HTTP_PATH_SUPPORTED[HOST] = True
+        stream = _make_stream_resp(200, body=b"x" * 10)
+        client = _make_http_client(stream_resp=stream)
+        with (
+            collect_failure_notes() as notes,
+            _patch_async_client(client),
+            patch(
+                "builtins.open",
+                side_effect=OSError(errno.ENOSPC, "No space left on device"),
+            ),
+        ):
+            r = await _download_via_http_async(
+                HOST, 80, SDA_FILE, str(tmp_path / "o.mp4")
+            )
+        assert r is False
+        assert len(notes) == 1
+        assert notes[0].startswith("HTTP download: local disk full")
+
+    @pytest.mark.asyncio
+    async def test_sticky_http_exhausted(self, tmp_path):
+        from video_grouper.cameras.reolink_download import (
+            _note_failure,
+            collect_failure_notes,
+            summarize_failure_notes,
+        )
+
+        _HTTP_PATH_SUPPORTED[HOST] = True
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            _note_failure("HTTP 503 from the camera")
+            return False
+
+        with (
+            collect_failure_notes() as notes,
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+            _no_sleep(),
+        ):
+            await _download_and_mux_async(
+                HOST, 9000, "x", "y", SDA_FILE, str(tmp_path / "o.mp4")
+            )
+        assert summarize_failure_notes(notes) == (
+            "HTTP 503 from the camera; then "
+            f"HTTP failed {_HTTP_STICKY_MAX_RETRIES + 1} times in a row"
+        )
+
+    @pytest.mark.asyncio
+    async def test_http_only_protocol_without_http(self, tmp_path):
+        from video_grouper.cameras.reolink_download import collect_failure_notes
+
+        async def fake_http(host, http_port, file_path, output, on_progress=None):
+            return None
+
+        with (
+            collect_failure_notes() as notes,
+            patch(
+                "video_grouper.cameras.reolink_download._download_via_http_async",
+                side_effect=fake_http,
+            ),
+        ):
+            await _download_and_mux_async(
+                HOST,
+                9000,
+                "x",
+                "y",
+                SDA_FILE,
+                str(tmp_path / "o.mp4"),
+                download_protocol="http",
+            )
+        assert len(notes) == 1
+        assert "does not allow falling back to Baichuan" in notes[0]
+
+    @pytest.mark.asyncio
+    async def test_baichuan_login_failure_crosses_the_worker_thread(self):
+        """download_and_mux runs in a thread with its own loop; the note must
+        still reach the caller's collector."""
+        from video_grouper.cameras.reolink_download import (
+            collect_failure_notes,
+            download_and_mux,
+        )
+
+        with patch(
+            "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+        ) as MockClient:
+            instance = MockClient.return_value
+            instance.connect = AsyncMock()
+            instance.login = AsyncMock(
+                side_effect=ConnectionError("Login failed: responseCode=401")
+            )
+            instance.close = AsyncMock()
+            with collect_failure_notes() as notes:
+                await download_and_mux(
+                    host=HOST,
+                    port=9000,
+                    username="admin",
+                    password="bad",
+                    file_path="/test.mp4",
+                    output_mp4="/tmp/out.mp4",
+                    download_protocol="baichuan",
+                )
+        assert notes == [
+            "Baichuan download: ConnectionError: Login failed: responseCode=401"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_baichuan_no_video_data(self, tmp_path):
+        from video_grouper.cameras.reolink_download import collect_failure_notes
+
+        with patch(
+            "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+        ) as MockClient:
+            instance = MockClient.return_value
+            instance.connect = AsyncMock()
+            instance.login = AsyncMock()
+            instance.download_file_replay = AsyncMock(
+                return_value={"frames_written": 0, "bytes_written": 0}
+            )
+            instance.close = AsyncMock()
+            with collect_failure_notes() as notes:
+                await _download_and_mux_async(
+                    HOST,
+                    9000,
+                    "x",
+                    "y",
+                    "/test.mp4",
+                    str(tmp_path / "o.mp4"),
+                    download_protocol="baichuan",
+                )
+        assert notes == ["Baichuan stream produced no video data"]
+
+    @pytest.mark.asyncio
+    async def test_baichuan_timeout(self, tmp_path):
+        from video_grouper.cameras.reolink_download import collect_failure_notes
+
+        with patch(
+            "video_grouper.cameras.reolink_download.BaichuanStreamClient"
+        ) as MockClient:
+            instance = MockClient.return_value
+            instance.connect = AsyncMock(side_effect=TimeoutError())
+            instance.close = AsyncMock()
+            with collect_failure_notes() as notes:
+                await _download_and_mux_async(
+                    HOST,
+                    9000,
+                    "x",
+                    "y",
+                    "/test.mp4",
+                    str(tmp_path / "o.mp4"),
+                    download_protocol="baichuan",
+                )
+        assert notes == ["Baichuan download: timed out"]

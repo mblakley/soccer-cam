@@ -117,6 +117,15 @@ way out was editing `state.json` by hand. Mark: "we should also allow marking a 
 - **Repeated failure is recorded on the file** so the dashboard can show it without logs:
   `failed_attempts` (+1 per exhausted retry round, i.e. per `on_item_permanently_failed`),
   `error_message` + `last_failed_at` (per failed attempt).
+- **The error is the camera's reason, not "Download failed for <name>".** `download_file` keeps
+  returning a bare bool for its callers; `Camera.last_download_error` carries why (HTTP status,
+  short read, timeout, disk full, the Baichuan error...), cleared at the start of each download
+  and set on every failure path in `dahua.py` and `reolink.py`/`reolink_download.py`. Reolink's
+  helpers run in a worker thread on their own loop and return bool/None, so they leave notes in a
+  `ContextVar` collector the camera reads after the call, rather than changing every helper's
+  signature. With no reason set the processor stores "the camera reported a failure with no
+  reason". A person deciding to give up footage for good should see the cause, not the file name
+  repeated back.
 - **Dashboard UX:** a "Downloads that keep failing" section lists files that are
   `download_failed` (or `pending` after a failed round) in groups still downloading, with
   camera, group, recording time, rounds, last error. Skip is two steps -- a confirmation page

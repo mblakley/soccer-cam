@@ -43,6 +43,27 @@ async def _check_camera(camera: Camera) -> bool:
         return False
 
 
+# Stored when a camera's download_file returns False without saying why.
+NO_FAILURE_REASON = "the camera reported a failure with no reason"
+
+
+class CameraReportedFailure(RuntimeError):
+    """download_file returned False. ``reason`` is the camera's explanation
+    (``Camera.last_download_error``), or NO_FAILURE_REASON."""
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _camera_failure_reason(camera: Camera) -> str:
+    reason = getattr(camera, "last_download_error", None)
+    # A str check, not truthiness: a test double's attribute is a Mock.
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
+    return NO_FAILURE_REASON
+
+
 class DownloadProcessor(QueueProcessor):
     """
     Task processor for downloading files from the camera.
@@ -321,7 +342,11 @@ class DownloadProcessor(QueueProcessor):
                         status="failed",
                     ),
                 )
-                raise RuntimeError(f"Download failed for {os.path.basename(file_path)}")
+                reason = _camera_failure_reason(self.camera)
+                raise CameraReportedFailure(
+                    f"Download failed for {os.path.basename(file_path)}: {reason}",
+                    reason=reason,
+                )
 
         except Exception as e:
             logger.error(
@@ -337,7 +362,14 @@ class DownloadProcessor(QueueProcessor):
             await dir_state.update_file_state(
                 file_path,
                 status="download_failed",
-                error_message=str(e) or type(e).__name__,
+                # The camera's own reason, not "Download failed for <name>":
+                # the dashboard already shows the name, and this is what a
+                # person reads before giving up on the footage for good.
+                error_message=(
+                    e.reason
+                    if isinstance(e, CameraReportedFailure)
+                    else str(e) or type(e).__name__
+                ),
                 last_failed_at=datetime.now().isoformat(),
             )
             await self.recordings.progress(

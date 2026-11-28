@@ -1000,3 +1000,57 @@ class TestReolinkCameraDownload:
         call_kwargs = mock_download.call_args[1]
         assert call_kwargs["port"] == 9001
         assert call_kwargs["channel"] == 1
+
+
+class TestReolinkDownloadFailureReason:
+    """ReolinkCamera.download_file reports the collected notes as
+    last_download_error, and clears it on the next success."""
+
+    @pytest.mark.asyncio
+    async def test_reason_set_on_failure_and_cleared_on_success(self, tmp_path):
+        from video_grouper.cameras.reolink_download import _note_failure
+
+        outcomes = [False, True]
+
+        async def fake_download(**kwargs):
+            ok = outcomes.pop(0)
+            if not ok:
+                _note_failure("HTTP 500 from the camera")
+            return ok
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        local = str(tmp_path / "video" / "file.mp4")
+        with patch(
+            "video_grouper.cameras.reolink.download_and_mux", side_effect=fake_download
+        ):
+            assert await camera.download_file("Rec/test.mp4", local) is False
+            assert camera.last_download_error == "HTTP 500 from the camera"
+
+            assert await camera.download_file("Rec/test.mp4", local) is True
+            assert camera.last_download_error is None
+
+    @pytest.mark.asyncio
+    async def test_failure_without_a_note_leaves_no_reason(self, tmp_path):
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        with patch(
+            "video_grouper.cameras.reolink.download_and_mux",
+            AsyncMock(return_value=False),
+        ):
+            assert await camera.download_file("Rec/x.mp4", str(tmp_path / "x")) is False
+        assert camera.last_download_error is None
+
+    @pytest.mark.asyncio
+    async def test_exception_is_described(self, tmp_path):
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        with patch(
+            "video_grouper.cameras.reolink.download_and_mux",
+            AsyncMock(side_effect=ConnectionResetError()),
+        ):
+            assert await camera.download_file("Rec/x.mp4", str(tmp_path / "x")) is False
+        assert camera.last_download_error == "ConnectionResetError"

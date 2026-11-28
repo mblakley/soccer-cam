@@ -20,6 +20,8 @@ we never permanently give up on HTTP for the session.
 """
 
 import asyncio
+import contextlib
+import contextvars
 import enum
 import logging
 import os
@@ -32,7 +34,52 @@ from hashlib import md5
 import httpx
 from Crypto.Cipher import AES
 
+from .base import describe_download_error
+
 logger = logging.getLogger(__name__)
+
+
+# ── Why a download failed ────────────────────────────────────────────
+# Every failure path below returns a bare bool (or None), so the reason would
+# otherwise live only in the log. Each one also leaves a short note here;
+# ReolinkCamera.download_file collects the notes for one download and reports
+# them as Camera.last_download_error, which ends up on the dashboard.
+#
+# A ContextVar rather than a new parameter: the download runs in a worker
+# thread on its own event loop, and asyncio.to_thread and Task creation both
+# carry the caller's context across. The caller's list therefore arrives in
+# every helper without threading an argument through each signature (and
+# every test double of them). With no collector set, notes are dropped.
+_FAILURE_NOTES: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "reolink_download_failure_notes", default=None
+)
+
+
+def _note_failure(note: str) -> None:
+    notes = _FAILURE_NOTES.get()
+    if notes is not None:
+        notes.append(note)
+
+
+@contextlib.contextmanager
+def collect_failure_notes():
+    """Collect the failure notes of the download run inside this block."""
+    notes: list[str] = []
+    token = _FAILURE_NOTES.set(notes)
+    try:
+        yield notes
+    finally:
+        _FAILURE_NOTES.reset(token)
+
+
+def summarize_failure_notes(notes: list[str]) -> str | None:
+    """One line from the notes, oldest first, repeats dropped -- sticky HTTP
+    retries would otherwise say the same thing six times."""
+    seen: list[str] = []
+    for note in notes:
+        if note not in seen:
+            seen.append(note)
+    return "; then ".join(seen) or None
 
 
 # ── Baichuan protocol constants ──────────────────────────────────────
@@ -1238,9 +1285,11 @@ async def _download_via_http_async(
                             f"{host}: {os.path.basename(file_path)} returned 404 "
                             "(file gone) — Baichuan for this file"
                         )
+                        _note_failure("HTTP 404 (camera did not serve the file)")
                         return None
                     if resp.status_code != 200:
                         logger.error(f"HTTP download {url} returned {resp.status_code}")
+                        _note_failure(f"HTTP {resp.status_code} from the camera")
                         return False
                     expected = int(resp.headers.get("content-length", 0))
                     with open(tmp, "wb") as f:
@@ -1255,6 +1304,10 @@ async def _download_via_http_async(
                     if expected and written != expected:
                         logger.error(
                             f"HTTP download size mismatch: got {written} expected {expected}"
+                        )
+                        _note_failure(
+                            f"HTTP transfer stopped short: {written:,} of "
+                            f"{expected:,} bytes"
                         )
                         return False
                 os.replace(tmp, output_mp4)
@@ -1285,6 +1338,7 @@ async def _download_via_http_async(
         return None
     except Exception as e:
         logger.error(f"HTTP download to {url} failed: {e!r}", exc_info=True)
+        _note_failure(f"HTTP download: {describe_download_error(e)}")
         return False
 
 
@@ -1353,6 +1407,7 @@ async def _download_and_mux_async(
                 f"{_HTTP_STICKY_MAX_RETRIES} sticky retries failed for "
                 f"{os.path.basename(file_path)}; surfacing failure to queue"
             )
+            _note_failure(f"HTTP failed {_HTTP_STICKY_MAX_RETRIES + 1} times in a row")
             return False
 
         if download_protocol == "http":
@@ -1362,6 +1417,10 @@ async def _download_and_mux_async(
                 host,
                 os.path.basename(file_path),
                 http_result,
+            )
+            _note_failure(
+                "HTTP unavailable, and download_protocol = http does not allow "
+                "falling back to Baichuan"
             )
             return False
 
@@ -1393,6 +1452,7 @@ async def _download_and_mux_async(
 
         if stats["bytes_written"] == 0:
             logger.error("Baichuan download produced no video data")
+            _note_failure("Baichuan stream produced no video data")
             return False
 
         audio_count = stats.get("audio_frames_written", 0)
@@ -1424,6 +1484,7 @@ async def _download_and_mux_async(
 
     except Exception as e:
         logger.error(f"Baichuan download failed: {e}", exc_info=True)
+        _note_failure(f"Baichuan download: {describe_download_error(e)}")
         return False
     finally:
         await client.close()

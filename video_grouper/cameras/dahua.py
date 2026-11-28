@@ -14,7 +14,7 @@ from video_grouper.utils.config import CameraConfig
 from video_grouper.utils.paths import get_camera_state_path
 
 from . import register_camera
-from .base import Camera, ConfigResult, DeviceInfo
+from .base import Camera, ConfigResult, DeviceInfo, describe_download_error
 
 # Default timeout for camera HTTP requests (30 seconds connect, 60 seconds read)
 CAMERA_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=30.0)
@@ -358,6 +358,7 @@ class DahuaCamera(Camera):
 
     async def download_file(self, file_path: str, local_path: str) -> bool:
         """Downloads a file from the camera to a local path."""
+        self.last_download_error = None
         try:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
@@ -366,7 +367,10 @@ class DahuaCamera(Camera):
             file_size = await self.get_file_size(file_path)
             if file_size == 0:
                 logger.warning(f"File {file_path} is empty, skipping download.")
-                return False
+                return self._download_failed(
+                    "the camera reported no size for the file (empty, or the "
+                    "size query failed)"
+                )
 
             # Get directory name for better logging
             dir_name = os.path.basename(os.path.dirname(local_path))
@@ -399,7 +403,9 @@ class DahuaCamera(Camera):
                         self.logger.error(
                             f"Download failed with status {response.status_code}: {response.text}"
                         )
-                        return False
+                        return self._download_failed(
+                            f"HTTP {response.status_code} from the camera"
+                        )
 
                     # Open file for writing and stream the download
                     async with aiofiles.open(local_path, "wb") as f:
@@ -441,13 +447,16 @@ class DahuaCamera(Camera):
                         self.logger.error(
                             f"Download incomplete: {os.path.basename(file_path)} ({downloaded}/{file_size} bytes)"
                         )
-                        return False
+                        return self._download_failed(
+                            f"transfer stopped short: {downloaded:,} of {file_size:,} bytes"
+                        )
 
             finally:
                 if close_client:
                     await client.aclose()
         except Exception as e:
             self.logger.error(f"Error downloading {file_path}: {e}")
+            self.last_download_error = describe_download_error(e)
             # Clean up partial download if it exists
             if os.path.exists(local_path):
                 try:
