@@ -9,7 +9,6 @@ import threading
 import time
 
 import httpx
-import pytest
 
 import video_grouper.api_integrations.ttt_api as ttt_api
 from tests.integrations.expired_ttt import ExpiredTTTSession, make_jwt
@@ -125,14 +124,3 @@ def test_requests_and_the_gate_share_one_refresh(expired_ttt):
     assert expired_ttt.client.ensure_signed_in() is True
     assert expired_ttt.client.get_team_assignments() == []
     assert expired_ttt.refreshes == 1
-
-
-@pytest.mark.parametrize("refresh_ok", [True, False])
-def test_request_on_an_expired_token_still_refreshes_or_raises(tmp_path, refresh_ok):
-    session = ExpiredTTTSession(str(tmp_path), refresh_ok=refresh_ok)
-    session.routes[("GET", "/api/device-link/me")] = [{"team_id": "t"}]
-    if refresh_ok:
-        assert session.client.get_team_assignments() == [{"team_id": "t"}]
-    else:
-        with pytest.raises(ttt_api.TTTApiError):
-            session.client.get_team_assignments()

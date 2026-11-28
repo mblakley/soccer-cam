@@ -70,13 +70,19 @@ def test_not_signed_in_never_calls_the_api(tmp_path):
     client.check_entitlement.assert_not_called()
 
 
-def test_licensee_is_the_held_accounts_even_while_its_token_is_expired():
-    # Installed plugins / licences are bound to the account and carry their
-    # own signed expiry; an expired access token (offline) doesn't unbind them.
-    client = _client(signed_in=False)
-    assert TTTEntitlements(client).licensee() == "user-1"
-    client.current_user_id.return_value = None  # no session held at all
-    assert TTTEntitlements(client).licensee() is None
+def test_licensee_is_the_held_accounts_even_while_its_token_is_expired(tmp_path):
+    """Installed plugins / licences are bound to the account and carry their
+    own signed expiry: an expired access token that can't be refreshed right
+    now (offline at the field) doesn't unbind them, so load_plugins still
+    loads. Only no session at all means no licensee."""
+    from tests.integrations.expired_ttt import ExpiredTTTSession
+
+    session = ExpiredTTTSession(str(tmp_path), refresh_ok=False)
+    ent = TTTEntitlements(session.client)
+    assert ent.available is False
+    assert ent.licensee() == "user-1"
+    session.client._access_token = None  # signed out
+    assert ent.licensee() is None
 
 
 def test_an_expired_token_is_refreshed_not_read_as_signed_out(expired_ttt):
