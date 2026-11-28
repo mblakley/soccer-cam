@@ -34,13 +34,19 @@ logger = logging.getLogger(__name__)
 
 
 def job_capabilities(config: Config) -> dict[str, Any]:
-    """What this install announces when it takes remote processing jobs."""
-    return {
+    """What this install announces when it takes remote processing jobs.
+
+    An install with no camera yet (setup's camera step was skipped) announces
+    no camera rather than failing to start.
+    """
+    caps: dict[str, Any] = {
         "ffmpeg": True,
         "pipeline": config.pipeline.is_active(),
-        "camera_type": config.camera.type,
-        "camera_ip": config.camera.device_ip,
     }
+    if config.cameras:
+        caps["camera_type"] = config.camera.type
+        caps["camera_ip"] = config.camera.device_ip
+    return caps
 
 
 class DeviceLinkProcessor(PollingProcessor):

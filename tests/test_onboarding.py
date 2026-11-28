@@ -105,6 +105,7 @@ class TestEverySectionIsCovered:
                 camera_ip="1.1.1.1",
                 camera_username="u",
                 camera_password="p",
+                camera_skipped=False,
             )
         )
         covered = lambda c: {  # noqa: E731
