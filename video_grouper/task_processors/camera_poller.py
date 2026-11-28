@@ -71,7 +71,28 @@ SETTLED_FILE_STATUSES = frozenset(
 )
 # Group-level statuses that settle every file inside them regardless of the
 # individual file status — the group as a whole is finished with the camera.
-SETTLED_GROUP_STATUSES = frozenset({"not_a_game", "complete", "archived"})
+#
+# This is exactly the set of groups the StateAuditor treats as past the
+# download phase (it imports this name), and DownloadProcessor refuses to
+# fetch into them too. The two must agree: a stale non-terminal file entry in
+# a combined group (the camera re-listing an in-progress "_000000_" segment
+# under its final name) is never re-queued and never abandoned, so if the
+# watermark still waited on it, it would wait forever — and hold every later
+# game's archive with it. Nothing is lost by passing it: nothing can download
+# into a group at these statuses anyway.
+SETTLED_GROUP_STATUSES = frozenset(
+    {
+        "combined",
+        "trimmed",
+        "ball_tracking_complete",
+        "pipeline_complete",
+        "complete",
+        "not_a_game",
+        # Uploaded and moved off local disk. Its files are *supposed* to be
+        # missing locally; re-fetching them would undo the archive.
+        "archived",
+    }
+)
 
 
 def create_directory(path):
@@ -881,14 +902,27 @@ class CameraPoller(PollingProcessor):
             return None
 
     def _collect_known_recordings(self) -> list[tuple[datetime, bool, str, str]]:
-        """Every recording this install knows about, as (end, settled, name, status).
+        """This camera's known recordings, as (end, settled, name, status).
 
         Read from the per-group ``state.json`` files. Note these live *inside*
         each group directory, so they disappear when a game is archived off
         local disk — which is precisely why they may only ever push the
         watermark forward and can never be used to re-derive it. See
         :meth:`_advance_completion_watermark`.
+
+        Scoped to THIS camera via the ``camera_name`` recorded in each file's
+        metadata at discovery. Every poller shares one storage path, and
+        another camera's settled recordings must not push this camera's
+        watermark past footage it never discovered — the poller never looks
+        behind its watermark again.
+
+        A recording with no ``camera_name`` (discovered before attribution
+        existed) is this camera's when it is the only camera configured. With
+        several, it could be anyone's, so it is counted only when it is
+        unsettled: it may hold this watermark back, never push it forward.
         """
+        configured = getattr(self.config, "cameras", None) or []
+        single_camera = len(configured) <= 1
         recordings: list[tuple[datetime, bool, str, str]] = []
         try:
             entries = os.listdir(self.storage_path)
@@ -916,6 +950,15 @@ class CameraPoller(PollingProcessor):
                     or bool(getattr(rec, "skip", False))
                     or getattr(rec, "status", None) in SETTLED_FILE_STATUSES
                 )
+                metadata = getattr(rec, "metadata", None) or {}
+                owner = (
+                    metadata.get("camera_name") if isinstance(metadata, dict) else None
+                )
+                if owner is None:
+                    if not single_camera and settled:
+                        continue
+                elif owner != self.camera.name:
+                    continue
                 recordings.append(
                     (
                         end_time,

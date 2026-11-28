@@ -14,6 +14,7 @@ from ..utils.paths import (
     get_state_file_path,
 )
 from .base_polling_processor import PollingProcessor
+from .camera_poller import SETTLED_GROUP_STATUSES
 from .download_processor import DownloadProcessor
 from .services import (
     CleanupService,
@@ -34,20 +35,13 @@ logger = logging.getLogger(__name__)
 # non-idle, which starves the camera poller's reconcile pass — exactly what
 # blocked the 2026-06-15 game from being re-ingested (a stale 2026-06-23
 # "_000000_" zombie in a not_a_game group monopolized the queue). Mirrors
-# DownloadProcessor.process_item's skip_statuses, plus not_a_game.
-_DOWNLOAD_DONE_STATUSES = frozenset(
-    {
-        "combined",
-        "trimmed",
-        "ball_tracking_complete",
-        "pipeline_complete",
-        "complete",
-        "not_a_game",
-        # Uploaded and moved off local disk. Its files are *supposed* to be
-        # missing locally; re-fetching them would undo the archive.
-        "archived",
-    }
-)
+# DownloadProcessor.process_item's skip_statuses, plus not_a_game and
+# archived.
+#
+# Shared with the camera poller, which treats the same groups as settled for
+# its completion watermark: a file this auditor will never re-queue must not
+# be one the watermark waits on forever.
+_DOWNLOAD_DONE_STATUSES = SETTLED_GROUP_STATUSES
 
 
 class StateAuditor(PollingProcessor):

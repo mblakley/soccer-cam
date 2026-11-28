@@ -1661,12 +1661,21 @@ def _camera_listing(name: str, start: datetime, end: datetime) -> dict:
     }
 
 
-async def _write_contiguous_group(storage, group_name, names, base, status):
+async def _write_contiguous_group(
+    storage,
+    group_name,
+    names,
+    base,
+    status,
+    camera_name: str | None = "default",
+    group_status: str | None = None,
+):
     """A group of back-to-back 30-minute recordings, all at *status*.
 
     Path.mkdir, not os.makedirs: conftest patches the latter to a no-op.
     Returns the (name, start, end) triples so a test can list them on the
-    camera too.
+    camera too. ``camera_name=None`` writes a recording with no camera
+    attribution, as files discovered before attribution existed have.
     """
     group_dir = os.path.join(storage, group_name)
     Path(group_dir).mkdir(parents=True, exist_ok=True)
@@ -1683,10 +1692,16 @@ async def _write_contiguous_group(storage, group_name, names, base, status):
                 end_time=end,
                 file_path=path,
                 status=status,
-                metadata={"path": f"/{name}", "camera_name": "default"},
+                metadata=(
+                    {"path": f"/{name}", "camera_name": camera_name}
+                    if camera_name is not None
+                    else {"path": f"/{name}"}
+                ),
             ),
         )
         triples.append((name, start, end))
+    if group_status is not None:
+        await dir_state.update_group_status(group_status)
     return group_dir, triples
 
 
@@ -1769,3 +1784,190 @@ class TestPerPollCapCountsOnlyNewWork:
             for c in poller.download_processor.add_work.call_args_list
         ]
         assert queued == ["n0.dav", "n1.dav"]
+
+
+def _two_camera_config(config):
+    """The same Config with a second camera sharing the storage path."""
+    config.cameras.append(
+        CameraConfig(
+            name="other",
+            type="reolink",
+            device_ip="127.0.0.2",
+            username="admin",
+            password="password",
+        )
+    )
+    return config
+
+
+class TestWatermarkIsPerCamera:
+    """Each camera's watermark is computed from that camera's recordings only.
+
+    Every poller shares one storage path. Walking every group there let
+    another camera's settled recordings push this camera's watermark past
+    footage it had never even discovered -- and the poller never looks behind
+    its watermark again.
+    """
+
+    @pytest.mark.asyncio
+    async def test_another_cameras_settled_work_does_not_advance_this_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        _two_camera_config(mock_config)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["theirs0.dav", "theirs1.dav"],
+            datetime(2026, 7, 1, 10, 0, 0),
+            "complete",
+            camera_name="other",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() is None, (
+            "camera 'default' has discovered nothing; another camera's "
+            "settled recordings must not move its watermark"
+        )
+
+    @pytest.mark.asyncio
+    async def test_own_recordings_still_advance_the_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        _two_camera_config(mock_config)
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["mine0.dav"],
+            base,
+            "complete",
+            camera_name="default",
+        )
+        # The other camera has an unsettled file earlier: not ours to wait on.
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-08.00.00",
+            ["theirs.dav"],
+            base - timedelta(hours=2),
+            "pending",
+            camera_name="other",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == base + timedelta(minutes=30)
+
+    @pytest.mark.asyncio
+    async def test_unattributed_settled_files_cannot_push_a_multi_camera_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """A recording with no camera_name (written before attribution) could
+        be any camera's; with several cameras it must not move this mark."""
+        _two_camera_config(mock_config)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["legacy.dav"],
+            datetime(2026, 7, 1, 10, 0, 0),
+            "complete",
+            camera_name=None,
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() is None
+
+    @pytest.mark.asyncio
+    async def test_unattributed_unsettled_files_still_hold_a_multi_camera_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """...but it may be ours, so an unfinished one still holds the line."""
+        _two_camera_config(mock_config)
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["legacy.dav"],
+            base,
+            "download_failed",
+            camera_name=None,
+        )
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-14.00.00",
+            ["mine.dav"],
+            base + timedelta(hours=4),
+            "complete",
+            camera_name="default",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() is None
+
+
+class TestSettledGroupsMatchTheAuditor:
+    """A group the StateAuditor treats as past download is settled here too.
+
+    The auditor stops re-queuing files once a group is combined (or later),
+    and DownloadProcessor refuses them. A stale non-terminal file entry left
+    in such a group -- the camera re-listing an in-progress "_000000_" segment
+    under its final name is the known source -- is then never retried and
+    never abandoned, so a watermark that still waited on it would wait
+    forever, and hold every later game's archive with it.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_status",
+        ["combined", "trimmed", "ball_tracking_complete", "pipeline_complete"],
+    )
+    async def test_stale_file_in_a_past_download_group_does_not_hold_the_mark(
+        self, temp_storage, mock_config, mock_camera, group_status
+    ):
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["seg0.dav", "zombie_000000.dav"],
+            base,
+            "pending",
+            group_status=group_status,
+        )
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.02-10.00.00",
+            ["next_game.dav"],
+            base + timedelta(days=1),
+            "complete",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == base + timedelta(
+            days=1, minutes=30
+        )
+
+    def test_poller_and_auditor_share_one_definition(self):
+        from video_grouper.task_processors import state_auditor
+        from video_grouper.task_processors.camera_poller import (
+            SETTLED_GROUP_STATUSES,
+        )
+
+        assert state_auditor._DOWNLOAD_DONE_STATUSES == SETTLED_GROUP_STATUSES
