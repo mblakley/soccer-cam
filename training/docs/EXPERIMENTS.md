@@ -4,6 +4,478 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-12: how steady is the detector on a fixed camera — within 30 rows look to look (2026-11-28)
+
+**Why:** the game-start hook (`S38_FieldRoi`) accepts a field only when two detections in a row
+agree. "Agree" needs a number: wide enough for the detector's own jitter, far narrower than a
+camera being moved.
+
+**Method:** nine frames from each of two games with the camera fixed (Lakefront outdoors, the blue
+dome), taken 5 s, 8 s and 150 s into three segments spread across the game. `fieldroi` on each;
+its "field rows far..near" compared.
+
+**Result:**
+
+| game | far edge, all nine | near edge, all nine | largest change between looks 3 s to 2.5 min apart |
+|---|---|---|---|
+| Lakefront | 178–199 (21 rows) | 1400–1417 (17) | 16 far, 17 near |
+| blue dome | 288–320 (32) | 1610–1691 (81) | 20 far, 30 near |
+
+All 18 frames were accepted (dome colour share 0.72–0.75).
+
+**Conclusion:** `AGREE_ROWS=96`: above everything measured, including the 81-row drift of the
+dome's near edge across a whole game, and a fraction of what re-aiming the camera does (the field
+moves by hundreds of rows). Two games, one camera position each; no data from a camera actually
+being raised or turned.
+
+**The hook, as built:** off by default (`auto=0`). With `auto=1`, when recording starts it turns
+the bands off, waits `settle_secs` (60; Mark: the camera may not be fully extended or lined up
+yet), then looks up to five times and installs the bands only when two looks in a row agree;
+otherwise the encoder stays at stock. Bands go off again when recording stops, and at boot if the
+last session left them on. `verify/test_fieldroi_hook.sh`: 26 checks, eight deliberate breakages
+each caught, also run under the camera's busybox `ash`.
+
+**On the camera (build 4925 flashed the same day), manual trigger at home:** the mechanics work.
+Login with the credentials read from `S99_NetState`, snapshot, detector at 75 s per look, look 1
+`387..1732`, look 2 `390..1735`, "agrees", bands installed 180 s after the trigger, `S37_RoiQp`
+applied all three with matching kernel echoes; switched off again afterwards.
+
+**But what it accepted was not a field.** The camera was looking at a TV showing a dark navy web
+page. The detector returned an outline with scores 0.33–0.46 (the dome scores 0.30–0.45), the
+middle colour was R 62 G 68 B 90 (spread 28, just over the 24 needed to count as a colour) and
+95 % of the claimed rows matched it. Two looks at a still scene agree by construction. So the
+three checks together — outline found, one dominant colour, two looks agree — establish "a still
+scene dominated by one colour", not "a pitch". Harmless at home; at a game it matters in one
+case: the camera sits still pointing somewhere else (on the ground, at the sky) for the three
+minutes after the settle wait, gets bands for that, and is put up afterwards. Nothing re-checks
+after the bands are installed. Not fixed. Candidates: look again some minutes after installing and
+redo the detection if the field has moved; require a stronger colour (measured fields: spread 46
+to 118; needs the 23 archived games sampled before choosing a line).
+
+## EXP-ENC-11: the field-colour check reads the colour from the field — blue turf accepted (2026-11-28)
+
+**Why:** `fieldroi` refused any frame whose claimed field rows were not mostly green. The indoor
+dome is blue turf (`flash__2026.03.21_vs_Cuyahoga_Valley_SA_home`, same camera, full-size pitch),
+so there it could only be used with the check switched off. Mark: no manual bypass; sample the
+middle of the field and use that as the field's colour.
+
+**Method:** the field's colour is the per-channel median of a patch in the middle of the claimed
+field (middle 30 % of the width, middle 40 % of the rows). It must be a colour (brightest channel
+>= 40, spread between channels >= 24). Then the share of the claimed rows (centre 70 % of the
+width) within a tolerance of that colour, in channel shares r/(r+g+b), g/(r+g+b), must be >= 60 %.
+Tolerance swept on four outdoor games, the dome, camera snapshots of a room, and blank frames;
+each also with the outline deliberately moved (up 35 %, down 35 %, twice as tall).
+
+**Result** (share of claimed rows in the field's colour):
+
+| frame | middle colour (R,G,B) | tol 0.06, outline as found | tol 0.08, as found | tol 0.08, outline moved |
+|---|---|---|---|---|
+| Lakefront | 140,143,97 | 0.92 | 0.96 | 0.90–0.97 |
+| Chili | 111,142,63 | 0.81 | 0.86 | 0.77–0.84 |
+| Fairport | 89,95,47 | 0.76 | 0.86 | 0.70–0.79 |
+| Niagara | 137,131,58 | 0.83 | 0.89 | 0.76–0.88 |
+| blue dome | 26,60,144 | 0.64 | **0.75** | 0.47–0.63 |
+| room, desk | 61,61,61 | refused: not a colour | | |
+| room with a TV | 80,78,78 | refused: not a colour | | |
+| grey / black / black-and-white game frame | | refused: not a colour | | |
+
+Tolerance 0.08 chosen: the dome clears the 60 % line with margin (0.06 left it at 0.64).
+`--min-green` is removed; nothing turns the check off. `verify/test_fieldroi.sh` now also requires
+the reference frame in black and white to be refused for that reason, the old option to be an
+error, and (given a fifth argument) a blue-turf frame to be accepted. On the camera (build 4924)
+the new binary accepted the dome frame, wrote bands 112–592 / 592–1040 / 1040–1824, and the
+daemon applied them; 79 s at `nice 19`.
+
+**What the check is worth — less than it looks.** With the outline moved, the outdoor frames
+still score 0.70–0.97: grass beyond the touchline and trees are the field's colour too, so the
+check cannot tell a misplaced outline from a good one outdoors. (The old green-only check could not
+either.) On the dome it can, because the surroundings are yellow. It also accepted yesterday's
+camera snapshot of the TV showing a pitch (middle colour 125,160,172, share 0.64), which the
+green-only check had refused. So it guards against "this is not a field at all" — a blank frame,
+night vision, a room with no dominant colour — and nothing more.
+
+**Not covered:** the dome is one frame, and the model's keypoint scores there are 0.30–0.45
+against up to 0.87 outdoors; its far line was about 125 rows too low (the known direction, inside
+the 200-row padding). A misplaced outline needs a different check — the obvious one is agreement
+between two or three snapshots taken seconds apart — and that is not built.
+
+## EXP-ENC-10: which QP grading for field bands — three bands at -10/-6/-3 (2026-11-28)
+
+**Hypothesis:** at the camera's fixed bitrate, bands graded by depth (strong far, weak near) put
+more quality into the far field than one rectangle over the whole field, for the same cost outside.
+
+**Method:** the first 2 s of the EXP-ENC-02 clip (Lakefront, segment 19:21; field rows 161–1473 by
+its confirmed polygon). x265 `-preset fast`, CRF, keyint 40, no B-frames, cutree off, AQ on, windows
+as ffmpeg `addroi` rows. For each layout the CRF is searched until the output is the camera's own
+size for those 2 s (5,242,040 B, 20.97 Mbps) within 1.5 %, so a window cannot add bits. Luma PSNR
+against the source in five full-width bands.
+
+**Result** (PSNR-Y change against no window, dB):
+
+| layout | CRF shift | above far line 0–127 | far 128–447 | mid 448–895 | near 896–1535 | foreground 1536–2159 |
+|---|---|---|---|---|---|---|
+| none (CRF 30.32) | — | 38.97 | 39.54 | 35.40 | 32.59 | 32.27 |
+| one rectangle −6 over rows 128–1535 | +1.97 | −2.23 | +1.73 | +1.76 | +1.97 | −3.06 |
+| two bands: 128–511 at −10, 512–1535 at −4 | +1.73 | −1.87 | +4.66 | +0.94 | +0.74 | −2.67 |
+| **three bands −10 / −6 / −3** | +1.67 | −1.85 | **+4.70** | **+2.19** | +0.03 | −2.58 |
+| three bands −12 / −8 / −4 | +2.18 | −2.33 | +5.37 | +2.93 | +0.09 | −3.32 |
+| far band only, −10 | +0.55 | −0.59 | +5.88 | −0.73 | −0.84 | −0.86 |
+
+**Conclusion:** hypothesis holds. Against the one rectangle, three bands at −10/−6/−3 give the far
+band 3 dB more and the mid field 0.4 dB more, cost the foreground and the strip above the far line
+slightly less, and leave the near field where it was with no window instead of +2 dB. Nothing on
+the field gets worse than stock. On game footage a field window does buy something across the
+field, unlike the TV scene of EXP-ENC-09, because here the foreground pays for it.
+
+**Chosen default: `fieldroi --bands -10,-6,-3`.** Not −12/−8/−4, although it measures higher here:
+the camera's rate control has a QP floor of 25, the stream runs near 34–35 and a field window pushes
+that up about 2, so −10 already puts the far band at about 26. A stronger far delta would run into
+the floor on the camera in a way x265 does not model. Far-only is the cheapest way to +5.9 dB in the
+far band but makes the rest of the field slightly worse, which is not the brief.
+
+**On the camera (build 4924), the same day:** the new `fieldroi` on the SD card read a real game
+frame (a 7680x2160 JPEG of this game), wrote `win0=0,0,7680,464,-10`, `win1=0,464,7680,416,-6`,
+`win2=0,880,7680,752,-3`, and `S37_RoiQp` applied all three with matching kernel echoes within
+30 s, then cleared them when the config was turned off. The far band starts at row 0 there because
+the 200-row far padding reaches the top of the frame; the strip above the far line is about 2.5 %
+of the stream (EXP-ENC-02).
+
+**Limits:** x265 is not the camera's encoder; the source is already the camera's compressed
+output, so PSNR is against that, not the scene; one clip, 2 s; sizes matched within −1.3 % to
++0.7 %, worth roughly 0.1 dB. The band cuts (22 % and 56 % of the field's height) were chosen, not
+searched. Not yet run on a live game: the picture effect of this grading on the camera is
+unmeasured.
+
+## EXP-ENC-09: build 4923 on the camera — ten windows work, lower index wins an overlap (2026-11-28)
+
+**Hypothesis:** the `ROIQP_MULTIWIN` handler patch behaves on the real kernel as it does under
+qemu: windows on different indexes are held independently, and a bad index harms nothing. Open
+question the harness could not answer: what the codec does where two windows overlap.
+
+**Setup:** build 4923 flashed (pre-flight `test_setroi_patch.sh … multiwin` 20/20; 47 s upload,
+back in 88 s). Camera at home filming the generated far-ball clip (EXP-ENC-08 b) fullscreen on the
+4K TV, so the TV picture spans camera x 1470–6020 and the balls are ~9 px. Starvation as before
+(`setevbr … ByteRate=150000 FrameRate=20000`, 1.2–1.3 Mbps). Detail = mean |Laplacian|.
+
+**Result 1 — index handling.** `setroi` on indexes 0, 3 and 9 each echo their own QP and
+rectangle. Indexes 10, 999999999 and −1, and path 7, print the echo and then nothing happens:
+same PIDs for `device`/`router`/`recorder`, clean `dmesg`. The refusal is silent by design.
+
+**Result 2 — two windows are independent** (A = index 0, B = index 3, disjoint rectangles in the
+TV picture, QP −8, exposure Auto, 20 s scored per capture; change against no-window at 1.20 Mbps):
+
+| windows set | detail in A | detail in B |
+|---|---|---|
+| A only | +5.6 % | −5.5 % |
+| A and B | +2.3 % / +3.1 % (repeat) | +4.7 % / +6.6 % |
+| B only (A disabled, B untouched) | −1.3 % | +8.1 % |
+
+A keeps its gain when B is added and B keeps its gain when A alone is disabled. On 4922 the second
+write would have replaced the first. (A second no-window capture taken before the starvation had
+settled, at 2.4 Mbps, read −0.3 % / +0.1 %.)
+
+**Result 3 — overlap: the lower index wins.** "Pitch" = the whole TV picture (56 % of the frame),
+"far" = rows 128–831 of it. Exposure locked. Slice QP is the P-frame mean from the bitstream.
+
+| windows | slice QP | detail, far band |
+|---|---|---|
+| none (two captures) | 35.8 / 35.8 | 3.30 / 3.38 |
+| pitch −6 on index 0 | 39.3 | 3.32 |
+| far −12 on index 0 | 40.2 | 3.71 |
+| far −12 on index 9 | 39.9 | 3.62 |
+| index 0 = pitch −6, index 1 = far −12 (three captures) | 39.9 / 39.8 / 39.2 | 3.39 / 3.36 / 3.31 |
+| index 0 = far −12, index 1 = pitch −6 (three captures) | 43.6 / 41.4 / 41.3 | 3.68 / 3.57 / 3.47 |
+
+With the broad window on the lower index the far band behaves exactly like pitch −6 alone, in
+both the QP and the detail; swapped, it behaves like far −12. The ranges do not overlap. So a
+nested or staircase layout must put the most specific window on the lowest index.
+
+**Result 4 — a window over nearly everything that moves buys almost nothing.** Pitch −8 raised
+the frame QP from 35.8 to 42.8, so the pitch itself went from ~35.8 to ~34.8. Far −12 put the far
+band at ~28 (the unstarved reference is 28) and the rest of the pitch at ~40. In this scene the
+room is static, so the pitch already has nearly all the bits; on a real game the field has ~36 %
+(EXP-ENC-02), so a field window has more to take there. The far-band window is the result that
+transfers.
+
+**The ball count did not work at this size and is not reported.** With ~9 px balls the no-window
+captures scored *above* the unstarved reference (2.5 and 3.5 on-track sightings per frame against
+2.2), and the two disagreed with each other (off-track blobs 13.0 and 4.6 per frame). Two causes
+found: the reference's own "tracks" include blobs that repeat at fixed spots (three spots account
+for 100 of ~190 repeats), and counting blobs on a track cannot tell a moving ball from a stale copy
+of one. The second applies to EXP-ENC-08's count too: its direction is backed by the contrast and
+artefact numbers there, but the "59 % of reference" figure should not be leaned on. What did
+separate cleanly here is false bright blobs off the tracks: 13.0 / 4.6 per frame with no window,
+5.7 with pitch −8, 0.9 with far −12 (reference 0.0).
+
+**Also learned:** `SetEnc` with unchanged values does not re-apply rate control, and an
+unsupported bitrate (16384) is rejected with code 1 — so the "restore" after a `setevbr` must be a
+real change through an allowed value (3072…10240, 20480) and back, checked in `/proc/vencrc/info`
+(`bitrate(gop)` 41943040). A restore that did neither left the main stream at 1.2 Mbps for a few
+minutes mid-session (not recording). The 4922 daemon-logging defect is fixed in 4923.
+
+**Limits:** one scene, re-photographed off a TV; one capture per single-window setting; detail is
+a proxy, not a detector; emulated starvation at 1.3 Mbps.
+
+## EXP-ENC-08: the ROI window on the camera — it moves bits, and far balls survive (2026-11-27)
+
+**Hypothesis:** with the stream held at a fixed bitrate, a window with a negative QP delta takes
+bits from outside it and spends them inside, and that is enough to keep a far ball visible.
+
+**Setup:** build 4922 flashed (the `setroi` format-string fix; `setroi` then echoes
+`QP = -6, QPMode = 1`). Camera at home, exposure locked, filming a TV. Two looping clips driven from
+Chrome so every capture sees the same content: (a) 60 s of the Lakefront full-field video from
+YouTube at 7680×2160; (b) a generated 10 s clip — a still of that panorama darkened to pitch-like
+levels, with ten ~6 px white balls running back and forth along fixed far-side rows, player-sized
+blocks and grass shimmer. Starvation emulated with `setevbr … ByteRate=150000 FrameRate=20000`
+(1.2 Mbps), because these clips need only 2–4 Mbps unstarved. Windows set with `setroi`, mode 1.
+
+**Result (a), real footage, 60 s per capture, two alternating repeats, keyframes scored:**
+
+| | no window | window −8 on rows 96–1119 |
+|---|---|---|
+| bitrate | 1.23 / 1.20 Mbps | 1.20 / 1.20 Mbps |
+| slice QP | 32.6 / 32.4 | 37.0 / 36.6 |
+| detail, far field (inside) | 2.92 | 3.07 (×1.049) |
+| detail, mid field (inside) | 4.46 | 4.59 (×1.029) |
+| detail, room upper (inside) | 1.14 | 1.29 (×1.129) |
+| detail, TV sideline (outside) | 4.69 | 4.29 (×0.915) |
+| detail, room lower (outside) | 2.62 | 2.41 (×0.920) |
+
+Repeats agree to 0.1–0.4 %. Unstarved (5 Mbps allowance, clip needs 2.2) the same window raises
+the bitrate instead (2.17 → 2.87 Mbps) and inside-window detail by 19–50 %, outside unchanged.
+So: coordinates are pixels, negative is better, and the rate controller compensates by raising
+the frame QP — about 29 inside and 37 outside here.
+
+**Result (b), synthetic balls, 200 frames per capture.** Small bright moving blobs (peak ≥ 18
+grey levels over the capture's own static background) counted in the far band, split into those
+on the tracks the reference capture draws (real balls) and those off them (artefacts); chance
+on-track hits subtracted.
+
+| condition (all but the first at ~1.33 Mbps) | slice QP | real balls / frame | vs reference | artefacts / frame | median peak |
+|---|---|---|---|---|---|
+| reference, unstarved (3.6 Mbps) | 28 | 3.22 | 100 % | 0.00 | 35 |
+| starved, no window | 34.5 | 0.35 | 11 % | 5.36 | 18 |
+| starved, no window (repeat) | 34.4 | 0.27 | 8 % | 4.01 | 19 |
+| starved, window −8 on rows 128–1279 | 39.1 | 1.89 | 59 % | 0.82 | 25 |
+| starved, window −12 on rows 160–543 | 39.7 | 1.86 | 58 % | 1.14 | 28 |
+
+**Conclusion:** hypothesis holds. At the same bitrate the window took far-ball detections from
+about a tenth of the reference to about six tenths, and cut false bright blobs by a factor of
+four to six. A −8 window over the whole pitch and a −12 window over the far band alone did
+equally well on the count; the far-band one kept more contrast. Also shown end to end on the
+camera: `wget` snapshot → `fieldroi` (79 s) → `roi.conf` → `S37_RoiQp` applied it within 30 s.
+
+**Limits, all real:** the balls are synthetic and re-photographed off a TV that the camera cannot
+focus on, so even the reference sees only 3.2 of 8 far balls per frame above threshold; the
+starvation is 1.3 Mbps on a quiet scene, not 20 Mbps on a game; one capture per window setting;
+a threshold detector, not ours. `fieldroi`'s grass-colour check rejected the TV picture (blue
+cast) and was bypassed for the end-to-end run, so it is still untested on a real pitch. A first
+version of the ball score matched frames by a timing marker that turned out unreadable in the
+camera's view; those numbers were wrong and are not reported. `/proc/hdal/venc/info` never lists
+the window. With the default disabled config `S37_RoiQp` in 4922 logs nothing (fixed in source).
+**Added 2026-11-28:** the on-track count cannot tell a moving ball from a stale copy of one
+(EXP-ENC-09), so treat the percentages in table (b) as direction, not size.
+
+## EXP-ENC-07: first session on the camera — baseline, no-flash levers, detector on the camera (2026-11-27)
+
+**Setup:** camera at home on build 4921 (found at 192.168.86.22; neither address in the repo was
+right), pointed at a TV showing a soccer broadcast that fills ~55 % of the frame. Exposure locked
+(Manual, shutter 125, gain 1). Live main stream captured over RTSP
+(`verify/stream_quality.py capture`); QP read from slice headers. Nothing flashed.
+
+**Results, all observed on the hardware:**
+
+- **The trace was right.** `/proc/hdal/venc/info` PATH CONFIG for out 0: `bitrate 20971520`,
+  `enc_ms 6000`. ROI table empty.
+- **Rate control is EVBR, not CBR.** `/proc/vencrc/info` is the kernel's real RC state
+  (`/proc/hdal/venc/info` shows the app's request, and did not change when the kernel's did). EVBR
+  holds QP at its "still QP" of 32 when the scene does not demand the bitrate: this scene ran 7.6–
+  9.1 Mbps at QP 31–32 against a 20.97 Mbps allowance. Setting `bitRate=5120` pins it at the cap at
+  QP 33–36, the game-footage level.
+- **`gop` through the API works, and is currently 2.** `gop=1` → kernel GOP 20; `gop=2` → 40.
+  Keyframe share at 5 Mbps: 24.0 / 22.6 % at GOP 20, 16.5 / 11.8 % at GOP 40 (two alternating 40 s
+  captures each). Mean P-slice QP 33.55 / 33.80 vs 33.24 / 33.99: no difference visible above the
+  noise of a live TV picture. The June/July game footage has GOP 20, so the camera was at `gop=1`
+  for those games.
+- **`apply_optimal_settings` is broken on this camera.** `SetEnc` with `gop=40` returns
+  `rspCode -13 "set config failed"` and changes nothing, including the bitrate sent in the same
+  call. It should send `gop=2`.
+- **`setroi` bug reproduced on the real kernel.** `setroi 0 0 1 -6 1 0 760 7680 900` echoes
+  `QP = 0, QPMode = 0`, as `verify/test_setroi_patch.sh` predicted. The write to the mode-0555
+  node succeeds. The ROI table stayed empty after that enable (QP 0); whether it lists a window
+  with a non-zero QP is for build 4922 to show.
+- **The kernel encodes past the "ceiling".** A `setevbr` write with FrameRate given as `20` — the
+  argument is in thousandths, so the kernel took 0.02 fps and the per-frame budget became
+  effectively unlimited — ran the main stream at **29.7 Mbps, QP 28, 20.07 fps**, nothing dropped,
+  for over a minute. `device` did not notice or re-apply. Re-sending `SetEnc` restored its own RC.
+  That write also zeroed the max-frame-size and tolerance fields, which the command cannot set.
+  `setevbr`'s GOP argument changed the RC's own count (80) but not the keyframe cadence (still 40).
+- **`fieldroi` runs on the camera.** Pushed to the SD card (the camera could not fetch from the PC
+  through the Windows firewall; a one-shot `tcpsvd` receiver and md5 check did it). On the camera's
+  own `cmd=Snap` JPEG (fetched locally with `wget` in 0.4 s): **82 s at nice 19**, MemAvailable
+  120.7 → 98.0 MB, and it refused the scene (13 % grass in the claimed rows), which is correct for
+  a room with a TV in it. The live stream ran 19.53 fps during the run against 20.0 before and
+  after, with no gap over 87 ms.
+
+**Conclusion:** every offline prediction that could be checked held. Two things are new: the mode
+is EVBR with a QP-32 floor on quiet scenes, and the unit of `FrameRate` in the debug commands.
+Not yet done: a controlled higher-bitrate run (FrameRate 20000), and everything that needs the
+4922 flash. A live TV picture is too variable for small A/B differences; a looping clip would fix
+that.
+
+## EXP-ENC-06: the 20.5 Mbps ceiling fully mapped — enforced in `device`, not the kernel (2026-11-27)
+
+**Hypothesis (from EXP-ENC-05):** the provisioned 20,971,520 is the ceiling; the instruction that
+rejects a higher value is somewhere behind it, probably in the kernel.
+
+**Method:** two subagents in parallel, one on `device`, one on the kernel modules
+(`kflow_videoenc.ko`, `kdrv_h26x.ko`, `nvt_vencrc.ko`, `kdrv_builtin.ko`). Each concluded the
+rejection was on the other's side. Resolved by searching `device`'s strings for bitrate messages
+and following the one that names the rule; decisive lines re-read with objdump.
+
+**Result:** the rejection is in the HDAL library statically linked into `device`: validator
+`5c16b0`, `cmp w4, w3 ; b.ls` at `5c1a50`, RC bitrate (`port+228`) against PATH_CONFIG bitrate
+(`port+28`), error text `"path config bitrate(%lu) must be >= HD_H26XENC_CBR: bitrate(%lu)."`,
+returns −1. `b.ls` passes on equality, which is exactly why 20480 kbps works and 21504 does not.
+The kernel has no bitrate bound: `NMR_VdoEnc_SetCBR` stores and forwards. The provisioned value
+sizes the output bitstream ring (byte rate × buffer ms; ~15.7 MB now) out of a 768 MiB pool; an
+oversized frame is dropped with a log line, not overrun. The five other loads of `0x1400000` in
+`device` are Q20 constants in an unrelated gain table. The `setcbr` debug command parses without
+`setroi`'s overlap bug and reaches the unchecked kernel setter.
+
+**Conclusion:** one number at two instructions (`4983b8`, `48c098`), one comparison (`5c1a50`),
+one buffer. A higher bitrate can be tried with no flash through `setcbr`; raising it properly is a
+two-instruction `device` patch plus the existing `router` cap. Neither tried. The device-side
+agent's statement that userspace has no such comparison was wrong, and the kernel-side agent's
+that it must be in userspace was right; the buffer-length field (6000 ms) and the recorder's
+tolerance of a faster stream are inferred, not verified.
+
+## EXP-ENC-05: where the 20.5 Mbps ceiling is — `device` provisions the main path at exactly 20,971,520 bps (2026-11-27)
+
+**Hypothesis:** the bitrate ceiling is a provisioned constant, not a hardware limit (the earlier
+notes guessed "computed dynamically… likely kdrv_h26x.ko").
+
+**Method:** static trace of the extracted firmware by a subagent, then its decisive claims re-read
+with `aarch64-linux-gnu-objdump` against `app_extracted/device`.
+
+**Result:** at VMA `4983b8` `device` loads `0x1400000` (20,971,520 = 20480 kbps × 1024) for the
+main path, selects it with `csel` on a per-path flag, stores it into a config struct and calls
+`hd_videoenc_set` with param 2 (`PATH_CONFIG`) at `498414`. A second load at `48c098` goes to
+`obj+0x2894`. This reproduces the measured boundary exactly: 20480 kbps equals the provisioned
+maximum and is accepted; 21504 (22,020,096 bps) exceeds it and is rejected. No constant in the
+(20480, 21504] window exists in `router`, and no HEVC level table or `22000000` literal exists in
+any of the binaries (a level-4.1 explanation I had floated is wrong).
+
+**Conclusion:** hypothesis supported, not proven. The instruction that actually rejects was not
+found — the bitrate-only setter clamps rather than rejects, so the refusal is in the full-config
+path or behind the ioctl in `kflow_videoenc.ko`. Five further loads of `0x1400000` in `device`
+(`55b2a0`–`55b4cc`) are uncharacterised, and the bitstream buffer is sized from this value. No
+patch built. Two no-flash readings settle the rest: `PATH CONFIG` in `/proc/hdal/venc/info`, and
+`dmesg` after a rejected `SetEnc`. Detail: `reolink-firmware-patching/docs/FAR_FIELD_BITS.md`.
+
+## EXP-ENC-04: can the field be found on the camera — the outline model in plain C (2026-11-27)
+
+**Hypothesis:** `field_outline_v2` is accurate enough to set a full-width ROI window's rows, and
+small enough to run on the camera with no runtime.
+
+**Method:** (a) the ONNX model on 5 frames from the middle segment of every 2026 Reolink game,
+predicted top row (min y of far keypoints) and bottom row (max y of near keypoints) against
+`field_polygon`. (b) `reolink-firmware-patching/fieldroi/fieldroi.c`: the network hand-written in C,
+weights exported to a flat file; `verify/test_fieldroi.sh` compares it with onnxruntime on the same
+frame, host build and static aarch64 build under qemu.
+
+**Result:** (a) 14 human-verified games: far edge median +19 rows (too low), range −47…+152, worst
+single frame +179; near edge median −93 (too high), range −493…+46, worst frame −642. The four
+worst near errors are the games whose pitch runs to the bottom of the frame. Within-game scatter
+~15 rows. The five `gamedata`-sourced polygons disagree with the model by 250–530 rows and repeat
+across different games; they look stale, not the model. (b) keypoints within 0.25 px (768×384
+space) of onnxruntime on four games; aarch64/qemu identical to host; 2.3–4.1 s and ~60 MB peak
+(45 MB of it the mapped weights) on desktop x86. The network returns a confident-looking outline
+for a uniform grey or black frame, so the tool adds a grass-colour check (87–93 % on real field
+rows, 0 % on blank frames).
+
+**Conclusion:** feasible. 200 rows of padding above covers every measured far-edge error, and that
+padding is cheap. The near edge is the weak side where the pitch fills the frame. The 14 games were
+likely in the model's training set, so these errors are optimistic; four unseen July games have no
+polygons to score. Nothing has run on the camera: time, free memory and a frame source there are
+all unmeasured.
+
+## EXP-ENC-03: how much of the stream lands inside the field polygon — about a third (2026-11-27)
+
+**Hypothesis:** most of the bitrate is spent outside the field.
+
+**Method:** the EXP-ENC-02 clip and x265 proxy (fixed QP 35, 2 s). Three encodes: whole frame;
+everything outside the confirmed `field_polygon` blacked out; everything inside it blacked out.
+Separately, read `field_polygon` from every 2026 Reolink `game.json` on F: (23 games) for where the
+field sits in frame.
+
+**Result:** whole 6,197,970 B; field only 2,264,092 B (36.5 %); outside only 4,206,529 B (67.9 %;
+the two sum to 104 % because each carries its own mask edges). The polygon is 35.1 % of the frame
+and 57.9 % of its own bounding rows. Across the 23 games the far touchline's top row is 110–543
+(median 219) and the near touchline's bottom row 1283–2154 (median 1760); x extent is nearly full
+width in all of them.
+
+**Conclusion:** confirmed — roughly 65 % of the stream goes outside the field. One full-width ROI
+window on the field's rows would recover most of it (estimated field share 36 % → ~60 %); following
+the polygon needs the ten-window or QP-map routes (→ ~80 %). The window cannot be a fixed default:
+the field's rows differ by hundreds of pixels game to game. Same single-clip, x265-proxy caveats as
+EXP-ENC-02; the "→ 60 % / 80 %" figures are arithmetic on these shares, not measurements.
+
+## EXP-ENC-02: what bitrate would hold far-ball detail — the far band is 4 % of the bits (2026-11-27)
+
+**Hypothesis:** the far field needs a higher bitrate than the 20.5 Mbps the camera accepts.
+
+**Method:** 10 s of `heat__2026.06.10_vs_Lakefront_SC_away` (segment 19:21). (a) Slice QP from the
+bitstream headers (`ffmpeg -c copy -bsf:v trace_headers`). (b) Proxy for where bits go: the first
+2 s cut into four full-width bands, each re-encoded with libx265 `-preset fast`, fixed QP 35 and
+29, keyint 20, no B-frames, AQ off; compare sizes.
+
+**Result:** (a) slice QP 34–35 on keyframes, 33–35 (mean 34.2) on other frames; allowed range is
+25–51. (b) Share of bits at QP 35: rows 0–159 (above far touchline) 2.5 %; far band 160–479
+**4.4 %**; rest of pitch 480–1471 45.1 %; foreground 1472–2159 **48.0 %**. Cost of QP 35→29: whole
+frame ×1.51; far band ×1.67 (≈0.7 Mbps of a 20.7 Mbps stream).
+
+**Conclusion:** hypothesis is true but points the wrong way. A uniform stream at QP 29 needs
+31 Mbps by this proxy (a floor, since the source is already quantised) to ~41 Mbps by the
+6-QP-doubles rule — beyond anything the cap search has reached. The far band alone needs under
+~1.5 Mbps. Raising the cap puts ~4 % of the new bits where they are wanted; a far-band ROI window
+does the same job inside the existing budget. The QP 28–29 target itself is an estimate from
+quantiser step sizes, not a measured detection threshold. One clip, one game; x265 is not the
+camera's encoder; per-block QP after the camera's AQ is not readable.
+
+## EXP-ENC-01: where the Reolink main stream's bits go on game footage — keyframes take a third (2026-11-27)
+
+**Hypothesis:** far-field blockiness is bit starvation, and the stream is at its cap during
+games, so only moving bits can help.
+
+**Method:** `reolink-firmware-patching/verify/stream_quality.py` on archived raw segments
+(`F:\Heat_2012s\2026.06.10 - vs Lakefront SC (away)` segment 19:21, `…2026.07.12 - vs Niagara
+Falls…` segment 10:00). Packet sizes for the keyframe split (exact, no decode); 100 decoded frames
+from 2:00 for per-region blockiness (step energy on the 8/16/32/64 px coding grid over step energy
+off it) and detail (mean |Laplacian|), regions taken inside the confirmed field polygon. Offline;
+camera disconnected.
+
+**Result:**
+
+| | Lakefront | Niagara Falls |
+|---|---|---|
+| video bitrate | 20.71 Mbps | 20.57 Mbps |
+| keyframe interval | 20 frames | 20 frames |
+| keyframe share of bits | 34.1 % | 39.0 % |
+| mean keyframe / other frame | 894 / 90.9 KB | 1023 / 84.1 KB |
+
+Lakefront far band: detail 8.70 on keyframes → 7.36 on the last frame of the cycle (−15 %); near
+band 34.0 → 32.0 (−6 %). Far-band blockiness excess on the 8/16 px grid is ~2× the near band's
+(0.049/0.078 vs 0.025/0.033). The HEVC decoder exports no per-block QP (`export_side_data
+venc_params` returns nothing for hevc), so QP is not read directly.
+
+**Conclusion:** hypothesis holds — the stream is at the cap, so levers must move bits. The
+largest single consumer is the 1 s keyframe cadence, which is a setting (`gop`, API range 1–2),
+not firmware. Try `gop=2` before the ROI window. Both are untested on hardware; the on-camera
+protocol, including the rate-limited-scene precondition, is in
+`reolink-firmware-patching/docs/FAR_FIELD_BITS.md`. Two games, one segment each: enough to rank
+the levers, not a distribution.
+
 ## EXP-DIST-72: PHASE 2 COMPOSED VERDICT — three-arm multi-geometry decisive experiment (2026-07-24)
 
 **CLOCK PROVENANCE ((r).1):** the fleet ran ~2.2 h slow through 07-24; the laptop was

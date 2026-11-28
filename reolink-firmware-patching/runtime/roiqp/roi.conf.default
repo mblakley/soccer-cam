@@ -1,0 +1,22 @@
+# Baked into the pak as /etc/soccercam_roi.conf.default by builds/build_roi_qp.sh.
+# Used only when /mnt/sda/soccercam/roi.conf is absent.
+#
+# DISABLED on purpose. The window is a per-field rectangle: the far touchline
+# sits at y~160 on one mount and y~760 on another, so any rectangle baked in as
+# a default would bias the wrong part of the picture at every other field. With
+# enable=0 the daemon never writes to /proc/hdal/venc/cmd at all, so a camera
+# with no roi.conf encodes exactly as it did before this pak.
+#
+# To use the window, copy roi.conf.example to /mnt/sda/soccercam/roi.conf and
+# set the rectangle for the field in front of the camera.
+
+enable=0
+path=0
+x=0
+y=0
+w=7680
+h=2160
+qp=0
+mode=1
+frame_w=7680
+frame_h=2160

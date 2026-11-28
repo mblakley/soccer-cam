@@ -65,6 +65,7 @@ reolink-firmware-patching/
 │   ├── APP_REPLACEMENT_DESIGN.md    # design: replace app/device, keep kernel+ISP+drivers
 │   ├── BRICK_POSTMORTEM.md          # the 4917 outage, and the recovery that confirmed it
 │   ├── ENCODER_ROI_QP.md            # per-region QP bias (static analysis)
+│   ├── FAR_FIELD_BITS.md            # where the bits go on game footage + the levers, ranked
 │   ├── FIRMWARE_PATCH_NOTES.md      # complete reference (RE recipes + byte offsets)
 │   ├── FPS_CEILING.md               # what limits frame rate + what we achieved (read this first)
 │   ├── FPS_STAGE_EVIDENCE.md        # per-stage readings behind FPS_CEILING.md
@@ -95,6 +96,10 @@ reolink-firmware-patching/
 │       ├── README.md                # how to fetch + build Helix (RPSL, gitignored)
 │       ├── compat/                  # flat-memory stubs so Helix cross-compiles
 │       └── aac_split_test.c         # validates the frame splitter vs ground-truth stsz
+├── fieldroi/                        # find the field ON the camera -> roi.conf (off-camera proven only)
+│   ├── README.md
+│   ├── fieldroi.c                   # field-outline model in plain C, static aarch64
+│   └── export_weights.py            # ONNX -> flat weights file (+ reference output)
 ├── vpe/                             # 2-D warp mesh (VPE DCE) reader/writer
 │   ├── README.md                    # argument layout, liveness gate, on-camera use
 │   ├── lut2d.py                     # parse / validate / selftest the mesh
@@ -110,7 +115,8 @@ reolink-firmware-patching/
 │   │   └── S99_NetState_v2.template # v2: home/away + power-on stub cleanup
 │   ├── roiqp/
 │   │   ├── S37_RoiQp                # ROI/QP init script
-│   │   └── roi.conf.example         # region definitions
+│   │   ├── roi.conf.default         # baked into the pak: disabled, a no-op
+│   │   └── roi.conf.example         # region definitions (copy to the SD card)
 │   └── recover/
 │       └── S35_RecRecover           # boot-time recovery init script
 └── verify/                          # empirical checks
@@ -121,6 +127,10 @@ reolink-firmware-patching/
     ├── measure_clip_fps.py          # DELIVERED fps (frames over PTS span) -- headers lie
     ├── check_recording_default.sh   # gate a pak: must not record on the home network
     ├── roi_qp_heatmap.py            # visualise the encoder's per-region QP
+    ├── stream_quality.py            # keyframe share + per-region blockiness/detail; live capture
+    ├── test_fieldroi.sh             # build fieldroi, compare with the real model, check refusals
+    ├── test_setroi_patch.sh         # execute a pak's setroi kernel handler under qemu before flashing
+    ├── setroi_harness.c             # the user-space harness that script links the module into
     └── test_recover_mp4.sh          # build + round-trip-validate the recovery binary
 ```
 

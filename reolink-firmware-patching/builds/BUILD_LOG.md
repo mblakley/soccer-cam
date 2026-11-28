@@ -33,6 +33,39 @@ Contents (layered on stock 4867):
 
 Build: `builds/build_soccercam_v2.sh` (driven by `/tmp` wrapper that carries creds/MAC from 4896).
 
+## "ROI/QP" firmware — 4925 CURRENT ON THE CAMERA (flashed 2026-11-28)
+
+Build: `builds/build_roi_qp.sh <4921 pak> <out>`. Layers on the current camera
+build and touches `rootfs` only.
+
+| File | Notes |
+|---|---|
+| `IPC_…4922…_roiqp.pak` (`057957af…`, CRC `0x978c75ce`) | **Superseded on the camera by 4923 on 2026-11-28. Flashed 2026-11-27** (46 s upload, back up in 96 s). `build.txt` names it; `device`, `router`, `recorder` up; `kflow_videoenc` loaded; `S37_RoiQp` running; netstate went `home`, recording disabled. **`setroi` now echoes `QP = -6, QPMode = 1`** where 4921 echoed 0/0, and the window measurably moves bits in the picture (EXP-ENC-08). One defect: with the default disabled config the daemon logs nothing, because its only message is written before the SD card mounts (fixed in the source after this build; 4923 carries the fix). 4921 + the 26-byte `setroi` format-string fix in `kflow_videoenc.ko` + `/etc/init.d/S37_RoiQp` + a **disabled** `/etc/soccercam_roi.conf.default`. With no `roi.conf` on the card the daemon writes nothing to `/proc`, so the only live change is the patched module. commit `9b94af3`. |
+
+| `IPC_…4923…_roiqp_multiwin.pak` (`4cc834b5…`, CRC `0xb798f50c`) | **Superseded by 4924 the same day. Flashed 2026-11-28** (47 s upload, back up in 88 s). `build.txt` names it (`roiqp=S37+kflow_videoenc_setroi_fix+multiwin`, `roiqp_commit=a2b4c9f`); `device`, `router`, `recorder` up; `kflow_videoenc` loaded; recording disabled; no oops in `dmesg`. `roi.log` now has its start line (`waited 4s for the SD card`) and `config disables the window; none applied, encoder untouched` — the 4922 logging defect is gone. On the real kernel: `setroi` on indexes 0, 3 and 9 each echo their own QP and rectangle; indexes 10, 999999999 and -1, and path 7, print the echo and then change nothing the camera notices (same PIDs, clean `dmesg`) — the refusal itself is silent, as written. Two windows are held independently in the picture (EXP-ENC-09). 4921 + everything in 4922 + `ROIQP_MULTIWIN=1`: the `setroi` handler honours `RoiIndex` (ten windows) and refuses an index above 9. Twenty instructions and nine relocation entries in `kflow_videoenc.ko`; see `docs/ENCODER_ROI_QP.md` section 4b. `verify/test_setroi_patch.sh <pak> multiwin` executes the handler from this pak under qemu: 20/20. Its `S37_RoiQp` also clears all ten windows on disable and waits for the SD card before its first log line (the 4922 defect). Rebuilt 2026-11-27 after the 4922 session; commit `a2b4c9f`. |
+
+| `IPC_…4924…_roiqp_multiwin.pak` (`ed09a7c4…`, CRC `0xc0ccad21`) | **Superseded by 4925 the same day. Flashed 2026-11-28** (47 s upload, back up in 88 s). `build.txt` names it (`roiqp_commit=3031aac`); the installed `S37_RoiQp` has the md5 of the source; processes up, recording disabled, clean `dmesg`; start line reads `ten-window module`. Driven through `roi.conf` on the camera: three `winN=` bands applied with three matching kernel echoes; dropping the middle band sent a disable for window 1 (seen in `dmesg`; the daemon does not log its clears); a window past the bottom of the frame was `REJECTED` and everything reverted; the one-window form still applies; `enable=0` cleared all ten. Same PIDs throughout. The picture was not re-measured on this build (the module is byte-identical to 4923, where it was). 4923 with a new `S37_RoiQp`: `roi.conf` takes `winN=x,y,w,h,qp` lines for up to ten windows (the one-window keys still work), a config needing more than window 0 is refused unless `/etc/soccercam_build` says `multiwin`, and a write the kernel does not echo back as sent reverts the encoder to stock instead of only being logged. Checked by unpacking both: against 4923 the root filesystem differs in exactly two files, `S37_RoiQp` and `/etc/soccercam_build`; `kflow_videoenc.ko` and every other section are byte-identical. `verify/test_setroi_patch.sh <pak> multiwin` passes. `verify/test_roiqp_daemon.sh` (27 checks against a model of the three module variants; also passes under the camera's own busybox `ash` in qemu) now runs as a gate inside the builder. Default config still `enable=0`. commit `3031aac`. |
+
+| **`IPC_…4925…_roiqp_fieldhook.pak`** (`700e7fde…`, CRC `0xfc579394`) | **CURRENT ON THE CAMERA. Flashed 2026-11-28** (47 s upload, back up in 96 s). `build.txt` names it (`fieldroi_hook=S38(auto=0)`); the installed hook has the md5 of the source; processes up, recording disabled, clean `dmesg`; `fieldroi.log` reads `auto=0: the hook is off and roi.conf is not touched`. With `auto=1` and the manual trigger the whole chain ran on the camera (login from `S99_NetState`, two looks, bands installed in 180 s, applied by `S37_RoiQp`) — **on a scene that was not a field** (EXP-ENC-12): the hook's checks do not establish that. Left with `auto=0` and the bands off. 4924 plus `/etc/init.d/S38_FieldRoi` and `/etc/soccercam_fieldroi.conf.default` (`auto=0`): the hook that finds the field when recording starts (60 s settle wait, then two detections in a row within 96 rows, else stock; EXP-ENC-12). Checked by unpacking both: against 4924 the root filesystem differs in exactly three things, those two files and `/etc/soccercam_build` (`fieldroi_hook=S38(auto=0)`); `S37_RoiQp`, `kflow_videoenc.ko` and every other section are byte-identical. `test_setroi_patch.sh … multiwin` passes; `test_roiqp_daemon.sh` and `test_fieldroi_hook.sh` ran as build gates. The hook reads its login from the `S99_NetState` already in the root filesystem. commit `11f01c9`. |
+
+If WSL was not already running, start it first (`wsl true`): its boot-time
+`systemd-tmpfiles` wipes `/tmp` under the test and it stops at "LINK FAILED".
+
+Run before flashing either: `bash verify/test_setroi_patch.sh <pak> fix` (4922)
+or `… multiwin` (4923). The same script on 4921 with `stock` reproduces the
+original bug — the kernel's echo reads `QP = 0, QPMode = 0`.
+
+Checked after the build by unpacking both root filesystems and diffing them:
+exactly four differences from 4921 — `S37_RoiQp` added, the default config
+added, `/etc/soccercam_build` updated (`pak=`, `roiqp=` lines), and
+`kflow_videoenc.ko` differing in 18 bytes, all inside the format string, at an
+unchanged size of 573152. `loader`, `fdt`, `atf`, `uboot`, `kernel`, `ai` and
+`app` are byte-identical to 4921. The home-recording gate passes.
+
+To confirm a flash took: `curl http://<cam>/downloadfile/soccercam/build.txt`
+must name the 4922 pak. Reflash 4921 to remove. Test order:
+`docs/FAR_FIELD_BITS.md`.
+
 ## "Stitchcal" firmware — comprehensive + the seam-calibration boot hook
 
 Build: `builds/build_stitchcal.sh`. Everything the comprehensive pak carries,

@@ -1,6 +1,136 @@
 # Current Status
 
-*Last updated: 2026-08-17 — non-uniform camera warp assessed and declined*
+*Last updated: 2026-11-28 — far-field bits: build 4925 on the camera (bands + game-start hook, hook off by default)*
+
+## 2026-11-28 — FAR-FIELD BITS: build 4923 is on the camera; ten windows work; lower index wins an overlap
+
+- **Build 4923 flashed (Mark's go-ahead) and is what the camera runs.** Pre-flight 20/20, `build.txt`
+  names it, all processes up, clean `dmesg`, the 4922 daemon-logging defect is gone. Record:
+  `reolink-firmware-patching/builds/BUILD_LOG.md`, EXP-ENC-09.
+- **On the real kernel:** windows on separate indexes hold independently (shown in the picture);
+  out-of-range indexes are refused and nothing crashes; **where two windows overlap the lower index
+  wins**, so a staircase must put the most specific window on the lowest index.
+- **A far-band window is the lever that transfers.** Far band -12 took the far band from QP ~36 to
+  ~28 (the unstarved level) at the same bitrate; a window over the whole pitch gained ~1 QP because
+  in the TV scene the pitch already had nearly all the bits.
+- **The far-ball count was rerun with the clip fullscreen and did not give a usable number** (the
+  count cannot tell a moving ball from a stale copy; details and the caveat it puts on EXP-ENC-08's
+  percentages are in EXP-ENC-09).
+- **Camera left:** build 4925, not recording (`GetRecV20 enable=0`, no override flag, newest file
+  2026-08-22), image settings identical to the saved start state, encoder 20480 kbps / `gop=2` with
+  the kernel's rate control confirmed back at 20.97 Mbps, all ROI windows cleared, `roi.conf`
+  `enable=0`. Still at 192.168.86.22.
+- **Build 4924 flashed (Mark's go-ahead) and is what the camera runs:** 4923 plus a daemon that takes
+  `winN=x,y,w,h,qp` lines for up to ten windows, refuses them on a single-window build, and
+  reverts to stock when the kernel's echo does not match. `verify/test_roiqp_daemon.sh`, 27 checks,
+  is a build gate. Against 4923 only the daemon and the manifest differ. On the camera a three-band
+  `roi.conf` was applied with matching kernel echoes, a bad config reverted everything, and
+  `enable=0` cleared all ten (BUILD_LOG). Left with `enable=0`.
+- **`fieldroi --bands F,M,N` is done and on the camera's SD card.** It writes three full-width
+  windows, far band on window 0. `verify/test_fieldroi.sh` passes with new checks (bands tile the
+  one-window rows; the daemon's own parser accepts them on a ten-window build and refuses them on
+  a one-window build). On the camera it read a real game frame and the daemon applied the three
+  bands (EXP-ENC-10).
+- **Grading chosen on game footage: `--bands -10,-6,-3`** (EXP-ENC-10, x265 proxy at the camera's
+  bitrate): far band +4.7 dB, mid field +2.2 dB, near field unchanged, foreground −2.6 dB. One
+  rectangle at −6 gives +1.7 to +2.0 dB everywhere on the field instead.
+- **The detector's colour check is adaptive now (Mark: no manual bypass; sample the middle of the
+  field).** It reads the field's colour from the middle of the claimed field, so the blue indoor
+  dome is accepted (0.75 against a 0.60 line) and grey, black and black-and-white frames are
+  refused; `--min-green` is gone. On the camera's card and run there on the dome frame
+  (EXP-ENC-11). It does NOT catch a misplaced outline outdoors, and it accepts a TV showing a
+  pitch; a multi-snapshot agreement check would, and is not built.
+- **Indoor option for a winter test:** the dome game ran at 12.5 Mbps and QP 31–33, under the cap
+  (outdoor games: at the cap, QP 34–35), on a full-size pitch with the same framing.
+- **Build 4925 flashed (Mark's go-ahead) and is what the camera runs: the game-start hook.** `S38_FieldRoi`, off by
+  default. With `auto=1` it waits 60 s after recording starts (Mark: the camera may not be fully
+  extended or lined up), then installs the bands only when two detections in a row agree within 96
+  rows (measured jitter on a fixed camera: 30 rows look to look, EXP-ENC-12); otherwise stock.
+  26-check test, a build gate. Against 4924 only the hook, its default config and the manifest differ.
+- **Hook run on the camera (manual trigger): the mechanics work, and it accepted a non-field.** Two
+  looks agreed and bands were installed in 180 s — while the camera was looking at a TV showing a
+  dark navy web page. Outline found + one dominant colour + two looks agree = "a still scene of one
+  colour", not "a pitch". The case that matters at a game: camera left still, pointing elsewhere,
+  for three minutes after the settle wait, then put up. Nothing re-checks after install. NOT FIXED.
+  Camera left with `auto=0`, bands off.
+- **Next:** (0) decide the hook's missing check (re-look after install; stronger colour line from
+  the 23 archived games);
+  (1) a live game or a real pitch: `fieldroi` on the camera's own snapshot, then the
+  bands' effect in the recording — neither has been measured outdoors;
+  (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
+  window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps.
+- **TTT hand-off done (Mark's go-ahead):** the camera checklist ran; results are in PR #163
+  (`CAMERA_CHECKLIST.md`). A `guest` account can list and download recordings; the throwaway
+  `sc_probe` account is deleted. Found: `ReolinkCamera.get_device_info()` returns no MAC on this
+  camera (`GetLocalLink` has it), so device-link registration sends none. Not fixed.
+
+
+## 2026-11-27 — FAR-FIELD BITS: a third of the stream is keyframes; ROI pak staged; NOTHING run on camera yet
+
+- Goal (Mark): less blockiness in the far field. Camera was disconnected this session, so this is
+  the offline half. Record: `reolink-firmware-patching/docs/FAR_FIELD_BITS.md`; EXP-ENC-01.
+- **Measured on two archived away games** (Lakefront 06-10, Niagara Falls 07-12, full 5-min
+  segments): the main stream sits AT the cap (20.6–20.7 Mbps), a keyframe arrives every 20 frames,
+  and **keyframes take 34–39 % of all bits**. Far-field detail drops 15 % across each 1 s keyframe
+  cycle (near field: 6 %).
+- **New first lever, no flash:** `gop=2` (the API allows 1–2; we run 1). Upper bound +26–32 % bits
+  for the frames between keyframes. Untested.
+- **ROI lever staged:** build `4922` = 4921 + the `setroi` `.ko` fix + `S37_RoiQp`, default
+  DISABLED (daemon writes nothing to `/proc` while disabled). All gates pass. Not flashed.
+- **Trap recorded before it bites:** an indoor scene encodes at ~1.2 Mbps against a 20 Mbps cap, so
+  any bit-moving A/B at home reads as "no effect" unless the scene is made rate-limited first. The
+  test order in `FAR_FIELD_BITS.md` starts with that check.
+- **Open, found in passing:** `ReolinkCamera.apply_optimal_settings` sends `gop=40`; the camera
+  reports the range as 1–2. Unverified what the camera does with it.
+- **Where the bits go (EXP-ENC-02/03, x265 proxy, one clip):** stream runs at QP 34–35; the field
+  polygon gets ~36 % of the bits, the foreground below the near touchline ~48 %. A uniform six-QP
+  gain needs 31–41 Mbps; the far band alone needs <1.5 Mbps. One full-width ROI window on the
+  field's rows should take the field to ~60 % of the bits.
+- **The window must be per game** (far row 110–543, near row 1283–2154 across 23 games), and the
+  camera records unattended, so: **`fieldroi/`** — the field-outline model as one dependency-free C
+  file, static aarch64, parity-checked against onnxruntime (EXP-ENC-04). Never run on the camera;
+  cannot fetch a frame there yet.
+- **20.5 Mbps ceiling fully mapped (EXP-ENC-05/06):** `device` provisions the main path's
+  `PATH_CONFIG` at exactly 20,971,520 bps (two instructions) and its own HDAL validator rejects any
+  rate-control bitrate above that (`cmp`/`b.ls` at `5c1a50`). The kernel has no check, so the
+  `setcbr` debug command can exceed it with no flash. No patch built.
+- **`setroi` has three defects, not one.** Build `4922` fixes the QP parse. Build `4923`
+  (`ROIQP_MULTIWIN=1`) also makes all ten windows addressable and range-checks the index, which
+  otherwise crashes the kernel on a large value. `verify/test_setroi_patch.sh` executes the real
+  handler from a built pak under qemu: it reproduces the bug on 4921 and passes 20/20 on 4923.
+  Flash 4922 first.
+- **Also found:** `/proc/hdal/venc/cmd` has `setcbr`/`setvbr`/`setevbr` taking GOP, min/max QP and
+  byte rate — untested, no flash needed. The SoC is NT98539 (NS02302), not NT9856x/NT98530.
+- **Full firmware replacement assessed and not pursued:** no open-firmware path for this SoC; an
+  app replacement is 12–25 weeks (agent's estimate) and does not lift the hardware limits.
+- **Decided (Mark: "you decide"):** no `device` bitrate patch until `setcbr` shows more bitrate
+  helps; no SD auto-run hook in 4922; flash 4922 then 4923.
+- **ON THE CAMERA, 2026-11-27 evening (EXP-ENC-07/08). Build 4922 is flashed and is what the
+  camera runs.** The ROI window works: pixels, negative = better, the rate controller compensates.
+  With the stream starved to a fixed bitrate, a window took synthetic far-ball detections from ~10 %
+  of an unstarved reference to ~58 %, and on real footage moved +3–13 % detail inside and −8 %
+  outside. `fieldroi` runs on the camera (79–82 s, ~23 MB) and the snapshot → detector →
+  `roi.conf` → daemon chain works with no hands. The kernel encodes at 30 Mbps when unbounded.
+  Rate control is EVBR; the debug commands take FrameRate in thousandths.
+- **Session stopped 2026-11-27 ~22:15 local; camera left as found, apart from the firmware.**
+  Build 4922. Image settings restored field-for-field to the values saved at the start (exposure
+  Auto), encoder at 20480 kbps / `gop=2`, ROI window off (`roi.conf` has `enable=0`). Not recording:
+  `GetRecV20 enable=0`, netstate `home`, no override flag, newest file on the card is from
+  2026-08-22. Left on the card: `fieldroi` + weights in `/mnt/sda/soccercam/bin/`, plus `snap.jpg`,
+  `roi.conf`, `roi.log` and test outputs in `/mnt/sda/soccercam/`. The camera is at 192.168.86.22;
+  `shared_data/config.ini` still says .200.
+- **Not done:** a rerun of the ball test with the clip at full 4K size (the TV left the PC's
+  picture and the clip server was stopped for memory); the 4923 flash; the TTT hand-off's
+  `sc_probe` account test (both waiting on Mark's yes).
+- **Next:** (1) flash 4923 (ten windows; rebuilt with the daemon logging fix) — Mark's call;
+  (2) fix `apply_optimal_settings` (`gop=40` is rejected whole by the camera; send 2);
+  (3) `fieldroi` on a real pitch — the grass check and the near-edge error are untested there;
+  (4) decide how the detector is triggered at an unattended game (auto-run hook);
+  (5) a controlled run above 20.97 Mbps with `setevbr … FrameRate=20000`.
+- **(superseded) READY for the camera.** Runbook: `FAR_FIELD_BITS.md` "To test on the camera", phases A–E
+  (read-only baseline → no-flash levers → detector by hand → flash 4922 → flash 4923). Local
+  `camera.env`, `builds/out/fieldroi/` and both paks are in place. Needs from Mark: the camera on
+  the LAN, pointed at a busy scene.
 
 ## 2026-08-17 — NON-UNIFORM CAMERA WARP: assessed, DECLINED for image quality; the mesh READ is the win
 

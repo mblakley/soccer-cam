@@ -22,6 +22,33 @@ What *is* verified, off-camera:
   attempt, each range violation, absent file). All 14 behave as specified and
   report a precise reason.
 
+**Update 2026-11-27, later: it has now run on the camera (build 4922).** The
+short version, with the numbers in `training/docs/EXPERIMENTS.md` EXP-ENC-07/08:
+
+| question this document left open | answer from the hardware |
+|---|---|
+| Does `/proc/hdal/venc/cmd` accept a write at mode 0555 | Yes |
+| Does stock `setroi` lose the QP (section 4) | Yes: 4921 echoes `QP = 0, QPMode = 0` |
+| Does the 26-byte fix work | Yes: 4922 echoes `QP = -6, QPMode = 1` |
+| Does the window reach the encoder | Yes: bits move, in the picture and in the packet sizes |
+| Coordinate units | **Pixels.** Regions inside the requested rows gain detail, regions outside lose it |
+| Sign | Negative `qp` (mode 1) = more detail inside the window |
+| Is the delta applied before the rate controller | Yes, and the controller compensates: with the stream held at a fixed bitrate, a -12 window raised the frame QP from 34.5 to 39.7, i.e. about 28 inside and 40 outside |
+| Does `/proc/hdal/venc/info` list the window | **No.** Its ROI table stays empty for windows set through the debug command, so it is no readback at all. The kernel's echo and the picture are |
+| `S37_RoiQp` end to end | Works: a `roi.conf` dropped on the card is applied within 30 s and logged with the kernel's echo |
+| Do ten windows work on the real kernel (4923, flashed 2026-11-28) | Yes: indexes 0, 3 and 9 echo their own values; two disjoint windows hold their gains independently in the picture; indexes 10, 999999999, -1 and path 7 are refused silently and the camera keeps running (EXP-ENC-09) |
+| Overlapping windows | **The lower index wins.** Index 0 = whole pitch -6 with index 1 = far band -12 behaves like pitch -6 alone; swapped, the far band gets -12. Put the most specific window on the lowest index |
+| Still open | What `qp_mode` 0 and 2 mean; whether a window survives an encode-path rebuild |
+
+**Update 2026-11-27.** Still nothing run on the camera, but two things changed.
+The builder now layers on the current build (`4921`) and bakes a *disabled*
+default, so the pak is a no-op until a `roi.conf` is on the card: the daemon
+does not write to `/proc` at all while disabled. And the claim below that the
+stream is bit-starved was checked against game footage and holds; the numbers,
+a cheaper lever to try first (keyframe interval) and a test order that avoids a
+false negative on an indoor scene are in `FAR_FIELD_BITS.md`. Where section 7
+names the `4906` base or a baked-in enabled window, that document supersedes it.
+
 What is **not** verified: everything that requires the camera — whether the
 `.ko` loads, whether `/proc/hdal/venc/cmd` accepts a write, whether the ROI
 reaches the encoder, and what the coordinates mean. §7 is how to find out.
@@ -433,6 +460,84 @@ and the file offset, not on a bare substring).
 
 `kflow_videoenc.ko` carries **no module signature** (no `~Module signature
 appended~` trailer), so a byte patch does not break loading.
+
+### 4b. Two more defects in the handler, and the ten-window patch (2026-11-27)
+
+The format string is not the handler's only problem. Reading its tail
+(`.text` offsets, file offset = offset + 0x80; the addresses above are these
+plus 0x100040):
+
+```
+11ba8  ldp   w1, w2, [sp, #120]      ; PathId, RoiIndex
+11bb4  ubfiz x8, x2, #4, #32         ; x8 = RoiIndex * 16      <-- unchecked
+11bb8  ldrh  w7, [x25, x8]           ; read the "window" back at that offset
+  ...                                ; printk
+11bf0  b.cc  11c34                   ; PathId in range?
+11c34  mov   w0, w2 ; mov x1, x19
+11c3c  bl    NMR_VdoEnc_SetROI       ; (path, &local struct)   <-- all 168 bytes
+```
+
+**(c) `RoiIndex` is never range-checked, and it indexes a stack read.** The
+print loads its fields from `local_struct + RoiIndex*16`. An index above 9 reads
+past the struct; a large one reads megabytes off the stack. In user space that
+is a segfault and on the camera it is a kernel oops, from one mistyped number.
+`verify/test_setroi_patch.sh` shows it: both the stock module and the
+format-fixed one crash on `setroi 0 999999999 ...`.
+
+**(d) Ten windows exist and nine are unreachable** — consequence (a) above. The
+kernel struct, the codec and `NMR_VdoEnc_SetROI` all handle ten.
+
+`ROIQP_MULTIWIN=1 builds/build_roi_qp.sh` fixes both by rewriting the tail:
+
+```
+11bb4  mov   x8, #0                  ; print the window that was parsed
+11bf4  mov   w0, #0 ; b epilogue     ; bad path or bad index: return 0
+11c34  ldr   w3, [sp, #124]          ; RoiIndex
+11c38  cmp   w3, #9
+11c3c  b.hi  11bf4                   ; refuse; the encoder is not touched
+11c40  adrp  x0, gNMRVdoEncObj ; ldr x0, [x0, :lo12:gNMRVdoEncObj]
+11c48  mov   w4, #0xbe8 ; umaddl x0, w2, w4, x0
+11c50  add   x1, x0, #0x388          ; this path's LIVE ROI struct
+11c54  add   x4, x1, w3, uxtw #4     ; &win[RoiIndex]
+11c58  ldp   x5, x6, [x19] ; stp x5, x6, [x4]   ; 16 parsed bytes into that slot
+11c60  mov   w0, w2 ; bl NMR_VdoEnc_SetROI ; mov w0, #1 ; b epilogue
+```
+
+So a call now changes one window and leaves the other nine as they were, and
+`NMR_VdoEnc_SetROI` is handed the live struct (its `memcpy` onto itself is a
+no-op) so the codec still gets its "ROI changed" call. Twenty instructions, same
+function size. The room comes from the handler's own "invalid path" debug print,
+which is dropped; the stack-protector call moves three words up.
+
+**This is a different class of change from the format string.** It is code, and
+it needs relocation entries edited: two retargeted to `gNMRVdoEncObj`
+(`.bss+0x2c0`, copied from the reference `NMR_VdoEnc_SetROI` itself makes), two
+moved with their `bl`, five from the dropped print set to `R_AARCH64_NONE`. A
+wrong relocation is a module that does not load, which is a camera with no
+encoder. Three things stand between that and the camera:
+
+- the builder asserts every stock instruction word and every stock relocation
+  entry before it changes anything, and refuses a relocation in the rewritten
+  range that it does not recognise;
+- `verify/test_setroi_patch.sh <pak> multiwin` pulls the module out of the
+  *built pak*, links it into a user-space program — so a real linker applies the
+  edited relocation table — and executes the real handler under qemu: 20 checks,
+  covering index 0, 3 and 9, a second path, disable, and refusal of index 10,
+  999999999, -1 and an out-of-range path with nothing written;
+- it is opt-in and has its own build number (`4923`), so the format-string build
+  (`4922`) can prove the window on hardware first.
+
+What the harness cannot show is anything past `NMR_VdoEnc_SetROI`: how the codec
+treats two enabled windows that overlap, or their priority order. That needs
+the camera. **Answered 2026-11-28 on build 4923: the lower index wins**
+(EXP-ENC-09, three alternating captures per order, ranges do not overlap).
+
+`S37_RoiQp` drove window 0 only through build 4923. From build 4924 (flashed
+2026-11-28) it drives up to ten from `winN=` lines in `roi.conf`, refuses more
+than window 0 on a build whose manifest does not say `multiwin`, and treats a
+kernel echo that does not match what it sent as a failure. Its disable clears
+all ten, which is right on either module. Fitting several windows to the field polygon is the
+next step, after one window is proven.
 
 ### Why this route and not the others
 
