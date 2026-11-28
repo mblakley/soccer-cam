@@ -46,6 +46,8 @@ POLL_INTERVAL=30
 REAPPLY_INTERVAL=300
 # How long to wait at boot for the videoenc module to publish its proc node.
 PROC_WAIT=180
+# How long to wait after that for the app to mount the SD card (config + log).
+SD_WAIT=120
 
 mkdir -p "$CONF_DIR" 2>/dev/null
 
@@ -190,7 +192,19 @@ run() {
         log "$CMD never appeared after ${PROC_WAIT}s; giving up (encoder left at stock)"
         return
     fi
-    log "===== roi/qp daemon start ====="
+    # rcS runs the S* scripts before the app mounts /dev/hd/sda1 on /mnt/sda, and
+    # / is read-only, so anything logged before then is lost. Build 4922 showed
+    # it: with the default (disabled) config the daemon said its piece once, at
+    # boot, into nowhere, and roi.log never existed -- a running daemon with no
+    # evidence of itself. The same thing happened to S98_StitchCal in 4918. Wait
+    # for the card before the first word. If it never mounts, carry on: the
+    # baked-in default still applies, just unlogged.
+    I=0
+    while ! grep -q ' /mnt/sda ' /proc/mounts 2>/dev/null && [ $I -lt $SD_WAIT ]; do
+        sleep 1
+        I=$((I + 1))
+    done
+    log "===== roi/qp daemon start (waited ${I}s for the SD card) ====="
 
     LAST_SIG=""
     SINCE_APPLY=$REAPPLY_INTERVAL

@@ -22,6 +22,22 @@ What *is* verified, off-camera:
   attempt, each range violation, absent file). All 14 behave as specified and
   report a precise reason.
 
+**Update 2026-11-27, later: it has now run on the camera (build 4922).** The
+short version, with the numbers in `training/docs/EXPERIMENTS.md` EXP-ENC-07/08:
+
+| question this document left open | answer from the hardware |
+|---|---|
+| Does `/proc/hdal/venc/cmd` accept a write at mode 0555 | Yes |
+| Does stock `setroi` lose the QP (section 4) | Yes: 4921 echoes `QP = 0, QPMode = 0` |
+| Does the 26-byte fix work | Yes: 4922 echoes `QP = -6, QPMode = 1` |
+| Does the window reach the encoder | Yes: bits move, in the picture and in the packet sizes |
+| Coordinate units | **Pixels.** Regions inside the requested rows gain detail, regions outside lose it |
+| Sign | Negative `qp` (mode 1) = more detail inside the window |
+| Is the delta applied before the rate controller | Yes, and the controller compensates: with the stream held at a fixed bitrate, a -12 window raised the frame QP from 34.5 to 39.7, i.e. about 28 inside and 40 outside |
+| Does `/proc/hdal/venc/info` list the window | **No.** Its ROI table stays empty for windows set through the debug command, so it is no readback at all. The kernel's echo and the picture are |
+| `S37_RoiQp` end to end | Works: a `roi.conf` dropped on the card is applied within 30 s and logged with the kernel's echo |
+| Still open | What `qp_mode` 0 and 2 mean; whether a window survives an encode-path rebuild; overlapping windows (needs 4923) |
+
 **Update 2026-11-27.** Still nothing run on the camera, but two things changed.
 The builder now layers on the current build (`4921`) and bakes a *disabled*
 default, so the pak is a no-op until a `roi.conf` is on the card: the daemon
