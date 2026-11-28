@@ -216,6 +216,16 @@ class DownloadProcessor(QueueProcessor):
         try:
             logger.info(f"DOWNLOAD: Starting download of {os.path.basename(file_path)}")
             await dir_state.update_file_state(file_path, status="downloading")
+            # The save adopts a skip already on disk (_keep_skips_from_disk),
+            # so one made since this item's early check -- during the camera
+            # probe, say -- shows here. One made after this save is refused:
+            # skip_download will not touch a file that is downloading.
+            now = dir_state.get_file_by_path(file_path)
+            if now is not None and now.status == SKIPPED_FILE_STATUS:
+                logger.info(
+                    f"DOWNLOAD: Not downloading {file_name} - it was skipped just now."
+                )
+                return
             await self.recordings.progress(
                 dir_state.directory_path,
                 StepReport(
@@ -425,23 +435,31 @@ class DownloadProcessor(QueueProcessor):
             )
             return
 
-        # One exhausted retry round, counted on the file. The StateAuditor
-        # re-queues a download_failed file every pass, so this climbs for as
-        # long as the file keeps failing -- the number a person looks at to
-        # decide whether to skip it.
-        attempts = (current.failed_attempts if current is not None else 0) + 1
-        await dir_state.update_file_state(file_path, failed_attempts=attempts)
+        # One exhausted retry round, counted on the file -- but only when a
+        # download was actually tried and failed (status download_failed).
+        # A round that never reached the camera's bytes (low disk raises
+        # before any attempt) leaves the file pending with no error, and
+        # counting it would list a full disk as a download that keeps
+        # failing. The StateAuditor re-queues a download_failed file every
+        # pass, so this climbs for as long as the file keeps failing -- the
+        # number a person looks at to decide whether to skip it.
+        status = current.status if current is not None else None
+        attempts = current.failed_attempts if current is not None else 0
+        if status == "download_failed":
+            attempts += 1
+            await dir_state.update_file_state(file_path, failed_attempts=attempts)
 
         if not await self._camera_confirms_file_gone(item):
             logger.error(
                 "DOWNLOAD: %s failed %d attempts (retry round %d), but the "
                 "camera has not confirmed it is gone; leaving it retryable "
-                "(download_failed). It holds the camera watermark until it "
-                "downloads, the camera stops listing it, or a person skips it "
-                "from the dashboard's 'Downloads that keep failing' list.",
+                "(%s). It holds the camera watermark until it downloads, the "
+                "camera stops listing it, or a person skips it from the "
+                "dashboard's 'Downloads that keep failing' list.",
                 name,
                 self._max_retries,
                 attempts,
+                status,
             )
             return
 

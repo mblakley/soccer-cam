@@ -115,8 +115,17 @@ way out was editing `state.json` by hand. Mark: "we should also allow marking a 
   on-disk `skipped` entry. Nothing un-skips a file today; a future "un-skip" must clear the
   on-disk entry itself.
 - **Repeated failure is recorded on the file** so the dashboard can show it without logs:
-  `failed_attempts` (+1 per exhausted retry round, i.e. per `on_item_permanently_failed`),
-  `error_message` + `last_failed_at` (per failed attempt).
+  `failed_attempts` (+1 per exhausted retry round, i.e. per `on_item_permanently_failed`, and only
+  when the file is `download_failed` -- a round that never tried a download, such as low disk,
+  is not a failing download and must not offer a Skip), `error_message` + `last_failed_at` (per
+  failed attempt).
+- **A skipped file is out of the game video, even with bytes on disk** (added 2026-11-28 after
+  review). A download that stopped short leaves its partial file behind, and combine and corrupt
+  recovery pick inputs from the folder, so both leave out `skipped_file_names(group)`; and the
+  group's first file -- video time 0 for parent event-tap anchors -- is the first one not
+  skipped. A skip that lands while the downloader is probing the camera is caught right after it
+  marks the file `downloading` (that save adopts the skip); one after that is refused. A skip
+  reason is capped at 200 characters by `skip_download` itself, not only by the form.
 - **The error is the camera's reason, not "Download failed for <name>".** `download_file` keeps
   returning a bare bool for its callers; `Camera.last_download_error` carries why (HTTP status,
   short read, timeout, disk full, the Baichuan error...), cleared at the start of each download

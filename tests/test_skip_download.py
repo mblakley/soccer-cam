@@ -273,3 +273,79 @@ class TestListStuckDownloads:
             (Path(temp_storage) / GROUP / "state.json").read_text(encoding="utf-8")
         )
         assert next(iter(state["files"].values()))["status"] == "skipped"
+
+
+class TestSkippedFilesStayOutOfTheGame:
+    """A skipped file is out of the game, even with bytes left on disk (a
+    download that stopped short leaves its partial file behind)."""
+
+    @pytest.mark.asyncio
+    async def test_combine_leaves_out_a_skipped_file(self, temp_storage):
+        from video_grouper.task_processors.tasks.video.combine_task import (
+            CombineTask,
+        )
+
+        group_dir = await _group(
+            temp_storage,
+            [
+                ("c1.dav", "downloaded", None),
+                ("c2.dav", "download_failed", None),
+                ("c3.dav", "downloaded", None),
+            ],
+        )
+        for name in ("c1.dav", "c2.dav", "c3.dav"):
+            Path(group_dir, name).write_bytes(b"x")
+        skip_download(temp_storage, GROUP, "c2.dav", by="dashboard")
+
+        task = CombineTask(group_dir=group_dir)
+        task.storage_path = temp_storage  # set by the queue processor
+        names = [os.path.basename(p) for p in task.get_dav_files()]
+        assert names == ["c1.dav", "c3.dav"]
+
+    @pytest.mark.asyncio
+    async def test_corrupt_recovery_rebuilds_without_a_skipped_file(self, temp_storage):
+        from video_grouper.task_processors.corrupt_recovery import _source_segments
+
+        group_dir = await _group(
+            temp_storage,
+            [("c1.dav", "downloaded", None), ("c2.dav", "download_failed", None)],
+        )
+        for name in ("c1.dav", "c2.dav"):
+            Path(group_dir, name).write_bytes(b"x")
+        skip_download(temp_storage, GROUP, "c2.dav", by="dashboard")
+
+        assert [os.path.basename(p) for p in _source_segments(group_dir)] == ["c1.dav"]
+
+    @pytest.mark.asyncio
+    async def test_the_first_file_is_the_first_one_not_skipped(self, temp_storage):
+        """It is the game's video time 0: a skipped first file is not in the
+        combined video."""
+        group_dir = await _group(
+            temp_storage,
+            [("f1.dav", "download_failed", None), ("f2.dav", "downloaded", None)],
+        )
+        skip_download(temp_storage, GROUP, "f1.dav", by="dashboard")
+        first = DirectoryState(group_dir).get_first_file()
+        assert first is not None
+        assert os.path.basename(first.file_path) == "f2.dav"
+
+    @pytest.mark.asyncio
+    async def test_with_every_file_skipped_the_first_file_is_still_named(
+        self, temp_storage
+    ):
+        """Callers that only read the camera's name from it keep working."""
+        group_dir = await _group(temp_storage, [("f1.dav", "download_failed", None)])
+        skip_download(temp_storage, GROUP, "f1.dav", by="dashboard")
+        first = DirectoryState(group_dir).get_first_file()
+        assert first is not None
+        assert os.path.basename(first.file_path) == "f1.dav"
+
+
+@pytest.mark.asyncio
+async def test_a_reason_over_200_characters_is_refused(temp_storage):
+    """The form caps it; the TTT command and a hand-made POST must not get
+    past that."""
+    await _group(temp_storage, [("a.dav", "download_failed", None)])
+    with pytest.raises(SkipDownloadError):
+        skip_download(temp_storage, GROUP, "a.dav", by="dashboard", reason="x" * 201)
+    skip_download(temp_storage, GROUP, "a.dav", by="dashboard", reason="x" * 200)

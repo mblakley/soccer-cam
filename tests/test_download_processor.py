@@ -693,6 +693,60 @@ class TestRepeatedFailureAndSkip:
         assert datetime.fromisoformat(state.last_failed_at)
 
     @pytest.mark.asyncio
+    async def test_a_round_that_never_tried_a_download_is_not_counted(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Low disk raises before any download is tried: the file is still
+        pending, with no error. Counting that round would list it as a
+        download that keeps failing, offering a Skip for a full disk."""
+        from video_grouper.models.directory_state import list_stuck_downloads
+
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        await DirectoryState(group_dir).update_file_state(file_path, status="pending")
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.get_file_list = AsyncMock(return_value=_listing("gone.dav"))
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        with patch(
+            "video_grouper.task_processors.download_processor.check_disk_space",
+            return_value=(False, 0.5),
+        ):
+            with pytest.raises(RuntimeError, match="disk space"):
+                await processor.process_item(rec)
+        await processor.on_item_permanently_failed(rec)
+
+        state = DirectoryState(group_dir).files[file_path]
+        assert (state.status, state.failed_attempts) == ("pending", 0)
+        assert list_stuck_downloads(temp_storage) == []
+        mock_camera.download_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_skip_landing_during_the_camera_check_stops_the_download(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """The early skip check reads state loaded before the camera probe; a
+        skip made during the probe must still stop the download."""
+        from video_grouper.models.directory_state import skip_download
+
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+
+        async def skip_then_up(_camera):
+            skip_download(
+                temp_storage, os.path.basename(group_dir), "gone.dav", by="dashboard"
+            )
+            return True
+
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        with patch(
+            "video_grouper.task_processors.download_processor._check_camera",
+            side_effect=skip_then_up,
+        ):
+            await processor.process_item(rec)
+
+        mock_camera.download_file.assert_not_called()
+        assert DirectoryState(group_dir).files[file_path].status == "skipped"
+
+    @pytest.mark.asyncio
     async def test_a_skipped_file_still_in_the_queue_is_not_downloaded(
         self, temp_storage, mock_config, mock_camera
     ):

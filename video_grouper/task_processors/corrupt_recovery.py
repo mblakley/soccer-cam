@@ -65,13 +65,19 @@ class RecoveryOutcome:
 
 
 def _source_segments(group_dir: str) -> list[str]:
-    """Top-level raw camera segments in *group_dir* (same selection as CombineTask)."""
+    """Top-level raw camera segments in *group_dir* (same selection as
+    CombineTask, skipped files left out)."""
+    from video_grouper.models.directory_state import skipped_file_names
+
     segments: list[str] = []
+    skipped = skipped_file_names(group_dir)
     try:
         for name in sorted(os.listdir(group_dir)):
             low = name.lower()
-            if low.endswith(_SOURCE_EXTENSIONS) and not low.startswith(
-                _EXCLUDE_PREFIXES
+            if (
+                low.endswith(_SOURCE_EXTENSIONS)
+                and not low.startswith(_EXCLUDE_PREFIXES)
+                and low not in skipped
             ):
                 segments.append(os.path.join(group_dir, name))
     except FileNotFoundError:

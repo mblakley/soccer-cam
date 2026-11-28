@@ -88,6 +88,30 @@ SKIPPABLE_FILE_STATUSES = frozenset({"pending", "download_failed", "abandoned"})
 _GROUP_DIR_FORMAT = "%Y.%m.%d-%H.%M.%S"
 
 
+MAX_SKIP_REASON_CHARS = 200
+
+
+def _is_skipped(rec: RecordingFile) -> bool:
+    """A person gave up on this file (``skip_download``)."""
+    return rec.status == SKIPPED_FILE_STATUS or bool(getattr(rec, "skip", False))
+
+
+def skipped_file_names(
+    directory_path: str, storage_path: str | None = None
+) -> set[str]:
+    """Lower-cased names of the group's skipped files.
+
+    Whatever builds the game video from the files on disk leaves these out: a
+    skipped file is out of the game even when bytes of it are there (a
+    download that stopped short leaves its partial file behind).
+    """
+    return {
+        os.path.basename(f.file_path).lower()
+        for f in DirectoryState(directory_path, storage_path).files.values()
+        if _is_skipped(f)
+    }
+
+
 class DirectoryState:
     """Represents the state of files in a directory with state tracking.
 
@@ -290,10 +314,16 @@ class DirectoryState:
         return max(self.files.values(), key=lambda f: f.end_time)
 
     def get_first_file(self) -> RecordingFile | None:
-        """Returns the first file in the group based on start time."""
+        """The first file in the group by start time, leaving out skipped ones.
+
+        It is the game's video time 0, and a skipped file is not in the
+        combined video. If every file was skipped, the first of them, so
+        callers that only read the camera's name from it still get one.
+        """
         if not self.files:
             return None
-        return min(self.files.values(), key=lambda f: f.start_time)
+        kept = [f for f in self.files.values() if not _is_skipped(f)]
+        return min(kept or self.files.values(), key=lambda f: f.start_time)
 
     def get_files_by_status(self, status: str) -> list[RecordingFile]:
         """Returns a list of files matching the given status."""
@@ -748,6 +778,11 @@ def skip_download(
         raise SkipDownloadError(f"Recording group {group} has no state file.")
 
     note = (reason or "").strip() or None
+    if note is not None and len(note) > MAX_SKIP_REASON_CHARS:
+        raise SkipDownloadError(
+            f"Keep the reason to {MAX_SKIP_REASON_CHARS} characters "
+            f"({len(note)} given)."
+        )
     with FileLock(state_path):
         try:
             with open(state_path, encoding="utf-8") as f:
