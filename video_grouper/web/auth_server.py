@@ -35,7 +35,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import Body, FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
@@ -98,6 +98,27 @@ _FLASH_TTL_S = 120
 # Loopback Host values always accepted by the rebinding-defense middleware,
 # regardless of the configured bind. Anything else has to be the explicit bind.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin_of(scheme: str, netloc: str) -> tuple[str, str, int] | None:
+    """Normalise ``scheme`` + ``host[:port]`` to a comparable origin.
+
+    Returns ``(scheme, hostname, port)`` with the scheme's default port
+    filled in, or None when the value can't be an http(s) origin.
+    """
+    scheme = scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not netloc:
+        return None
+    parts = urlsplit(f"//{netloc}")
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if not parts.hostname:
+        return None
+    return (scheme, parts.hostname.lower(), port or _DEFAULT_PORTS[scheme])
 
 
 _DASHBOARD_BODY = """\
@@ -1338,10 +1359,18 @@ def create_app(
                     "Missing Origin/Referer on state-changing request.",
                     status_code=403,
                 )
-            from urllib.parse import urlparse
-
-            check_host = urlparse(check_value).hostname or ""
-            if check_host.lower() not in allowed_hosts:
+            # Same origin means same scheme, host AND port: another program's
+            # page on this machine (http://localhost:3000) shares our host
+            # but is a different origin. Our own origin is whatever the
+            # request's Host names (the port is configurable), with the
+            # scheme a TLS-terminating proxy reports.
+            parsed = urlsplit(check_value)
+            claimed = _origin_of(parsed.scheme, parsed.netloc)
+            own = _origin_of(
+                request.headers.get("x-forwarded-proto") or request.url.scheme,
+                raw_host,
+            )
+            if claimed is None or claimed != own or claimed[1] not in allowed_hosts:
                 return PlainTextResponse(
                     f"Origin '{check_value}' does not match this server.",
                     status_code=403,
