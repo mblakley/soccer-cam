@@ -2567,3 +2567,28 @@ the normal onboarding process. It should be possible to skip the camera setup st
   it. It is unreachable while it is out at a game. During those hours the camera poller logs
   "unable to connect" at INFO, not as an error, and the device link backs off after a failed probe
   (5 min, doubling to 1 h; #160).
+
+## Decision: a stuck download can be skipped from TTT; skip commands are addressed to one install (2026-11-28)
+
+A download that keeps failing holds its camera's watermark, and with it the archiving of every
+later game, until a person gives up on it. The local dashboard could already skip one (#161); a
+camera manager away from the install could not.
+
+- **Same decision, same function.** TTT queues a camera command `skip_download` (`parameters`:
+  `machine_id`, `group_dir`, `file_name`, `reason`, `requested_by`). The `CommandExecutor` runs the
+  dashboard's own `directory_state.skip_download`, recorded as `TTT: <requested_by>`, and completes
+  the command with `success`, a message a person can read (the refusal, when it is refused), and
+  whether anything changed. No second code path decides what may be skipped.
+- **Installs report their stuck list.** Each device-link tick reads `list_stuck_downloads` and
+  sends it through `IDeviceLink.report_stuck_downloads` (TTT: `PUT
+  /api/internal/device-link/stuck-downloads`, which replaces this machine's whole list; `[]` clears
+  it) when the list changed, and at least hourly regardless, so TTT can tell a current list from an
+  install gone quiet. Only when the link has an account (the camera-registration gate): a TTT-off
+  install reads and sends nothing. Entries go out under the camera's TTT id; one whose camera TTT
+  doesn't know is left out, and new camera ids trigger a resend.
+- **Skip commands are addressed by `machine_id`.** Several installs can share one TTT camera (it
+  is identified by serial and joined by possession, entry above), and a camera command is polled
+  by every install that has that camera. A file in `2026.07.01-10.00.00` on one install means
+  nothing on another. So a command whose `parameters` carry a `machine_id` that isn't this install's
+  is neither acknowledged nor run here: it stays pending for its install. Commands without a
+  `machine_id` behave as before.
