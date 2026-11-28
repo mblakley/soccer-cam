@@ -334,7 +334,13 @@ def test_the_camera_step_offers_a_skip(client):
     _walk_to_camera(client, "/data/games")
     resp = client.get("/setup/camera")
     assert resp.status_code == 200
-    assert 'action="/setup/camera/skip"' in resp.text
+    # The button submits its own (empty) form, so the camera form's required
+    # fields neither block nor ride along with a skip.
+    assert 'form="camera-skip-form"' in resp.text
+    assert (
+        '<form method="post" action="/setup/camera/skip" id="camera-skip-form">'
+        in resp.text
+    )
 
 
 def test_skipping_the_camera_finishes_with_no_camera(client, config_path):
@@ -424,3 +430,67 @@ def test_adding_a_camera_later_keeps_the_configured_storage(
     after = load_config(config_path)
     assert after.storage.path == str(tmp_path / "videos")
     assert [c.device_ip for c in after.cameras] == ["192.168.1.50"]
+
+
+def _camera_name_field(page: str) -> str:
+    import re
+
+    m = re.search(r'id="camera-name" type="text" value="([^"]*)"', page)
+    assert m, "camera name field not rendered"
+    return m.group(1)
+
+
+def test_add_a_camera_adds_rather_than_replacing_a_configured_one(
+    client, config_path, tmp_path
+):
+    """The dashboard shows "Add a camera" whenever the service reports no
+    camera -- every camera disabled, the service not restarted yet, or no
+    status. Keeping the pre-filled name must not overwrite a configured
+    camera that happens to carry it (the wizard's default is "default")."""
+    from video_grouper.utils.config import save_config
+    from video_grouper.web.setup.router import _build_config
+
+    class _Configured(_State):
+        storage_path = str(tmp_path / "videos")
+        camera_name = "default"
+        camera_type = "dahua"
+        camera_ip = "10.0.0.5"
+        camera_password = "old"
+
+    existing = _build_config(_Configured())
+    existing.cameras[0].enabled = False
+    save_config(existing, config_path)
+
+    page = client.get("/setup/camera?add=1").text
+    name = _camera_name_field(page)
+    assert name != "default"
+    client.post(
+        "/setup/camera",
+        data={
+            "camera_type": "reolink",
+            "camera_name": name,
+            "camera_ip": "10.0.0.9",
+            "camera_username": "admin",
+            "camera_password": "new",
+        },
+    )
+    client.post("/setup/youtube/skip")
+    resp = client.post("/setup/finish", follow_redirects=False)
+    assert resp.status_code == 303, resp.text
+
+    cams = {c.name: c for c in load_config(config_path).cameras}
+    assert set(cams) == {"default", name}
+    old = cams["default"]
+    assert (old.type, old.device_ip, old.password, old.enabled) == (
+        "dahua",
+        "10.0.0.5",
+        "old",
+        False,
+    )
+    assert cams[name].device_ip == "10.0.0.9"
+
+
+def test_the_dashboard_link_opens_the_camera_step_to_add(tmp_path):
+    from video_grouper.web.auth_server import _render_cameras_section
+
+    assert 'href="/setup/camera?add=1"' in _render_cameras_section({"cameras": []})

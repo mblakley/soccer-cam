@@ -917,14 +917,21 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
         write the storage step's default over the real path.
         """
         token, state = get_or_create(request.cookies.get(cookie_name()))
-        if not state.storage_path and config_path.exists():
-            try:
-                existing = load_config(config_path)
-            except Exception:  # noqa: BLE001 -- an unreadable config seeds nothing
-                existing = None
-            if existing is not None and existing.setup.onboarding_completed:
+        if not state.storage_path:
+            existing = _finished_config()
+            if existing is not None:
                 state.storage_path = existing.storage.path
         return token, state
+
+    def _finished_config() -> Config | None:
+        """The config on disk, if setup has been finished; else None."""
+        if not config_path.exists():
+            return None
+        try:
+            existing = load_config(config_path)
+        except Exception:  # noqa: BLE001 -- an unreadable config seeds nothing
+            return None
+        return existing if existing.setup.onboarding_completed else None
 
     @router.get("/", response_class=HTMLResponse)
     def setup_root(request: Request) -> RedirectResponse:
@@ -1135,8 +1142,16 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
         return _redirect_with_cookie("/setup/camera", token)
 
     @router.get("/camera", response_class=HTMLResponse)
-    def camera_get(request: Request) -> HTMLResponse:
+    def camera_get(request: Request, add: bool = Query(False)) -> HTMLResponse:
         token, state = _get_or_create(request)
+        if add:
+            # From the dashboard's "Add a camera". Saving upserts by name, so
+            # a pre-filled name a configured camera already carries would
+            # replace that camera rather than add one.
+            existing = _finished_config()
+            taken = {c.name.lower() for c in existing.cameras} if existing else set()
+            if state.camera_name.lower() in taken:
+                state.camera_name = _free_camera_name(taken)
         # No password echo on render (sensitive)
         body = _camera_body(state)
         resp = HTMLResponse(
@@ -1600,6 +1615,15 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
         return resp
 
     return router
+
+
+def _free_camera_name(taken: set[str]) -> str:
+    """The first of camera2, camera3, ... that no configured camera uses
+    (``taken`` holds lower-cased names)."""
+    n = 2
+    while f"camera{n}" in taken:
+        n += 1
+    return f"camera{n}"
 
 
 def _upsert_camera(cameras: list[dict], state) -> list[dict]:

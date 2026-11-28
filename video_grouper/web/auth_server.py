@@ -938,7 +938,7 @@ def _render_cameras_section(status: dict | None) -> str:
         # An empty screen is an invitation to act, not a dead end.
         return (
             '<p class="muted">No cameras configured yet.</p>'
-            '<p><a class="btn btn-sm" href="/setup/camera">Add a camera</a></p>'
+            '<p><a class="btn btn-sm" href="/setup/camera?add=1">Add a camera</a></p>'
         )
     rows = []
     for c in cameras:

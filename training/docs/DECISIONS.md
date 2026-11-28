@@ -2481,7 +2481,11 @@ the normal onboarding process. It should be possible to skip the camera setup st
 - A camera is added later from the dashboard's existing **Add a camera** link, which re-enters the
   wizard at the camera step. A fresh wizard state on a finished install now starts from the
   configured storage path. Before this, that link's flow bounced the person back to the start at
-  Summary and could have written the storage step's default over the real path.
+  Summary and could have written the storage step's default over the real path. The link opens
+  the step in add mode (`/setup/camera?add=1`): a pre-filled name that a configured camera already
+  carries becomes a free one (`camera2`, ...), because saving upserts by name and the link also
+  shows when every camera is disabled or the service reports none. Re-running setup from the start
+  still updates the camera of the same name.
 - An install with no camera starts cleanly. `job_capabilities` read `config.camera` (the first
   camera) and raised `IndexError` at startup when TTT job polling was on; it now announces no camera.
   Verified by starting the real app with zero cameras and TTT jobs on: no errors.
