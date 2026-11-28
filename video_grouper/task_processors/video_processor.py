@@ -3,6 +3,8 @@ import logging
 import os
 from typing import Any
 
+from video_grouper.integrations.recordings import IRecordingSink, StepReport
+from video_grouper.integrations.recordings.sources.null import NullRecordingSink
 from video_grouper.task_processors.upload_processor import UploadProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.paths import get_combined_video_path, get_match_info_path
@@ -61,7 +63,8 @@ class VideoProcessor(QueueProcessor):
         self.upload_processor = upload_processor
         self.match_info_service = match_info_service
         self.ntfy_processor = ntfy_processor
-        self.ttt_reporter = None
+        # Where step progress is reported; the app wires the real sink.
+        self.recordings: IRecordingSink = NullRecordingSink()
 
     @property
     def queue_type(self) -> QueueType:
@@ -90,20 +93,22 @@ class VideoProcessor(QueueProcessor):
             logger.info(f"VIDEO: Processing task: {item}")
 
             # Report stage start to TTT (best-effort)
-            if self.ttt_reporter and item.task_type in ("combine", "trim"):
+            if item.task_type in ("combine", "trim"):
                 group_dir = item.get_item_path()
                 try:
                     from video_grouper.models import DirectoryState
 
                     dir_state = DirectoryState(group_dir)
-                    await self.ttt_reporter.update_recording_step(
-                        dir_state.ttt_recording_id,
-                        step_id=item.task_type,
-                        step_type=item.task_type,
-                        label=_VIDEO_STEP_LABELS.get(
-                            item.task_type, item.task_type.title()
+                    await self.recordings.progress(
+                        dir_state.directory_path,
+                        StepReport(
+                            step_id=item.task_type,
+                            step_type=item.task_type,
+                            label=_VIDEO_STEP_LABELS.get(
+                                item.task_type, item.task_type.title()
+                            ),
+                            status="running",
                         ),
-                        status="running",
                     )
                 except Exception:
                     pass  # Never block video processing on TTT
@@ -115,7 +120,7 @@ class VideoProcessor(QueueProcessor):
                 logger.info(f"VIDEO: Successfully completed task: {item}")
 
                 # Report stage completion to TTT (best-effort)
-                if self.ttt_reporter and item.task_type in ("combine", "trim"):
+                if item.task_type in ("combine", "trim"):
                     group_dir = item.get_item_path()
                     try:
                         from video_grouper.models import DirectoryState
@@ -130,15 +135,17 @@ class VideoProcessor(QueueProcessor):
                                 duration_artifacts = {"duration_seconds": dur}
                         except Exception:
                             pass
-                        await self.ttt_reporter.update_recording_step(
-                            dir_state.ttt_recording_id,
-                            step_id=item.task_type,
-                            step_type=item.task_type,
-                            label=_VIDEO_STEP_LABELS.get(
-                                item.task_type, item.task_type.title()
+                        await self.recordings.progress(
+                            dir_state.directory_path,
+                            StepReport(
+                                step_id=item.task_type,
+                                step_type=item.task_type,
+                                label=_VIDEO_STEP_LABELS.get(
+                                    item.task_type, item.task_type.title()
+                                ),
+                                status="complete",
+                                artifacts=duration_artifacts,
                             ),
-                            status="complete",
-                            artifacts=duration_artifacts,
                         )
                     except Exception:
                         pass  # Never block video processing on TTT
@@ -172,20 +179,22 @@ class VideoProcessor(QueueProcessor):
                 logger.error(f"VIDEO: Task execution failed: {item}")
 
                 # Report stage failure to TTT (best-effort)
-                if self.ttt_reporter and item.task_type in ("combine", "trim"):
+                if item.task_type in ("combine", "trim"):
                     group_dir = item.get_item_path()
                     try:
                         from video_grouper.models import DirectoryState
 
                         dir_state = DirectoryState(group_dir)
-                        await self.ttt_reporter.update_recording_step(
-                            dir_state.ttt_recording_id,
-                            step_id=item.task_type,
-                            step_type=item.task_type,
-                            label=_VIDEO_STEP_LABELS.get(
-                                item.task_type, item.task_type.title()
+                        await self.recordings.progress(
+                            dir_state.directory_path,
+                            StepReport(
+                                step_id=item.task_type,
+                                step_type=item.task_type,
+                                label=_VIDEO_STEP_LABELS.get(
+                                    item.task_type, item.task_type.title()
+                                ),
+                                status="failed",
                             ),
-                            status="failed",
                         )
                     except Exception:
                         pass  # Never block video processing on TTT

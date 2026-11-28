@@ -4,7 +4,7 @@
 # in Session 0 — detect (onnxruntime + cv2) and stitch_correct/render (av) — so
 # it MUST RETAIN onnxruntime, cv2, and av. It still excludes the heavy training
 # libs (torch/torchvision/ultralytics/scipy/...) that inference doesn't need.
-# The TRAY spec (VideoGrouperTray.spec) is the mirror image: it ADDS
+# The TRAY spec (SoccerCamTray.spec) is the mirror image: it ADDS
 # onnxruntime/cv2/av to its excludes because it only drives the autocam (GUI)
 # step and must stay light.
 
@@ -41,7 +41,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='VideoGrouperService',
+    name='SoccerCamService',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -61,5 +61,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='VideoGrouperService',
+    name='SoccerCamService',
 )

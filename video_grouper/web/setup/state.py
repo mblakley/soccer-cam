@@ -25,10 +25,14 @@ class WizardState:
     camera_ip: str = ""
     camera_username: str = "admin"
     camera_password: str = ""
+    # Connecting the camera is part of normal onboarding, but the step can be
+    # skipped (no camera to hand yet). A skipped step writes no camera; one is
+    # added later from the dashboard, which re-enters the wizard here.
+    camera_skipped: bool = False
 
     @property
     def is_complete(self) -> bool:
-        return bool(self.storage_path and self.camera_ip)
+        return bool(self.storage_path and (self.camera_ip or self.camera_skipped))
 
 
 _states: dict[str, WizardState] = {}

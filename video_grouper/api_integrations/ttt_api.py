@@ -13,6 +13,7 @@ import json
 import logging
 import secrets
 import ssl
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,12 @@ class TTTApiClient:
     TTT uses behind those endpoints is not soccer-cam's concern.
     """
 
+    # Refresh this many seconds before the access token expires.
+    REFRESH_MARGIN_SECONDS = 60.0
+    # After a failed refresh, ensure_signed_in waits this long before trying
+    # again (the install is often offline at the field).
+    REFRESH_BACKOFF_SECONDS = 60.0
+
     def __init__(self, api_base_url: str, storage_path: str) -> None:
         self.api_base_url = api_base_url.rstrip("/")
         self.storage_path = Path(storage_path)
@@ -112,6 +119,11 @@ class TTTApiClient:
         # mtime of tokens.json when last read/written; another client
         # instance (or the web sign-in) changing the file is picked up.
         self._token_mtime: float | None = None
+        # Serialises refreshes: the ports call in from several threads, and a
+        # refresh token may only be spent once.
+        self._auth_lock = threading.Lock()
+        # time.monotonic() before which ensure_signed_in won't try a refresh.
+        self._refresh_retry_at = 0.0
 
         self._http = httpx.Client(timeout=30.0, verify=_shared_ssl_context())
 
@@ -175,6 +187,7 @@ class TTTApiClient:
         except (ValueError, KeyError):
             # The token is opaque to us; fall back to the advertised lifetime.
             self._expires_at = time.time() + data.get("expires_in", 3600)
+        self._refresh_retry_at = 0.0  # a new session ends any refresh backoff
         self._save_tokens()
 
     def has_session(self) -> bool:
@@ -285,6 +298,49 @@ class TTTApiClient:
             return False
         return time.time() < self._expires_at
 
+    def _token_fresh(self) -> bool:
+        """The access token is valid for more than the refresh margin."""
+        return bool(
+            self._access_token
+            and self._expires_at
+            and time.time() < self._expires_at - self.REFRESH_MARGIN_SECONDS
+        )
+
+    def ensure_signed_in(self) -> bool:
+        """True when there is a usable session, refreshing the access token
+        first when it has expired (or is about to) and a refresh token is held.
+
+        Never raises. After a failed refresh no new attempt is made for
+        ``REFRESH_BACKOFF_SECONDS`` (offline at the field, every caller would
+        otherwise retry on every call). Thread-safe. May make one network call,
+        so async callers run it off the event loop.
+        """
+        try:
+            with self._auth_lock:
+                self._sync_from_disk()
+                if self._token_fresh():
+                    return True
+                if not self._refresh_token_value:
+                    return self.is_authenticated()  # e.g. an OAuth session
+                if time.monotonic() < self._refresh_retry_at:
+                    return self.is_authenticated()
+                try:
+                    self.refresh_token()
+                except Exception as exc:
+                    self._refresh_retry_at = (
+                        time.monotonic() + self.REFRESH_BACKOFF_SECONDS
+                    )
+                    logger.warning(
+                        "TTT: session refresh failed (next try in %ds): %s",
+                        int(self.REFRESH_BACKOFF_SECONDS),
+                        exc,
+                    )
+                    return self.is_authenticated()
+                return self.is_authenticated()
+        except Exception as exc:  # noqa: BLE001 -- documented never to raise
+            logger.warning("TTT: session check failed: %s", exc)
+            return False
+
     def current_user_id(self) -> str | None:
         """Return the authenticated user's id (JWT `sub` claim), or None."""
         if not self._access_token:
@@ -312,12 +368,15 @@ class TTTApiClient:
 
     def _ensure_auth(self) -> None:
         """Ensure we have a valid access token, refreshing if necessary."""
-        self._sync_from_disk()
-        if not self._access_token:
-            raise TTTApiError("Not signed in to TTT")
-        if self._expires_at and (time.time() > self._expires_at - 60):
-            logger.debug("Access token expiring soon, refreshing")
-            self.refresh_token()
+        with self._auth_lock:
+            self._sync_from_disk()
+            if not self._access_token:
+                raise TTTApiError("Not signed in to TTT")
+            if self._expires_at and (
+                time.time() > self._expires_at - self.REFRESH_MARGIN_SECONDS
+            ):
+                logger.debug("Access token expiring soon, refreshing")
+                self.refresh_token()
 
     # ------------------------------------------------------------------
     # API helpers
@@ -1108,6 +1167,26 @@ class TTTApiClient:
     # ------------------------------------------------------------------
     # Service registration & heartbeat
     # ------------------------------------------------------------------
+
+    def register_device(
+        self, machine_id: str, machine_name: str, cameras: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Register this machine and its cameras; idempotent.
+
+        POST {api_base_url}/api/internal/device-link/register
+        ``cameras``: ``[{name, serial, camera_type, model, mac_address}]``.
+        Returns ``{machine_id, cameras: [{name, serial, camera_id, enabled,
+        error}]}`` (``error`` set for a camera TTT refused, e.g. a MAC that
+        doesn't match the camera already registered under that serial).
+        """
+        url = f"{self.api_base_url}/api/internal/device-link/register"
+        body = {
+            "machine_id": machine_id,
+            "machine_name": machine_name,
+            "cameras": cameras,
+        }
+        logger.debug("Registering device '%s' (%d cameras)", machine_name, len(cameras))
+        return self._request("POST", url, json=body)
 
     def register_service(self, machine_name: str, capabilities: dict) -> Any:
         """Register this service instance with TTT.

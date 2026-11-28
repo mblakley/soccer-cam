@@ -493,7 +493,7 @@ def _render_tray_section(storage: Path) -> str:
             "run on this install (Linux/Docker, or the configured "
             "<code>[PIPELINE]</code> has no tray step such as autocam), this "
             "is normal. If the tray IS running on this box but the log "
-            "isn't here, check <code>%LOCALAPPDATA%\\VideoGrouper\\logs\\"
+            "isn't here, check <code>%LOCALAPPDATA%\\SoccerCam\\logs\\"
             "</code> for the bootstrap fallback.</p>"
         )
     try:
@@ -829,7 +829,7 @@ def _render_cameras_section(status: dict | None) -> str:
         # An empty screen is an invitation to act, not a dead end.
         return (
             '<p class="muted">No cameras configured yet.</p>'
-            '<p><a class="btn btn-sm" href="/setup/camera">Add a camera</a></p>'
+            '<p><a class="btn btn-sm" href="/setup/camera?add=1">Add a camera</a></p>'
         )
     rows = []
     for c in cameras:

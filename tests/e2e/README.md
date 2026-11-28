@@ -1,6 +1,6 @@
 # End-to-End Test Suite
 
-This directory contains comprehensive end-to-end tests for the Video Grouper system. These tests verify the complete pipeline from file discovery through final processing using mock services and simulated components.
+This directory contains comprehensive end-to-end tests for the Soccer-Cam system. These tests verify the complete pipeline from file discovery through final processing using mock services and simulated components.
 
 ## Overview
 

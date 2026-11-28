@@ -452,7 +452,7 @@ def _default_storage_path() -> str:
     """
     if os.name == "nt":
         program_data = os.environ.get("ProgramData", r"C:\ProgramData")
-        return os.path.join(program_data, "VideoGrouper", "storage")
+        return os.path.join(program_data, "SoccerCam", "storage")
     return "/shared_data"
 
 
@@ -872,8 +872,14 @@ def _camera_body(state) -> str:
         "</div>"
         '<div class="row">'
         '<a class="btn-ghost btn" href="/setup/storage">Back</a>'
+        '<button class="btn-ghost btn" type="submit" form="camera-skip-form" '
+        "formnovalidate>Skip &mdash; add a camera later</button>"
         '<button class="btn" type="submit">Next</button>'
-        "</div></form>" + _CAMERA_SCAN_JS + _CAMERA_TEST_JS
+        "</div></form>"
+        # Its own form: the camera form's fields are required, and a skip
+        # must not submit (or be blocked by) them.
+        '<form method="post" action="/setup/camera/skip" id="camera-skip-form">'
+        "</form>" + _CAMERA_SCAN_JS + _CAMERA_TEST_JS
     )
 
 
@@ -885,13 +891,38 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
     """
     router = APIRouter(prefix="/setup")
 
+    def _get_or_create(request: Request):
+        """The wizard state for this browser, seeded from a finished setup.
+
+        A fresh state on a configured install starts from its storage path:
+        the dashboard's "Add a camera" link enters at the camera step, past
+        the storage step, and finishing must not then fail as incomplete or
+        write the storage step's default over the real path.
+        """
+        token, state = get_or_create(request.cookies.get(cookie_name()))
+        if not state.storage_path:
+            existing = _finished_config()
+            if existing is not None:
+                state.storage_path = existing.storage.path
+        return token, state
+
+    def _finished_config() -> Config | None:
+        """The config on disk, if setup has been finished; else None."""
+        if not config_path.exists():
+            return None
+        try:
+            existing = load_config(config_path)
+        except Exception:  # noqa: BLE001 -- an unreadable config seeds nothing
+            return None
+        return existing if existing.setup.onboarding_completed else None
+
     @router.get("/", response_class=HTMLResponse)
     def setup_root(request: Request) -> RedirectResponse:
         return RedirectResponse(url="/setup/welcome", status_code=303)
 
     @router.get("/welcome", response_class=HTMLResponse)
     def welcome(request: Request) -> HTMLResponse:
-        token, _ = get_or_create(request.cookies.get(cookie_name()))
+        token, _ = _get_or_create(request)
         body = (
             "<p>This wizard walks through the minimum config to get "
             "Soccer-Cam recording: where to store videos and one camera "
@@ -919,7 +950,7 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
 
     @router.get("/storage", response_class=HTMLResponse)
     def storage_get(request: Request) -> HTMLResponse:
-        token, state = get_or_create(request.cookies.get(cookie_name()))
+        token, state = _get_or_create(request)
         path_val = html.escape(state.storage_path or _default_storage_path())
         is_windows = os.name == "nt"
         # On Windows, prefer the native tray-mediated picker (QFileDialog).
@@ -1094,8 +1125,16 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
         return _redirect_with_cookie("/setup/camera", token)
 
     @router.get("/camera", response_class=HTMLResponse)
-    def camera_get(request: Request) -> HTMLResponse:
-        token, state = get_or_create(request.cookies.get(cookie_name()))
+    def camera_get(request: Request, add: bool = Query(False)) -> HTMLResponse:
+        token, state = _get_or_create(request)
+        if add:
+            # From the dashboard's "Add a camera". Saving upserts by name, so
+            # a pre-filled name a configured camera already carries would
+            # replace that camera rather than add one.
+            existing = _finished_config()
+            taken = {c.name.lower() for c in existing.cameras} if existing else set()
+            if state.camera_name.lower() in taken:
+                state.camera_name = _free_camera_name(taken)
         # No password echo on render (sensitive)
         body = _camera_body(state)
         resp = HTMLResponse(
@@ -1350,6 +1389,20 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
         state.camera_ip = camera_ip.strip()
         state.camera_username = camera_username.strip() or "admin"
         state.camera_password = camera_password
+        state.camera_skipped = False
+        return _redirect_with_cookie("/setup/ttt", token)
+
+    @router.post("/camera/skip")
+    def camera_skip(request: Request) -> RedirectResponse:
+        """Go on without a camera. Finishing then leaves the configured
+        cameras as they are (none, on a first run)."""
+        token = request.cookies.get(cookie_name())
+        state = get(token)
+        if state is None:
+            return RedirectResponse(url="/setup/welcome", status_code=303)
+        state.camera_skipped = True
+        state.camera_ip = ""
+        state.camera_password = ""
         return _redirect_with_cookie("/setup/ttt", token)
 
     def _ttt_status() -> dict:
@@ -1361,7 +1414,7 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
 
     @router.get("/ttt", response_class=HTMLResponse)
     def ttt_get(request: Request) -> HTMLResponse:
-        token, _ = get_or_create(request.cookies.get(cookie_name()))
+        token, _ = _get_or_create(request)
         resp = HTMLResponse(
             _page(
                 "ttt",
@@ -1381,7 +1434,7 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
 
     @router.get("/youtube", response_class=HTMLResponse)
     def youtube_get(request: Request) -> HTMLResponse:
-        token, state = get_or_create(request.cookies.get(cookie_name()))
+        token, state = _get_or_create(request)
         # State is read from disk: did the user already drop in a
         # client_secret, and have they completed OAuth? The OAuth
         # callback in auth_server.py writes to the same path we read
@@ -1478,11 +1531,17 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
             else "<dt>YouTube</dt><dd><span class='muted'>Skipped &mdash; "
             "set up later from the dashboard</span></dd>"
         )
+        camera_line = (
+            "<dt>Camera</dt><dd><span class='muted'>Skipped &mdash; add one "
+            "later from the dashboard</span></dd>"
+            if state.camera_skipped
+            else f"<dt>Camera</dt><dd>{html.escape(state.camera_type)} <code>{html.escape(state.camera_name)}</code> "
+            f"@ <code>{html.escape(state.camera_ip)}</code> (user <code>{html.escape(state.camera_username)}</code>)</dd>"
+        )
         body = (
             '<div class="summary"><dl>'
             f"<dt>Storage path</dt><dd><code>{html.escape(state.storage_path)}</code></dd>"
-            f"<dt>Camera</dt><dd>{html.escape(state.camera_type)} <code>{html.escape(state.camera_name)}</code> "
-            f"@ <code>{html.escape(state.camera_ip)}</code> (user <code>{html.escape(state.camera_username)}</code>)</dd>"
+            f"{camera_line}"
             f"{yt_line}"
             "</dl></div>"
             f'<form method="post" action="/setup/finish">'
@@ -1541,6 +1600,15 @@ def build_router(config_path: Path, service_storage: str | None = None) -> APIRo
     return router
 
 
+def _free_camera_name(taken: set[str]) -> str:
+    """The first of camera2, camera3, ... that no configured camera uses
+    (``taken`` holds lower-cased names)."""
+    n = 2
+    while f"camera{n}" in taken:
+        n += 1
+    return f"camera{n}"
+
+
 def _upsert_camera(cameras: list[dict], state) -> list[dict]:
     """Return ``cameras`` with the wizard's camera added or updated in place.
 
@@ -1577,7 +1645,8 @@ def _build_config(state, existing: Config | None = None) -> Config:
 
     Only these are written:
       * ``STORAGE.path``            -- not the section, so min_free_gb survives
-      * ``cameras``                 -- upserted by name, not replaced
+      * ``cameras``                 -- upserted by name, not replaced; left
+                                       alone when the camera step was skipped
       * ``YOUTUBE.enabled``         -- not the section, so playlists survive
       * ``SETUP.onboarding_completed``
       * ``PIPELINE``                -- seeded only when there is not one yet
@@ -1619,7 +1688,8 @@ def _build_config(state, existing: Config | None = None) -> Config:
     youtube["enabled"] = yt_token.exists()
     data["YOUTUBE"] = youtube
 
-    data["cameras"] = _upsert_camera(data.get("cameras") or [], state)
+    if not state.camera_skipped:
+        data["cameras"] = _upsert_camera(data.get("cameras") or [], state)
 
     setup = dict(data.get("SETUP") or {})
     setup["onboarding_completed"] = True

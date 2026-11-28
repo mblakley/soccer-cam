@@ -1,6 +1,6 @@
-# Docker Setup for VideoGrouper
+# Docker Setup for Soccer-Cam
 
-This document explains how to run VideoGrouper in Docker on Linux (or Windows via Docker Desktop's WSL2 backend). It covers:
+This document explains how to run Soccer-Cam in Docker on Linux (or Windows via Docker Desktop's WSL2 backend). It covers:
 
 - [Quick start](#quick-start) — get the pipeline running, no ball detection
 - [Volume mounts](#volume-mounts) — where data goes in and out

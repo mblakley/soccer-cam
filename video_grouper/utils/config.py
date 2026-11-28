@@ -5,7 +5,12 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from video_grouper.pipeline.config import PipelineConfig
 from video_grouper.utils.config_migrations import current_schema_version
@@ -125,6 +130,11 @@ class TeamConfig(BaseModel):
     youtube_playlist: str = ""
     # Pipeline preset or step-list override for this team's games.
     pipeline: str = ""
+    # Archive root for this team's games under [ARCHIVE] after_upload =
+    # copy/move. Not derivable from the name (a team recorded as "Guzzetta"
+    # archives to F:\Heat_2012s, and age groups must never be mixed), so it is
+    # configured here. Blank falls back to [ARCHIVE] path.
+    archive_path: str = ""
 
     @field_validator("aliases", mode="before")
     @classmethod
@@ -209,6 +219,61 @@ class StorageConfig(BaseModel):
     min_free_gb: float = 2.0
 
 
+class ArchiveConfig(BaseModel):
+    """What happens to a game's local files once it is safely on YouTube.
+
+    Two independent questions, not one: keep a second copy somewhere, and
+    reclaim the working drive. Copying to a second location is one answer,
+    not the shape of the feature — plenty of installs have a single drive
+    and no archive volume, and those are exactly the ones that fill up.
+
+        after_upload   second copy at `path`?   local files reclaimed?
+        ------------   ----------------------   ----------------------
+        keep           no                       no   (default)
+        copy           yes                      no
+        move           yes                      yes
+        discard        no                       yes
+
+    Verification is never a choice. Nothing is removed until the archive
+    copy's SHA-256 matches file-by-file (``copy``/``move``), or until the
+    group carries a recorded YouTube video id (``discard``). ``keep`` is the
+    default because deleting footage must be asked for, never assumed.
+
+    Archives are per-team, and a team's root is NOT derivable from its name.
+    A team recorded in match_info as "Guzzetta" archives to ``Heat_2012s``,
+    and one account can carry several age groups (``Heat_2012s`` and
+    ``Heat_2013s``) that must never be mixed. So each team's root is
+    supplied, not guessed -- as ``archive_path`` in its ``[TEAM.<key>]``
+    section, the one place per-team settings live, resolved by the same
+    ``resolve_team`` every other per-team lookup uses::
+
+        [TEAM.heat2012]
+        name = BU14 - Guzzetta
+        archive_path = F:\\Heat_2012s
+
+    ``path`` here is the fallback for games whose team has no
+    ``archive_path``, and is enough on its own for a single-team install.
+    Per-game subdirectories are named from match_info:
+    ``<root>/<date> - vs <opponent> (home|away)``.
+
+    "Somewhere to put games" for ``copy``/``move`` is checked on
+    :class:`Config`, which can see the teams; this section alone cannot.
+    """
+
+    after_upload: Literal["keep", "copy", "move", "discard"] = "keep"
+    # Fallback destination root for `copy`/`move`, used for games whose team
+    # has no [TEAM.<key>] archive_path. Unused by `keep` and `discard`.
+    path: str = ""
+
+    @property
+    def makes_second_copy(self) -> bool:
+        return self.after_upload in ("copy", "move")
+
+    @property
+    def reclaims_local_space(self) -> bool:
+        return self.after_upload in ("move", "discard")
+
+
 class RecordingConfig(BaseModel):
     min_duration: int = 60
     max_duration: int = 3600
@@ -246,17 +311,15 @@ class AppConfig(BaseModel):
     timezone: str = "America/New_York"
     github_repo: str = "mblakley/soccer-cam"
     storage_path: str | None = None
-    max_lookback_hours: int = 48
     max_files_per_poll: int = 50
     recording_end_date: str | None = None
-    # Reconciliation pass lookback. The incremental sync only queries a
-    # forward-moving window (max_lookback_hours back from now), so a game
-    # that ages past that window before it was fully captured is never
-    # re-queried and is lost. When the download queue is idle, the poller
-    # runs a full reconcile over this much larger window and re-queues any
-    # camera file that is missing/short/incomplete on disk — regardless of
-    # the high-water mark. 14 days covers a typical multi-week gap between
-    # plugging the camera in.
+    # Reconciliation pass lookback. When the download queue is idle, the
+    # poller re-scans this window and re-queues any camera file that is
+    # missing/short/incomplete on disk, healing downloads that died partway.
+    # Bounded below by the watermark, so it only ever asks that question about
+    # recordings we still owe work on — behind the watermark a game is
+    # *supposed* to be missing locally once it has been archived.
+    # 14 days covers a typical multi-week gap between plugging the camera in.
     reconcile_lookback_days: int = 14
     # Auto-upgrade settings. auto_update=true (Chrome-style) silently installs
     # detected updates once the pipeline is quiescent; =false stops after
@@ -444,7 +507,6 @@ class TTTConfig(BaseModel):
     plugin_refresh_headroom_days: int = 7
     plugin_sync_interval: int = 3600
     camera_id: str = ""
-    ttt_sync_enabled: bool = False
     heartbeat_interval: int = 30
     job_polling_enabled: bool = False
     job_poll_interval: int = 30
@@ -535,6 +597,7 @@ class Config(BaseModel):
     teams: dict[str, TeamConfig] = Field(default_factory=dict)
     cameras: list[CameraConfig] = Field(default_factory=list)
     storage: StorageConfig = Field(alias="STORAGE")
+    archive: ArchiveConfig = Field(alias="ARCHIVE", default_factory=ArchiveConfig)
     recording: RecordingConfig = Field(
         alias="RECORDING", default_factory=RecordingConfig
     )
@@ -581,6 +644,36 @@ class Config(BaseModel):
         """
         return resolve_team(self.teams, my_team_name)
 
+    def archive_root_for(self, my_team_name: str | None) -> str:
+        """Archive root for a game's team, or "" when it has nowhere to go.
+
+        The team's ``[TEAM.<key>] archive_path``, found through
+        :meth:`team_for` like every other per-team setting, else
+        ``[ARCHIVE] path``. Never a guess at some other team's root: filing a
+        game there and then deleting the original cannot be undone.
+        """
+        team = self.team_for(my_team_name)
+        if team is not None and team.archive_path.strip():
+            return team.archive_path.strip()
+        return self.archive.path.strip()
+
+    @model_validator(mode="after")
+    def _second_copy_needs_somewhere_to_go(self) -> Config:
+        # Hard-fail rather than silently degrading to a no-op: an operator who
+        # asked for a second copy and got none would find out only when the
+        # working drive was already gone.
+        if self.archive.after_upload in ("copy", "move") and not (
+            self.archive.path.strip()
+            or any(t.archive_path.strip() for t in self.teams.values())
+        ):
+            raise ValueError(
+                f"[ARCHIVE] after_upload = {self.archive.after_upload} needs "
+                "somewhere to put games: set [ARCHIVE] path, or archive_path "
+                "in each [TEAM.<key>]. Use `discard` to reclaim local space "
+                "without a second copy, or `keep` to do nothing."
+            )
+        return self
+
     def post_trim_processing_active(self) -> bool:
         """True when a post-trim processing stage owns ``trimmed`` groups.
 
@@ -615,6 +708,16 @@ def load_config(config_path: Path) -> Config:
     # setting. Drop the section if an unmigrated file still carries it, so it
     # cannot look like it is still being honoured.
     config_dict.pop("YOUTUBE.PLAYLIST_MAP", None)
+
+    # Per-team archive roots are `archive_path` in [TEAM.<key>]. An
+    # [ARCHIVE.PER_TEAM] section only ever existed on pre-release builds of
+    # the archive step; ignoring it would silently send every game to the
+    # `path` fallback (or nowhere), so refuse to start instead.
+    if "ARCHIVE.PER_TEAM" in config_dict:
+        raise ValueError(
+            "[ARCHIVE.PER_TEAM] is not supported: set archive_path in each "
+            "team's [TEAM.<key>] section instead, then remove [ARCHIVE.PER_TEAM]."
+        )
 
     # Handle BALL_TRACKING sub-sections (provider configs + per-team overrides).
     # `[BALL_TRACKING.AUTOCAM_GUI]` -> nested under BALL_TRACKING.AUTOCAM_GUI

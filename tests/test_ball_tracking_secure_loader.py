@@ -17,6 +17,7 @@ from video_grouper.ball_tracking.secure_loader import (
     SecureLoader,
     SecureLoaderError,
 )
+from video_grouper.integrations.entitlements.fake import FakeEntitlements
 
 
 # Disable root-level autouse fixtures.
@@ -120,12 +121,12 @@ def _build_license_response(
 
 
 def _make_ttt_client(license_response: dict, user_id: str = USER_ID):
-    """Mock TTT client that returns the prepared license."""
-    ttt = MagicMock()
-    ttt.has_session.return_value = True
-    ttt.current_user_id.return_value = user_id
-    ttt.acquire_model_license.return_value = license_response
-    return ttt
+    """An entitlements port that grants the prepared licence for MODEL_KEY.
+
+    SecureLoader only sees the IEntitlements interface; the TTT implementation
+    is tested on its own (tests/integrations/entitlements/).
+    """
+    return FakeEntitlements(licensee=user_id, licenses={MODEL_KEY: license_response})
 
 
 def _make_http_client(artifact_bytes: bytes):
@@ -200,9 +201,7 @@ class TestAcquireHappyPath:
 
         loader.acquire(MODEL_KEY, channel="beta", pipeline_version="2.0.0")
 
-        ttt.acquire_model_license.assert_called_once_with(
-            MODEL_KEY, channel="beta", pipeline_version="2.0.0"
-        )
+        assert ("license_model", MODEL_KEY, "beta", "2.0.0") in ttt.calls
 
 
 # ---------------------------------------------------------------------------
@@ -370,18 +369,14 @@ class TestArtifactTampering:
 
 class TestAuthAndTransport:
     def test_unauthenticated_client_raises(self, monkeypatch):
-        ttt = MagicMock()
-        ttt.has_session.return_value = False
+        ttt = FakeEntitlements(licensee=None)
         loader = SecureLoader(ttt, ["abcd"], http_client=MagicMock())
 
-        with pytest.raises(SecureLoaderError, match="authenticated"):
+        with pytest.raises(SecureLoaderError, match="signed in"):
             loader.acquire(MODEL_KEY)
 
     def test_ttt_error_propagates_as_loader_error(self, monkeypatch):
-        ttt = MagicMock()
-        ttt.has_session.return_value = True
-        ttt.current_user_id.return_value = USER_ID
-        ttt.acquire_model_license.side_effect = RuntimeError("403 not entitled")
+        ttt = FakeEntitlements(licensee=USER_ID)  # holds no licence for MODEL_KEY
 
         loader = SecureLoader(ttt, ["abcd"], http_client=MagicMock())
 

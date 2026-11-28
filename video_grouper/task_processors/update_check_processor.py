@@ -13,7 +13,7 @@ Flow:
 The terminal step is gated by ``config.app.auto_update``:
 
   - ``true`` (default, Chrome-style): once the digest verifies, the
-    processor spawns ``VideoGrouperSetup.exe /S`` detached and
+    processor spawns ``SoccerCamSetup.exe /S`` detached and
     triggers a clean service shutdown. NSIS takes over and brings
     the new service + tray back up.
   - ``false``: stop after verify. The artifact stays on disk under
@@ -361,9 +361,9 @@ class UpdateCheckProcessor(PollingProcessor):
     @staticmethod
     def _extract_digest(version_info: VersionInfo) -> str | None:
         """Pull GitHub's per-asset ``digest`` field for the installer
-        artifact (Phase 2 prefers VideoGrouperSetup.exe; Phase 1 falls
+        artifact (Phase 2 prefers SoccerCamSetup.exe; Phase 1 falls
         back to the service exe so something lands in the journal)."""
-        wanted = ("VideoGrouperSetup.exe", "VideoGrouperService.exe")
+        wanted = ("SoccerCamSetup.exe", "SoccerCamService.exe")
         assets_by_name = {a.get("name"): a for a in version_info.get("assets", [])}
         for name in wanted:
             asset = assets_by_name.get(name)

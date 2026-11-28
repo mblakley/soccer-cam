@@ -196,9 +196,11 @@ def test_render_defaults_to_full_frame_polygon():
 
 
 @pytest.mark.asyncio
-async def test_field_detect_model_key_requires_ttt_config(tmp_path):
-    """model_key without TTT config must raise (same contract as detect)."""
+async def test_field_detect_model_key_requires_a_signed_in_entitlements_provider(
+    tmp_path,
+):
+    """model_key with no entitlements provider raises (same contract as detect)."""
     manifest = _manifest(tmp_path)
     step = create_step("field_detect", {"model_key": "some-key"})
-    with pytest.raises(RuntimeError, match="TTT integration is disabled"):
-        await step.run(manifest, _ctx(tmp_path))  # ctx has ttt_config=None
+    with pytest.raises(RuntimeError, match="licensed model.*model_path"):
+        await step.run(manifest, _ctx(tmp_path))  # ctx has no entitlements

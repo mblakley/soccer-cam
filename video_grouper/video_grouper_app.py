@@ -5,8 +5,8 @@ from pathlib import Path
 
 from video_grouper.api_integrations.command_executor import CommandExecutor
 from video_grouper.api_integrations.ntfy_response import create_ntfy_response_service
-from video_grouper.api_integrations.ttt_reporter import TTTReporter
 from video_grouper.task_processors import (
+    ArchiveProcessor,
     CameraPoller,
     ClipDiscoveryProcessor,
     ClipProcessor,
@@ -103,9 +103,17 @@ class VideoGrouperApp:
         # Get poll interval from config
         self.poll_interval = config.app.check_interval_seconds
 
-        # Instantiate shared processors in dependency order
-        self.upload_processor = UploadProcessor(
+        # Instantiate shared processors in dependency order.
+        # Archive runs after upload: a group is only safe to reclaim locally
+        # once its videos are on YouTube. Its own queue keeps the hashing of
+        # tens of GB off the upload path.
+        self.archive_processor = ArchiveProcessor(
             storage_path=self.storage_path, config=self.config
+        )
+        self.upload_processor = UploadProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            archive_processor=self.archive_processor,
         )
         self.video_processor = VideoProcessor(
             storage_path=self.storage_path,
@@ -134,6 +142,13 @@ class VideoGrouperApp:
             gpu_concurrency=self.config.pipeline.gpu_concurrency,
             ram_heavy_concurrency=self.config.pipeline.ram_heavy_concurrency,
         )
+        # The one composition point for outside services (TTT today). Every
+        # port, and every processor not yet on a port, shares its TTT session.
+        from video_grouper.integrations import activate, build_integrations
+
+        # activate(): code that can't be handed a port (tasks restored from a
+        # queue file) reaches the same integrations through active().
+        self.integrations = activate(build_integrations(self.config, self.storage_path))
         if self.config.pipeline.is_active():
             # Side-effect import: registers the built-in pipeline steps.
             import video_grouper.pipeline.register_steps  # noqa: F401
@@ -172,6 +187,7 @@ class VideoGrouperApp:
                 upload_processor=self.upload_processor,
                 runtime="service",
                 resource_manager=self.resource_manager,
+                integrations=self.integrations,
             )
             self.pipeline_discovery_processor = PipelineDiscoveryProcessor(
                 storage_path=self.storage_path,
@@ -333,16 +349,10 @@ class VideoGrouperApp:
         self.highlight_reel_processor = None
         if self.config.ttt.enabled:
             try:
-                from video_grouper.api_integrations.ttt_api import (
-                    TTTApiClient,
-                    resolve_api_base_url,
-                )
                 from video_grouper.utils.google_drive_upload import GoogleDriveUploader
 
-                ttt_client = TTTApiClient(
-                    api_base_url=resolve_api_base_url(self.config.ttt.api_base_url),
-                    storage_path=self.storage_path,
-                )
+                # The integrations' shared session -- not a second client.
+                ttt_client = self.integrations.shared_ttt_client()
                 if ttt_client.has_session():
                     # Auto-claim camera-manager rows for every team the
                     # signed-in user is on. Best-effort; never blocks startup.
@@ -362,7 +372,7 @@ class VideoGrouperApp:
                     from video_grouper.plugins.plugin_manager import PluginManager
 
                     self.plugin_manager = PluginManager(
-                        ttt_client=ttt_client,
+                        entitlements=self.integrations.entitlements,
                         storage_path=Path(self.storage_path),
                         public_keys=self.config.ttt.plugin_signing_public_keys,
                         refresh_headroom_days=self.config.ttt.plugin_refresh_headroom_days,
@@ -429,7 +439,7 @@ class VideoGrouperApp:
                 self.clip_request_processor = ClipRequestProcessor(
                     storage_path=self.storage_path,
                     config=self.config,
-                    ttt_client=ttt_client,
+                    work=self.integrations.work,
                     drive_uploader=drive_uploader,
                     ntfy_service=ntfy_service,
                     youtube_uploader=youtube_uploader,
@@ -445,7 +455,7 @@ class VideoGrouperApp:
                     self.highlight_reel_processor = HighlightReelProcessor(
                         storage_path=self.storage_path,
                         config=self.config,
-                        ttt_client=ttt_client,
+                        work=self.integrations.work,
                         youtube_uploader=youtube_uploader,
                         resource_manager=self.resource_manager,
                     )
@@ -456,7 +466,7 @@ class VideoGrouperApp:
                 self.reprocess_request_processor = ReprocessRequestProcessor(
                     storage_path=self.storage_path,
                     config=self.config,
-                    ttt_client=ttt_client,
+                    work=self.integrations.work,
                     resource_manager=self.resource_manager,
                     # S3: a verify_phases request starts the NTFY verify-loop.
                     on_verify_phases=(
@@ -555,15 +565,8 @@ class VideoGrouperApp:
             try:
                 ttt_client = getattr(self, "_ttt_client", None)
                 if not ttt_client:
-                    from video_grouper.api_integrations.ttt_api import (
-                        TTTApiClient,
-                        resolve_api_base_url,
-                    )
-
-                    ttt_client = TTTApiClient(
-                        api_base_url=resolve_api_base_url(self.config.ttt.api_base_url),
-                        storage_path=self.storage_path,
-                    )
+                    # The integrations' shared session -- not a second client.
+                    ttt_client = self.integrations.shared_ttt_client()
                     if ttt_client.has_session():
                         from video_grouper.web.auth_server import (
                             auto_claim_camera_manager,
@@ -581,7 +584,7 @@ class VideoGrouperApp:
                     self.ttt_job_processor = TTTJobProcessor(
                         storage_path=self.storage_path,
                         config=self.config,
-                        ttt_client=ttt_client,
+                        work=self.integrations.work,
                         camera=self.camera,
                         download_processor=self.download_processor,
                         video_processor=self.video_processor,
@@ -590,8 +593,9 @@ class VideoGrouperApp:
                     )
                     logger.info("TTT JobProcessor initialized")
 
-                # Single TTTPoller polls TTT and enqueues onto each
-                # feature processor.
+                # Single TTTPoller polls the work source and enqueues onto
+                # each kind's processor. It keeps the TTT client only for the
+                # schedule refresh's session gate.
                 has_any = any(
                     p is not None
                     for p in (
@@ -608,6 +612,7 @@ class VideoGrouperApp:
                         storage_path=self.storage_path,
                         config=self.config,
                         ttt_client=ttt_client,
+                        work=self.integrations.work,
                         clip_request_processor=self.clip_request_processor,
                         highlight_reel_processor=self.highlight_reel_processor,
                         ttt_job_processor=self.ttt_job_processor,
@@ -621,40 +626,37 @@ class VideoGrouperApp:
             except Exception as e:
                 logger.error(f"Failed to initialize TTTPoller: {e}")
 
-        # TTT Reporter — optional, best-effort status reporting back to TTT
-        # Works independently of the clip request processor: enabled when TTT
-        # credentials are present, regardless of the full TTT enabled flag.
-        # TTT reporter reuses the same TTT client the TTTPoller is using.
-        ttt_reporter_client = getattr(self, "_ttt_client", None)
-        # Load machine ID for multi-computer awareness
-        machine_id = None
-        if self.config.ttt.enabled:
-            try:
-                from video_grouper.utils.machine_id import get_or_create_machine_id
-
-                machine_id = get_or_create_machine_id(self.storage_path)
-            except Exception:
-                pass
-
-        command_executor = CommandExecutor(self)
-        self.ttt_reporter = TTTReporter(
-            ttt_client=ttt_reporter_client,
-            config=self.config,
-            error_tracker=self.error_tracker,
-            command_executor=command_executor,
-            machine_id=machine_id,
+        # Device link: announce this install (only when it takes remote
+        # processing jobs), heartbeat, run remote commands, and tell the
+        # camera pollers which cameras this install should poll.
+        from video_grouper.task_processors.device_link_processor import (
+            DeviceLinkProcessor,
+            job_capabilities,
         )
 
-        # Wire ttt_reporter into all processors for best-effort pipeline reporting
+        self.device_link_processor = DeviceLinkProcessor(
+            storage_path=self.storage_path,
+            config=self.config,
+            link=self.integrations.device_link,
+            command_executor=CommandExecutor(self),
+            error_tracker=self.error_tracker,
+            cameras=lambda: [p.camera for p in self.camera_pollers.values()],
+            capabilities=(
+                job_capabilities(self.config)
+                if self.ttt_job_processor is not None
+                else None
+            ),
+        )
+
+        recordings = self.integrations.recordings
         for poller in self.camera_pollers.values():
-            poller.ttt_reporter = self.ttt_reporter
+            poller.is_camera_enabled = self.device_link_processor.is_camera_enabled
+            poller.recordings = recordings
         for dl_proc in self.download_processors.values():
-            dl_proc.ttt_reporter = self.ttt_reporter
+            dl_proc.recordings = recordings
             dl_proc.error_tracker = self.error_tracker
-        self.video_processor.ttt_reporter = self.ttt_reporter
-        self.upload_processor.ttt_reporter = self.ttt_reporter
-        if getattr(self, "pipeline_processor", None) is not None:
-            self.pipeline_processor.ttt_reporter = self.ttt_reporter
+        self.video_processor.recordings = recordings
+        self.upload_processor.recordings = recordings
 
         self.state_auditor = StateAuditor(
             storage_path=self.storage_path,
@@ -664,6 +666,11 @@ class VideoGrouperApp:
             poll_interval=self.poll_interval,
             ntfy_processor=self.ntfy_processor,
         )
+        # Recovery net for archiving: the upload task pushes finished groups
+        # onto the archive queue directly, so this only catches groups that
+        # missed that path (a crash between upload and enqueue, or a group
+        # completed by a build that predates archiving).
+        self.state_auditor.archive_processor = self.archive_processor
 
         # Auto-upgrade poller. Lives in the service (always running)
         # so headless installs still update. The quiescence callable
@@ -686,6 +693,7 @@ class VideoGrouperApp:
             [
                 self.video_processor,
                 self.upload_processor,
+                self.archive_processor,
             ]
         )
         if self.ntfy_processor:
@@ -815,8 +823,8 @@ class VideoGrouperApp:
         for processor in self.processors:
             await processor.start()
 
-        # Start optional TTT status reporter (best-effort, never blocks startup)
-        await self.ttt_reporter.start()
+        # Device link heartbeat (best-effort, never blocks startup)
+        await self.device_link_processor.start()
 
         logger.info("VideoGrouperApp initialization complete")
 
@@ -1212,8 +1220,7 @@ class VideoGrouperApp:
             import subprocess
 
             subprocess.Popen(
-                'cmd.exe /c "timeout /t 5 /nobreak > nul & '
-                'sc start VideoGrouperService"',
+                'cmd.exe /c "timeout /t 5 /nobreak > nul & sc start SoccerCamService"',
                 shell=True,
                 creationflags=(
                     subprocess.DETACHED_PROCESS
@@ -1256,8 +1263,8 @@ class VideoGrouperApp:
         # Signal shutdown to wake up the run() method if it's waiting
         self._shutdown_event.set()
 
-        # Stop TTT reporter (best-effort, no-op if not configured)
-        await self.ttt_reporter.stop()
+        # Stop the device link heartbeat
+        await self.device_link_processor.stop()
 
         # Stop all processors
         for processor in self.processors:

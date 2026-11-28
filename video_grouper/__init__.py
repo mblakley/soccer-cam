@@ -1,5 +1,5 @@
 """
-Video Grouper - A tool for managing and processing soccer game recordings from IP cameras.
+Soccer-Cam - A tool for managing and processing soccer game recordings from IP cameras.
 
 The package root stays import-light on purpose: leaf modules like
 ``video_grouper.inference.*`` are numpy/cv2-only and are imported by training

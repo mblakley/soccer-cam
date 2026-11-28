@@ -1,7 +1,7 @@
 """Read NSIS install-phase markers left behind by ``installer.nsi``.
 
 NSIS doesn't natively log to a file. Instead it writes the current
-section's name to ``%ProgramData%\\VideoGrouper\\update\\nsis-phase.txt``
+section's name to ``%ProgramData%\\SoccerCam\\update\\nsis-phase.txt``
 at each boundary, overwriting the previous value. If NSIS crashes
 or aborts mid-install, the file is frozen at the last phase it
 reached -- the post-upgrade service can read it and tell us how
@@ -47,7 +47,7 @@ def nsis_marker_path() -> Path:
     if override:
         return Path(override)
     base = os.environ.get("ProgramData", r"C:\ProgramData")
-    return Path(base) / "VideoGrouper" / "update" / "nsis-phase.txt"
+    return Path(base) / "SoccerCam" / "update" / "nsis-phase.txt"
 
 
 def read_and_clear_marker() -> str | None:

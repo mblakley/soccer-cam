@@ -27,7 +27,7 @@ tasks: list[asyncio.Task[None]] = []
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Video Grouper Application",
+        description="Soccer-Cam Application",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

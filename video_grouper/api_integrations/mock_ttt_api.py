@@ -127,6 +127,12 @@ class MockTTTApiClient:
     def is_authenticated(self) -> bool:
         return self._authenticated
 
+    def ensure_signed_in(self) -> bool:
+        return self._authenticated
+
+    def has_session(self) -> bool:
+        return self._authenticated
+
     # ------------------------------------------------------------------
     # Existing clip request methods
     # ------------------------------------------------------------------

@@ -44,10 +44,10 @@ def _bootstrap_log_dir() -> Path:
     """
     base = os.environ.get("LOCALAPPDATA")
     if base:
-        return Path(base) / "VideoGrouper" / "logs"
+        return Path(base) / "SoccerCam" / "logs"
     # Non-Windows fallback (tray is Windows-only in practice, but keep
     # the path logic working for dev runs on macOS/Linux).
-    return Path.home() / ".videogrouper" / "logs"
+    return Path.home() / ".soccer-cam" / "logs"
 
 
 setup_logging(
@@ -472,7 +472,7 @@ class SystemTrayIcon(QSystemTrayIcon):
             self.setIcon(
                 self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
             )
-        self.setToolTip(f"VideoGrouper v{self.full_version}")
+        self.setToolTip(f"Soccer-Cam v{self.full_version}")
 
         # Create context menu. Plan target: ≤ 4 items. The dashboard is
         # the entry point for everything else (config editor, setup
@@ -669,7 +669,7 @@ class SystemTrayIcon(QSystemTrayIcon):
 
     def restart_service(self):
         try:
-            win32serviceutil.RestartService("VideoGrouperService")
+            win32serviceutil.RestartService("SoccerCamService")
             self.showMessage("Service", "Service restarted successfully")
         except Exception as e:
             logger.error(f"Error restarting service: {e}")
@@ -692,14 +692,14 @@ class SystemTrayIcon(QSystemTrayIcon):
         """
         if auto_update:
             self.showMessage(
-                "VideoGrouper",
+                "Soccer-Cam",
                 f"Update v{version} ready. Will install automatically when idle.",
                 QSystemTrayIcon.MessageIcon.Information,
             )
             self.install_update_action.setVisible(False)
         else:
             self.showMessage(
-                "VideoGrouper",
+                "Soccer-Cam",
                 f"Update v{version} ready -- choose Install Update from the tray menu.",
                 QSystemTrayIcon.MessageIcon.Information,
             )
@@ -816,7 +816,7 @@ async def main():
                 logger.error(f"Could not launch browser for setup: {e}")
 
         # Initialize the tray application. SystemTrayIcon's __init__
-        # re-routes the log file from %LOCALAPPDATA%\VideoGrouper\logs
+        # re-routes the log file from %LOCALAPPDATA%\SoccerCam\logs
         # (the bootstrap path) to <storage>/logs/video_grouper_tray.log
         # once load_config has returned the user's configured storage
         # path, so the dashboard can find the tray log at a stable

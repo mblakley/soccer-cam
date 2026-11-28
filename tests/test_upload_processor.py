@@ -296,3 +296,93 @@ class TestUploadProcessorAuthCheck:
             await processor.process_item(upload_task)
 
             mock_execute.assert_not_called()
+
+
+class TestArchiveHandoff:
+    """A finished upload hands its group to the archive queue."""
+
+    @pytest.mark.asyncio
+    async def test_archive_task_gets_the_group_resolved_against_storage(
+        self, temp_storage, mock_config
+    ):
+        """Regression: upload tasks carry a group_dir RELATIVE to the storage
+        path, and the archive task was handed it verbatim -- so it resolved
+        against whatever the process's working directory happened to be."""
+        archive_processor = Mock()
+        archive_processor.add_work = AsyncMock()
+        processor = UploadProcessor(
+            temp_storage, mock_config, archive_processor=archive_processor
+        )
+
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "Token is valid"),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
+            mock_execute.return_value = True
+            await processor.process_item(
+                YoutubeUploadTask(group_dir="2026.07.12-10.00.00")
+            )
+
+        archive_processor.add_work.assert_awaited_once()
+        handed = archive_processor.add_work.await_args.args[0]
+        assert os.path.isabs(handed.group_dir)
+        assert os.path.normpath(handed.group_dir) == os.path.normpath(
+            os.path.join(temp_storage, "2026.07.12-10.00.00")
+        )
+
+
+class TestUploadReportsThroughTheRecordingSink:
+    """The processor reports through IRecordingSink only (fake here); the TTT
+    implementation is tested in tests/integrations/recordings/."""
+
+    async def _run(self, temp_storage, mock_config, succeeded, video_id=None):
+        from video_grouper.integrations.recordings.fake import FakeRecordingSink
+
+        processor = UploadProcessor(temp_storage, mock_config)
+        processor.recordings = FakeRecordingSink()
+        task = create_mock_youtube_upload_task("/test/group")
+        if video_id:
+            task.youtube_video_id = video_id
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "ok"),
+            ),
+            patch.object(YoutubeUploadTask, "execute", new_callable=AsyncMock) as run,
+            patch(
+                "video_grouper.task_processors.upload_processor._first_recording_start",
+                return_value=__import__("datetime").datetime(2026, 6, 1, 10, 0),
+            ),
+        ):
+            run.return_value = succeeded
+            await processor.process_item(task)
+        return processor.recordings
+
+    @pytest.mark.asyncio
+    async def test_success_reports_progress_and_the_published_video(
+        self, temp_storage, mock_config
+    ):
+        sink = await self._run(temp_storage, mock_config, True, video_id="abc")
+        assert sink.step_statuses("/test/group") == [
+            ("upload", "running"),
+            ("upload", "complete"),
+        ]
+        assert sink.steps[-1][1].artifacts == {
+            "youtube_url": "https://youtu.be/abc",
+            "youtube_video_id": "abc",
+        }
+        ((group, url, _),) = sink.published_videos
+        assert (group, url) == ("/test/group", "https://youtu.be/abc")
+
+    @pytest.mark.asyncio
+    async def test_failure_reports_failed_and_publishes_nothing(
+        self, temp_storage, mock_config
+    ):
+        sink = await self._run(temp_storage, mock_config, False)
+        assert sink.step_statuses() == [("upload", "running"), ("upload", "failed")]
+        assert sink.published_videos == []

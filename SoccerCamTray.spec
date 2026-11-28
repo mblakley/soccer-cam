@@ -6,7 +6,7 @@
 # of the heavy ML libs (torch/torchvision/ultralytics/scipy/...), keeping the
 # tray light. With those modules absent, pipeline.register_steps' per-step
 # try/except simply omits detect/track/render, leaving autocam registered.
-# The SERVICE spec (VideoGrouperService.spec) is the mirror image: it RETAINS
+# The SERVICE spec (SoccerCamService.spec) is the mirror image: it RETAINS
 # onnxruntime/cv2/av because it runs detect/render in Session 0, while still
 # excluding torch/scipy.
 
@@ -30,7 +30,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='VideoGrouperTray',
+    name='SoccerCamTray',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -50,5 +50,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='VideoGrouperTray',
+    name='SoccerCamTray',
 )

@@ -1,9 +1,11 @@
-"""Executes remote commands received from TTT.
+"""Executes remote commands received over the device link (IDeviceLink).
 
 Commands are validated before execution. Soccer-cam only executes
 commands it understands and considers safe."""
 
 import logging
+
+from video_grouper.integrations.device_link import DeviceCommand
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +18,7 @@ SUPPORTED_COMMANDS = {
 
 
 class CommandExecutor:
-    """Validates and executes remote commands from TTT."""
+    """Validates and executes remote commands from the device link."""
 
     def __init__(self, app):
         """
@@ -25,17 +27,14 @@ class CommandExecutor:
         """
         self.app = app
 
-    async def execute(self, command: dict) -> dict:
+    async def execute(self, command: DeviceCommand) -> dict:
         """Execute a command and return the result.
-
-        Args:
-            command: dict with command_type, parameters, id
 
         Returns:
             dict with success: bool, message: str
         """
-        cmd_type = command.get("command_type", "")
-        params = command.get("parameters", {})
+        cmd_type = command.type
+        params = command.parameters
 
         if cmd_type not in SUPPORTED_COMMANDS:
             return {"success": False, "message": f"Unknown command: {cmd_type}"}

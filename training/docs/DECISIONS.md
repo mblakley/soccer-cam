@@ -1942,6 +1942,112 @@ and cannot be derived in-detector). **Fast-follow:** replace the NTFY 5-min walk
 single detector-seeded "is this the kickoff?" confirmation (the S3 verify, moved ahead of the trim).
 **Files:** `video_grouper/task_processors/phase_game_start.py`, `tests/test_phase_game_start.py`
 
+## 2026-08-06: One completion watermark decides downloads; archiving becomes a pipeline step
+
+**Context:** Archiving five published July games from `D:` to `F:` made the camera poller
+re-download all of them. Every "do we already have this?" test soccer-cam had asks the local disk —
+the incremental pass reads the group's `state.json` via `is_file_in_state`, and the reconcile pass
+stats the `.mp4` — and archiving deletes both on purpose. A finished, published game therefore
+answers "never seen it". Mark's framing was that the record of what we've handled was stored next to
+the bulk data we intend to delete; that is exactly right for `state.json` (per-group), though the
+high-water mark itself was already central (`camera_state.json` at the storage root) and did survive.
+
+The mark could not settle it anyway, because it advanced at **discovery**: `camera_poller.py`
+recorded it immediately after files were queued, before a byte was downloaded, so a download that
+never completed was never queried again. That is the 2026-06-15 loss, and it is why
+`max_lookback_hours` and the reconcile pass existed at all — both were patches over a mark that did
+not mean what its name said.
+
+**Decision:** Make it mean it. The watermark is the newest recording end time `T` such that *every*
+recording at or before `T` is settled, and it only ever moves forward. "At or before the watermark"
+therefore means finished, so the poller stops asking the disk anything. Enforced directly in the
+discovery loop, not merely via the query range — cameras return recordings that overlap the window,
+so a game straddling the boundary comes back regardless. Reconcile is bounded below by it: on-disk
+completeness is the right question only for work we still owe. `max_lookback_hours` is removed (it
+only ever skipped a stale watermark forward, silently dropping what it skipped); first run scans a
+year, since neither camera backend can list "everything" and both return `[]` if handed `None`.
+Retries that exhaust can mark the file `abandoned` via a new `on_item_permanently_failed` hook, so
+one recording the camera has deleted cannot pin the watermark and every later game behind it —
+but **only when the camera confirms it is gone** (it answers a listing for the file's window, or up
+to now if that is empty, and the file is not in it). Exhausting three fast retries proves nothing on
+its own: a full disk or a timeout would otherwise settle real footage forever. Every uncertain
+outcome (unreachable, listing failed or empty — both backends return `[]` on error) leaves it
+`download_failed`, which the StateAuditor re-queues each pass, holding the watermark meanwhile.
+
+The watermark is **per camera**: each poller counts only recordings whose discovery-time
+`camera_name` is its own (pollers share one storage path, and another camera's settled work must not
+carry this camera's mark past footage it never discovered). Pre-attribution recordings count on a
+single-camera install; with several cameras they may hold a mark back but never push it forward. A
+group the StateAuditor treats as past download (`combined` … `archived`, `not_a_game`) settles every
+file in it — the poller imports the same set — because a stale non-terminal entry there is never
+re-queued or abandoned and would otherwise hold the mark forever. `max_files_per_poll` caps files
+*queued*, not files listed: while the mark is held, the same known files re-listed every poll used
+to fill the cap and starve discovery of anything newer.
+
+Archiving becomes a real pipeline step (`ArchiveProcessor`, post-`complete`, `[ARCHIVE]`) rather
+than an ad-hoc script: copy → verify SHA-256 → record `archived` → delete, in that order, with
+`state.json` deleted last.
+
+The setting is a **disposition**, `after_upload = keep | copy | move | discard`, not a
+copy-to-a-second-location flag with a delete toggle. Mark's correction: "archiving to a separate
+location should be a configurable option, not a requirement for everyone." The first design forced a
+two-location model, so a single-drive install — the one most likely to fill up — could not use the
+feature at all. The two real questions are independent: keep a second copy (`path`), and reclaim the
+working drive. `discard` answers the single-drive case (YouTube is the archive) and refuses unless
+the group carries a recorded YouTube video id, since those files are then the only copy. `copy`/`move`
+with nowhere to put games is a config-load hard failure rather than a silent no-op.
+
+Archive roots are **per-team** and configured, never derived: `archive_path` in each team's
+`[TEAM.<key>]` section, found through `Config.team_for` / `resolve_team` like every other per-team
+setting (2026-08-22 "one `[TEAM.<key>]` section per team"; an `[ARCHIVE.PER_TEAM]` map with its
+own matching rule existed only in pre-release builds of this PR, and a config still carrying it
+refuses to load rather than silently falling back). `resolve_team` already handles the live name
+(`BU14 - Guzzetta`) against a short alias, exact before substring, longest identifier winning — so
+two teams sharing a word are not filed into each other's archive, which followed by deleting the
+original is unrecoverable. Verified against the live layout 2026-08-07 — `F:\Heat_2012s`,
+`F:\Heat_2013s`, `F:\Flash_2013s`, holding `2026.07.12 - vs Niagara Falls Soccer Club (away)`.
+The root is not derivable from the team name (match_info says "Guzzetta", the root is `Heat_2012s`),
+and one account carries two Heat age groups that must not be mixed, so a game whose team has no root
+(and no `[ARCHIVE] path` fallback) is refused rather than filed under another team's archive.
+Each archive folder is owned by one source group (a marker written before the first copy): two games
+the same day against the same opponent share a name, and the second gets `(2)` instead of being
+copied over the first's only copy. The earlier name
+`delete_after_verify` was rejected for encoding an invariant as an option — we never delete without
+verifying, so the name implied a `delete_before_verify` mode that must not exist. The ordering is the point. The ad-hoc version deleted first and
+recorded nothing; interrupted by a dropped remote session it left a group whose `state.json` still
+said `combined`, which the pipeline read as mid-processing — it blanked `match_info.ini` to a stub
+and would have re-rendered and re-uploaded an already-published game. The step also **hard-refuses**
+to archive a group the watermark has not passed (the minimum over the configured cameras that
+recorded it — a removed camera's stale mark must not pin it), since doing so is precisely what lets
+the poller rediscover it; likewise a group that is not `complete`, one with no recording end time
+to check, and a relative or missing group path. An `archived` group still on disk (a delete that
+failed partway) is finished on retry, back through copy + verify, rather than reported done.
+
+**Trade-off:** the watermark is a single scalar, not a per-file ledger, so it cannot express
+out-of-order completion — a stuck recording holds the line until it settles or is abandoned. That is
+deliberate: it is strictly less state, and the contiguous-prefix rule is what makes archiving
+structurally unobservable to the poller. A per-file central ledger was considered and rejected as a
+new store to migrate and maintain that also reintroduces the "known ≠ downloaded" ambiguity PR #89
+was written to kill.
+
+**Not done here:** TTT's `/api/internal/device-link/high-water-mark` returns
+`max(recording_start)` over *all registered* recordings, and registration happens at discovery — the
+same flaw. TTT does hold a full per-recording record (`pipeline_steps[]` with per-step status), but
+soccer-cam has no endpoint to read it back as a set, only that scalar. Making TTT's watermark
+completion-aware is a cross-repo change, deliberately deferred; the local watermark is the same value
+and the same semantics either way. Note this would reverse `ttt_reporter.get_high_water_mark`'s
+stated intent ("Supplementary — used for remote visibility, not for local decisions").
+
+**Files:** `video_grouper/task_processors/camera_poller.py`,
+`video_grouper/task_processors/archive_processor.py`,
+`video_grouper/task_processors/tasks/archive/archive_task.py`,
+`video_grouper/task_processors/base_queue_processor.py`,
+`video_grouper/task_processors/download_processor.py`,
+`video_grouper/task_processors/state_auditor.py`,
+`video_grouper/task_processors/upload_processor.py`, `video_grouper/utils/config.py`,
+`video_grouper/config.ini.dist`, `tests/test_camera_poller.py`, `tests/test_archive_processor.py`,
+`tests/test_download_processor.py`, `tests/test_upload_processor.py`
+
 ---
 
 ## Decision: ship the seam auto-measure as a refusing instrument, not a number generator (2026-08-19)
@@ -2295,3 +2401,95 @@ upload and leaves nothing to read.
 be read -- treated as long) and the channel isn't verified. Clips and reels upload normally. Long
 uploads park and re-probe as before and resume once the owner verifies at youtube.com/verify. The
 setup wizard still requires verification, because full games need it.
+## Decision: soccer-cam reaches TTT only through ports; TTT stays optional (2026-11-27)
+
+**Context.** `TTTApiClient` had grown to 79 public methods over ~69 TTT operations, used directly by
+~16 modules, with four places constructing their own client. A review on 2026-11-27 (verified with
+`grep -w` over `video_grouper/`, `training/`, `run.py`) found 31 methods that do nothing at runtime
+(23 never called, 2 only internally, 6 reachable only from dead code), three calls to routes TTT never
+built, and onboarding bugs: OAuth/magic-link sessions discard the refresh token; per-instance token
+loading means a browser sign-in doesn't reach the running app; sign-in neither enables TTT nor
+registers the device (`camera_id` is hand-typed); pipeline tasks persisted the TTT password into queue
+state (fixed in #155). Mark: "TTT should be optional from soccer-cam. Soccer-cam should be able to
+provide the info to TTT through a minimal interface", and "clear, generic interfaces, so we can
+support various different implementations without making a ton of changes throughout the entire app".
+
+**Decided.** Six ports beside the existing `IScheduleSource` — `IAccount`, `IDeviceLink`,
+`IRecordingSink`, `IWorkSource`, `IEntitlements`, `IPhaseHintSource` — about 25 methods in all. Each
+has a TTT implementation, a Null implementation (TTT off or not signed in) and a Fake for tests.
+Implementations self-register as in `video_grouper/schedule/`; one composition point builds them and
+owns the single shared TTT session; consumers receive ports and never construct a TTT client or read
+`[TTT]` config. Dead client methods are deleted as each port replaces them. Plan and phase order:
+`.claude/plans/ttt-integration-ports/PLAN.md`.
+
+**Why ports, not a slimmer client.** TTT is one optional provider; the jobs (report recordings, take
+remote work, check entitlements) are soccer-cam's. A port makes "TTT off" a real implementation with
+tested behaviour instead of scattered `if client:` checks, and lets another provider plug in without
+touching consumers.
+
+**Guard.** `tests/contracts/test_ttt_api_contract.py` (#152) checks every remaining TTT call against
+TTT's API, so the refactor can't silently break a route. Device sign-in (TTT-minted session over a
+PKCE loopback flow, no Supabase in soccer-cam) is built separately and becomes `IAccount`'s TTT
+implementation.
+
+## Decision: devices register themselves with TTT through one idempotent route; dormant TTT features revived (2026-11-27)
+
+**Context.** The phase-5 review (IDeviceLink) found: `[TTT] camera_id` is hand-typed and nothing writes
+it, so recording reports silently do nothing without it; TTT's camera create route inserts on every
+call (no dedupe; no serial on `CameraCreate`), machine/service upserts are select-then-insert, and
+multi-team users land on an arbitrary team. It also found two features that existed only on paper:
+the system-metrics heartbeat (read a nonexistent `config.ttt.service_id`, so it never ran) and
+pulling stitch profiles saved in TTT's calibration tool down to the device (never wired).
+
+**Decided (Mark).**
+- A **new idempotent TTT route** registers this machine and its cameras (keyed on team + camera
+  serial; unique index) plus the machine-camera link and returns the ids; soccer-cam calls it and
+  fills camera ids itself. Chosen over chaining existing routes (duplicates on retry, name
+  collisions on "default", no serial dedupe).
+- **Revive the metrics heartbeat** (done: `DeviceHealth` over `heartbeat-enhanced`).
+- **Build the stitch-profile pull.**
+- **Fix TTT's device-link authorization now** (separate TTT PR): camera status / command routes ran
+  with a service session and never checked that the caller manages the camera.
+
+## Decision: cameras are identified by serial, managed by camera managers, and joined by possession (2026-11-27)
+
+**Corrects the same-day entry above** ("a camera belongs to its person"). Mark: "The camera is
+'managed' by a person in the camera manager role. Multiple camera managers might manage the same
+camera, and might record multiple different teams." And on joining: "If someone has possession of
+the camera, they should be able to upload to their teams."
+
+**Decided.** A TTT camera has no single owner: its identity is its serial (unique), it is linked to
+every team it records for, and it is managed by any camera manager / team admin of a linked team.
+Device registration (`POST /api/internal/device-link/register`) upserts by serial and links the
+caller's teams. Registering a serial that already exists **joins** it (the caller's teams are
+linked; they can upload for their teams; other teams' recordings stay private to those teams).
+Possession evidence: soccer-cam reports each camera's serial **and MAC address read from the camera
+over the network**; once TTT has a MAC for a serial, a join must match it (a printed serial alone is
+not enough). soccer-cam sends `mac_address` and logs any camera TTT refuses.
+
+## Decision: connecting the camera is part of onboarding, and its step can be skipped (2026-11-28)
+
+**Mark (2026-11-28):** "having the camera connected to the network and available should be part of
+the normal onboarding process. It should be possible to skip the camera setup step."
+
+- The setup wizard's camera step (`/setup/camera`) stays the normal path: scan the network, confirm
+  the make with the camera's credentials, save. Before this, Next and Save both required an address,
+  so a person without the camera to hand could not finish setup at all.
+- **Skip — add a camera later** (`POST /setup/camera/skip`) finishes setup with no camera. On a
+  re-run it leaves the configured cameras exactly as they are: skip means "no change", never
+  "remove".
+- A camera is added later from the dashboard's existing **Add a camera** link, which re-enters the
+  wizard at the camera step. A fresh wizard state on a finished install now starts from the
+  configured storage path. Before this, that link's flow bounced the person back to the start at
+  Summary and could have written the storage step's default over the real path. The link opens
+  the step in add mode (`/setup/camera?add=1`): a pre-filled name that a configured camera already
+  carries becomes a free one (`camera2`, ...), because saving upserts by name and the link also
+  shows when every camera is disabled or the service reports none. Re-running setup from the start
+  still updates the camera of the same name.
+- An install with no camera starts cleanly. `job_capabilities` read `config.camera` (the first
+  camera) and raised `IndexError` at startup when TTT job polling was on; it now announces no camera.
+  Verified by starting the real app with zero cameras and TTT jobs on: no errors.
+- A configured camera is expected to be reachable between games, which is why onboarding connects
+  it. It is unreachable while it is out at a game. During those hours the camera poller logs
+  "unable to connect" at INFO, not as an error, and the device link backs off after a failed probe
+  (5 min, doubling to 1 h; #160).

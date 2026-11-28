@@ -1,6 +1,8 @@
 import logging
 from typing import Any
 
+from video_grouper.integrations.recordings import IRecordingSink, StepReport
+from video_grouper.integrations.recordings.sources.null import NullRecordingSink
 from video_grouper.utils.config import Config
 
 from .base_queue_processor import QueueProcessor
@@ -25,6 +27,7 @@ class UploadProcessor(QueueProcessor):
         storage_path: str,
         config: Config,
         ntfy_service: Any | None = None,
+        archive_processor: Any | None = None,
     ):
         """Initialize the upload processor.
 
@@ -32,11 +35,16 @@ class UploadProcessor(QueueProcessor):
             storage_path: Base storage path
             config: Application configuration
             ntfy_service: Optional NtfyService for playlist requests and auth notifications
+            archive_processor: Optional ArchiveProcessor. A group is handed to
+                it the moment its upload completes — pushed downstream inline
+                rather than waiting for a sweep to notice.
         """
         super().__init__(storage_path, config)
         self.config = config
         self.ntfy_service = ntfy_service
-        self.ttt_reporter = None
+        self.archive_processor = archive_processor
+        # Where upload progress is reported; the app wires the real sink.
+        self.recordings: IRecordingSink = NullRecordingSink()
 
     @property
     def queue_type(self) -> QueueType:
@@ -57,22 +65,15 @@ class UploadProcessor(QueueProcessor):
         try:
             logger.info(f"UPLOAD: Processing task: {item}")
 
-            # Report upload start to TTT (best-effort)
-            if self.ttt_reporter:
-                group_dir = item.get_item_path()
-                try:
-                    from video_grouper.models import DirectoryState
-
-                    dir_state = DirectoryState(group_dir)
-                    await self.ttt_reporter.update_recording_step(
-                        dir_state.ttt_recording_id,
-                        step_id="upload",
-                        step_type="upload",
-                        label="YouTube Upload",
-                        status="running",
-                    )
-                except Exception:
-                    pass  # Never block upload on TTT
+            await self.recordings.progress(
+                item.get_item_path(),
+                StepReport(
+                    step_id="upload",
+                    step_type="upload",
+                    label="YouTube Upload",
+                    status="running",
+                ),
+            )
 
             # In mock mode, simulate successful upload without actual YouTube API calls
             if self.config.youtube.use_mock:
@@ -125,71 +126,70 @@ class UploadProcessor(QueueProcessor):
                 from video_grouper.web.auth_status import clear_auth_needed
 
                 clear_auth_needed(self.storage_path, "youtube")
-                # Report upload complete to TTT (best-effort)
-                if self.ttt_reporter:
-                    group_dir = item.get_item_path()
+                # Report the upload and the finished video (best-effort; the
+                # sink never raises and is Null when TTT is off).
+                group_dir = item.get_item_path()
+                yt_video_id = getattr(item, "youtube_video_id", None)
+                yt_url = f"https://youtu.be/{yt_video_id}" if yt_video_id else None
+                await self.recordings.progress(
+                    group_dir,
+                    StepReport(
+                        step_id="upload",
+                        step_type="upload",
+                        label="YouTube Upload",
+                        status="complete",
+                        artifacts=(
+                            {"youtube_url": yt_url, "youtube_video_id": yt_video_id}
+                            if yt_video_id
+                            else None
+                        ),
+                    ),
+                )
+                recorded_at = _first_recording_start(group_dir)
+                if yt_url and recorded_at is not None:
+                    await self.recordings.published(group_dir, yt_url, recorded_at)
+
+                # Hand the finished group straight to the archive queue.
+                # Pushed inline here rather than left for a periodic sweep to
+                # discover, so reclaiming disk follows publication directly.
+                # The archive step re-checks everything that matters
+                # (verification, the watermark guard), so a duplicate or
+                # premature enqueue is harmless.
+                # Upload tasks carry group_dir RELATIVE to the storage path;
+                # the archive task needs it absolute (it refuses otherwise),
+                # or it would resolve against the working directory.
+                if self.archive_processor is not None:
                     try:
-                        from video_grouper.models import DirectoryState
+                        from video_grouper.utils.paths import resolve_path
 
-                        dir_state = DirectoryState(group_dir)
-                        yt_video_id = getattr(item, "youtube_video_id", None)
-                        yt_url = (
-                            f"https://youtu.be/{yt_video_id}" if yt_video_id else None
-                        )
-                        await self.ttt_reporter.update_recording_step(
-                            dir_state.ttt_recording_id,
-                            step_id="upload",
-                            step_type="upload",
-                            label="YouTube Upload",
-                            status="complete",
-                            artifacts=(
-                                {
-                                    "youtube_url": yt_url,
-                                    "youtube_video_id": yt_video_id,
-                                }
-                                if yt_video_id
-                                else None
-                            ),
-                        )
-                    except Exception:
-                        pass  # Never block upload on TTT
+                        from .tasks.archive import ArchiveTask
 
-                # Auto-match uploaded video with TTT game schedule (best-effort)
-                if self.ttt_reporter:
-                    yt_video_id = getattr(item, "youtube_video_id", None)
-                    if yt_video_id:
-                        group_dir = item.get_item_path()
-                        try:
-                            from video_grouper.models import DirectoryState
-
-                            dir_state = DirectoryState(group_dir)
-                            files = list(dir_state.files.values())
-                            if files:
-                                files.sort(key=lambda f: f.start_time)
-                                recorded_at = files[0].start_time
-                                await self.ttt_reporter.auto_match_video(
-                                    group_dir, yt_video_id, recorded_at
+                        await self.archive_processor.add_work(
+                            ArchiveTask(
+                                group_dir=str(
+                                    resolve_path(
+                                        item.get_item_path(), self.storage_path
+                                    )
                                 )
-                        except Exception:
-                            pass  # Never block upload on TTT
+                            )
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "UPLOAD: could not queue archive for %s: %s",
+                            item.get_item_path(),
+                            e,
+                        )
             else:
                 logger.error(f"UPLOAD: Task execution failed: {item}")
-                # Report upload failure to TTT (best-effort)
-                if self.ttt_reporter:
-                    group_dir = item.get_item_path()
-                    try:
-                        from video_grouper.models import DirectoryState
-
-                        dir_state = DirectoryState(group_dir)
-                        await self.ttt_reporter.update_recording_step(
-                            dir_state.ttt_recording_id,
-                            step_id="upload",
-                            step_type="upload",
-                            label="YouTube Upload",
-                            status="failed",
-                        )
-                    except Exception:
-                        pass  # Never block upload on TTT
+                await self.recordings.progress(
+                    item.get_item_path(),
+                    StepReport(
+                        step_id="upload",
+                        step_type="upload",
+                        label="YouTube Upload",
+                        status="failed",
+                    ),
+                )
 
         except Exception as e:
             from video_grouper.utils.youtube_upload import YouTubeQuotaError
@@ -201,3 +201,18 @@ class UploadProcessor(QueueProcessor):
     def get_item_key(self, item: BaseUploadTask) -> str:
         """Get unique key for a BaseUploadTask."""
         return f"{item.task_type}:{item.get_item_path()}"
+
+
+def _first_recording_start(group_dir: str):
+    """When the game's recording began (earliest camera file), or None."""
+    try:
+        from video_grouper.models import DirectoryState
+
+        starts = [
+            f.start_time
+            for f in DirectoryState(group_dir).files.values()
+            if f.start_time is not None
+        ]
+        return min(starts) if starts else None
+    except Exception:
+        return None

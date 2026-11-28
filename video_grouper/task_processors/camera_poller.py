@@ -1,11 +1,14 @@
 import json
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import pytz
 
 from video_grouper.cameras.base import Camera
+from video_grouper.integrations.recordings import IRecordingSink
+from video_grouper.integrations.recordings.sources.null import NullRecordingSink
 from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
@@ -35,6 +38,64 @@ MIN_SEGMENT_SECONDS = 5
 # skipped real game footage forever — the 2026-06-15 loss. Bound the open
 # session to this horizon past its start instead of letting it run to now.
 OPEN_CONNECTED_SESSION_HORIZON_HOURS = 12
+# How far back the very first poll of a fresh install looks. There is no
+# watermark yet, and neither camera backend can list "everything" — both
+# require an explicit (start, end) and silently return [] if handed None — so
+# scanning the whole card has to be spelled out as a deliberately wide window.
+# The cost is one Search per *active recording day* found (Reolink walks the
+# status bitmap), not per calendar day, so an empty year is nearly free.
+FIRST_RUN_SCAN_DAYS = 365
+# A recording is settled when we will never need to fetch it from the camera
+# again: either we have the bytes (or something derived from them), or we
+# deliberately gave up on it. The watermark may only advance over settled
+# recordings, which is what makes "at or before the watermark" mean "done"
+# rather than merely "seen".
+#
+# Kept as one name shared with _file_needs_download so the two can't drift:
+# a status that means "done" to one and "needs download" to the other would
+# make the poller re-queue everything behind the watermark.
+SETTLED_FILE_STATUSES = frozenset(
+    {
+        "downloaded",
+        "combined",
+        "trimmed",
+        "ball_tracking_complete",
+        "pipeline_complete",
+        "complete",
+        "skipped",
+        # Uploaded and moved off local disk. The bytes are deliberately gone;
+        # their absence must never be read as "never downloaded".
+        "archived",
+        # Retries exhausted — the camera no longer has it, or it is corrupt.
+        # Settled in the sense that matters here: we are never fetching it, so
+        # it must not hold the watermark (and every later game) hostage.
+        "abandoned",
+    }
+)
+# Group-level statuses that settle every file inside them regardless of the
+# individual file status — the group as a whole is finished with the camera.
+#
+# This is exactly the set of groups the StateAuditor treats as past the
+# download phase (it imports this name), and DownloadProcessor refuses to
+# fetch into them too. The two must agree: a stale non-terminal file entry in
+# a combined group (the camera re-listing an in-progress "_000000_" segment
+# under its final name) is never re-queued and never abandoned, so if the
+# watermark still waited on it, it would wait forever — and hold every later
+# game's archive with it. Nothing is lost by passing it: nothing can download
+# into a group at these statuses anyway.
+SETTLED_GROUP_STATUSES = frozenset(
+    {
+        "combined",
+        "trimmed",
+        "ball_tracking_complete",
+        "pipeline_complete",
+        "complete",
+        "not_a_game",
+        # Uploaded and moved off local disk. Its files are *supposed* to be
+        # missing locally; re-fetching them would undo the archive.
+        "archived",
+    }
+)
 
 
 def create_directory(path):
@@ -213,17 +274,17 @@ class CameraPoller(PollingProcessor):
         self._last_poll_found_files = True
         self._unplug_notified = False
         self.ntfy_service = None
-        self.ttt_reporter = None
+        # Where discovered recordings are reported; the app wires the real sink.
+        self.recordings: IRecordingSink = NullRecordingSink()
+        # Whether the device link lets this install poll a camera (it can be
+        # moved to another computer remotely); the app wires the real check.
+        self.is_camera_enabled: Callable[[str], bool] = lambda camera_name: True
         self._cleanup_state_path = get_home_cleanup_state_path(storage_path)
-        # Reconciliation pass: a full re-scan of a much larger window than the
-        # incremental sync, run when the download queue is idle. The
-        # incremental sync only moves forward (HWM .. now, clamped to
-        # max_lookback_hours), so any game that ages past that window before
-        # it was fully captured is never re-queried. The reconcile pass
-        # re-discovers anything still on the camera that is missing or
-        # incomplete on disk, regardless of the HWM. Tracked so we don't issue
-        # a wide camera search on every single poll while the queue happens to
-        # be idle.
+        # Reconciliation pass: re-scan the window between the watermark and
+        # now when the download queue is idle, and re-queue anything missing
+        # or short on disk. This heals downloads that died partway; the
+        # watermark itself handles "never discovered". Tracked so we don't
+        # issue a wide camera search on every poll while the queue is idle.
         self._last_reconcile_time: datetime | None = None
         self._reconcile_min_interval_seconds = 3600
 
@@ -232,10 +293,8 @@ class CameraPoller(PollingProcessor):
         Poll camera for new files and group them into directories.
         """
         try:
-            # Check if this camera is enabled on this machine (TTT multi-computer)
-            if self.ttt_reporter and not self.ttt_reporter.is_camera_enabled(
-                self.camera.name
-            ):
+            # Check if this camera is enabled on this machine (multi-computer)
+            if not self.is_camera_enabled(self.camera.name):
                 logger.debug(
                     "CAMERA_POLLER: Camera %s disabled on this machine, skipping",
                     self.camera.name,
@@ -254,11 +313,11 @@ class CameraPoller(PollingProcessor):
             await self._sync_files_from_camera()
 
             # Self-healing reconciliation. When the download queue is idle,
-            # re-scan a much larger window than the incremental sync and
-            # re-queue anything still on the camera that is missing or
-            # incomplete on disk — regardless of the high-water mark. This is
-            # the safety net for games that aged past max_lookback_hours
-            # before they were fully captured (the 2026-06-15 loss).
+            # re-scan from the watermark forward and re-queue anything still
+            # on the camera that is missing or incomplete on disk — the
+            # safety net for downloads that died partway (the 2026-06-15
+            # loss). Behind the watermark the same check would be actively
+            # wrong: an archived game is meant to be gone locally.
             if self._should_reconcile():
                 await self._reconcile_files_from_camera()
 
@@ -295,15 +354,32 @@ class CameraPoller(PollingProcessor):
 
     async def _sync_files_from_camera(self) -> None:
         """Sync files from camera and group them."""
-        start_time = await self._get_latest_processed_time()
-        if start_time:
-            start_time -= timedelta(minutes=1)
-
-        # Clamp start_time so we never look back further than max_lookback_hours
-        max_lookback = getattr(self.config.app, "max_lookback_hours", 48)
-        earliest_allowed = datetime.now() - timedelta(hours=max_lookback)
-        if start_time is None or start_time < earliest_allowed:
-            start_time = earliest_allowed
+        # Read once per poll. Only _advance_completion_watermark writes it,
+        # and that runs after this loop, so it cannot move underneath us.
+        watermark = await self._get_latest_processed_time()
+        start_time = watermark
+        if start_time is None:
+            # No watermark yet, so this install has never ingested anything:
+            # scan the whole card. Both backends require an explicit range
+            # (get_file_list(start, end) is mandatory on Dahua and Reolink,
+            # and passing None fails *silently* as "no files" through their
+            # blanket except), so "everything the camera holds" has to be
+            # spelled out as a deliberately wide window.
+            start_time = datetime.now() - timedelta(days=FIRST_RUN_SCAN_DAYS)
+            logger.info(
+                "CAMERA_POLLER: No watermark yet -- first-run scan over the "
+                "last %d days.",
+                FIRST_RUN_SCAN_DAYS,
+            )
+        else:
+            # The watermark means "every recording at or before this is
+            # settled", so it is the whole answer to what we still need.
+            # Deliberately NOT clamped to a lookback window: clamping skips
+            # a stale watermark forward, and anything it skipped over was
+            # never fetched and was never queried again. That is how the
+            # 2026-06-15 game was lost, and how archived games got
+            # re-downloaded once the window happened to reach them.
+            logger.debug("CAMERA_POLLER: Resuming from watermark %s", start_time)
 
         end_time = datetime.now()
 
@@ -334,15 +410,22 @@ class CameraPoller(PollingProcessor):
 
         self._last_poll_found_files = True
 
-        # Cap the number of files per poll to avoid overwhelming the pipeline
+        # `max_files_per_poll` caps how many files this poll QUEUES, and is
+        # applied inside the loop below once a file is known to be new work.
+        # Capping the raw listing instead starved discovery: while the
+        # watermark is held, every poll re-lists the recordings behind the
+        # hold, those already-known files filled the cap every time, and a
+        # newer recording was never reached at all.
+        #
+        # Sort by start time so the cap means "the oldest N new files": the
+        # camera's own ordering is not guaranteed, and ingesting in recording
+        # order is what lets the watermark advance through a backlog poll by
+        # poll. startTime is zero-padded "%Y-%m-%d %H:%M:%S", so lexicographic
+        # ordering is chronological.
+        files.sort(key=lambda f: str(f.get("startTime") or ""))
         max_files = getattr(self.config.app, "max_files_per_poll", 50)
-        if len(files) > max_files:
-            logger.warning(
-                f"CAMERA_POLLER: Found {len(files)} files, truncating to {max_files}"
-            )
-            files = files[:max_files]
 
-        logger.info(f"CAMERA_POLLER: Found {len(files)} new files to process.")
+        logger.info(f"CAMERA_POLLER: Camera listed {len(files)} file(s).")
         existing_dirs = [
             os.path.join(self.storage_path, d)
             for d in os.listdir(self.storage_path)
@@ -355,10 +438,8 @@ class CameraPoller(PollingProcessor):
         # other segments, so it is not flagged here.
         runt_paths = _identify_runt_recordings(files, existing_dirs)
 
-        latest_end_time = None
-        latest_end_time_file = None
-        # Per-poll diagnostics so HWM stalls can be root-caused after the
-        # fact: classify every file the camera returned and emit a single
+        # Per-poll diagnostics so watermark stalls can be root-caused after
+        # the fact: classify every file the camera returned and emit a single
         # summary line at end of poll. Without this, an HWM-stuck
         # incident (5/30 runt stuck at 19:44:06 for 14+ hours, 2026-05-30
         # tournament day) requires DEBUG logs to reconstruct.
@@ -368,6 +449,9 @@ class CameraPoller(PollingProcessor):
             "runt": 0,
             "home_connected": 0,
             "unparseable": 0,
+            "settled": 0,
+            # New work beyond max_files_per_poll; picked up by a later poll.
+            "deferred": 0,
         }
 
         # Get connected timeframes for filtering
@@ -386,6 +470,9 @@ class CameraPoller(PollingProcessor):
             local_tz = pytz.utc
 
         files_to_delete = []
+        # Earliest end time among new files deferred by the cap; the
+        # watermark must not pass it (see _advance_completion_watermark).
+        oldest_deferred_end: datetime | None = None
         # Track newly discovered files per group for TTT registration
         new_files_by_group: dict[str, list] = {}
 
@@ -457,10 +544,48 @@ class CameraPoller(PollingProcessor):
                     files_to_delete.append(file_info["path"])
                     continue
 
-                # Track high-water mark from non-skipped files only
-                if latest_end_time is None or file_end_time > latest_end_time:
-                    latest_end_time = file_end_time
-                    latest_end_time_file = filename
+                # The watermark decides this, and nothing else does. Every
+                # other "do we already have it?" test asks the local disk —
+                # is_file_in_state reads the group's state.json, and reconcile
+                # stats the .mp4 — and archiving deletes both on purpose, so
+                # both answer "never seen it" for a game that is finished and
+                # published. Enforced here rather than relying on the query
+                # range: cameras return recordings that merely *overlap* the
+                # window, so a game straddling the boundary comes back anyway.
+                if watermark is not None and file_end_time <= watermark:
+                    counts["settled"] += 1
+                    logger.debug(
+                        "CAMERA_POLLER: %s (end=%s) is at or before the "
+                        "watermark; already handled.",
+                        filename,
+                        file_end_time,
+                    )
+                    continue
+
+                # Already known? A pure lookup, so a file that is NOT queued
+                # below (deferred by the cap) never leaves an empty group
+                # directory behind.
+                known_group = find_existing_group_for(file_start_time, existing_dirs)
+                if known_group is not None and DirectoryState(
+                    known_group
+                ).is_file_in_state(os.path.join(known_group, filename)):
+                    counts["already_known"] += 1
+                    logger.debug(
+                        "CAMERA_POLLER: File %s (end=%s) already known; not re-queued.",
+                        filename,
+                        file_end_time,
+                    )
+                    continue
+
+                # The cap counts only files that would actually be queued.
+                if counts["new_added"] >= max_files:
+                    counts["deferred"] += 1
+                    if (
+                        oldest_deferred_end is None
+                        or file_end_time < oldest_deferred_end
+                    ):
+                        oldest_deferred_end = file_end_time
+                    continue
 
                 group_dir = find_group_directory(
                     file_start_time, self.storage_path, existing_dirs
@@ -469,17 +594,7 @@ class CameraPoller(PollingProcessor):
                     existing_dirs.append(group_dir)
 
                 local_path = os.path.join(group_dir, filename)
-
                 dir_state = DirectoryState(group_dir)
-                if dir_state.is_file_in_state(local_path):
-                    counts["already_known"] += 1
-                    logger.info(
-                        "CAMERA_POLLER: File %s (end=%s) already known; "
-                        "HWM advanced past it, no re-download.",
-                        filename,
-                        file_end_time,
-                    )
-                    continue
 
                 counts["new_added"] += 1
 
@@ -520,58 +635,63 @@ class CameraPoller(PollingProcessor):
                     f"CAMERA_POLLER: Error processing file info {file_info}: {e}"
                 )
 
-        # Register newly discovered files with TTT (best-effort, per group)
-        if self.ttt_reporter and new_files_by_group:
-            for group_dir, group_files in new_files_by_group.items():
-                try:
-                    registered = await self.ttt_reporter.register_recordings(
-                        group_files
-                    )
-                    if registered:
-                        # Use the first registration ID for the group
-                        ttt_id = registered[0].get("id") if registered else None
-                        if ttt_id:
-                            dir_state = DirectoryState(group_dir)
-                            await dir_state.set_ttt_recording_id(ttt_id)
-                except Exception as e:
-                    logger.warning(
-                        f"CAMERA_POLLER: TTT registration failed for {os.path.basename(group_dir)}: {e}"
-                    )
+        # Report newly discovered files, per group (best-effort; the sink
+        # keeps any ids of its own and never raises).
+        for group_dir, group_files in new_files_by_group.items():
+            await self.recordings.recording_found(
+                group_dir, group_files, camera=self.camera.name
+            )
 
         total_seen = sum(counts.values())
         logger.info(
             "CAMERA_POLLER: poll summary -- %d files seen "
-            "(new=%d already_known=%d runt=%d home_connected=%d unparseable=%d)",
+            "(new=%d already_known=%d settled=%d deferred=%d runt=%d "
+            "home_connected=%d unparseable=%d)",
             total_seen,
             counts["new_added"],
             counts["already_known"],
+            counts["settled"],
+            counts["deferred"],
             counts["runt"],
             counts["home_connected"],
             counts["unparseable"],
         )
-
-        if latest_end_time:
-            await self._update_latest_processed_time(latest_end_time)
+        if counts["deferred"]:
             logger.info(
-                "CAMERA_POLLER: HWM advanced to %s (by file %s)",
-                latest_end_time,
-                latest_end_time_file,
+                "CAMERA_POLLER: queued %d new file(s) (max_files_per_poll); "
+                "%d more deferred to later polls.",
+                counts["new_added"],
+                counts["deferred"],
             )
-        elif total_seen > 0:
-            # Files were returned but none advanced the HWM -- all were
-            # runts, home-connected, or unparseable. The HWM stays where
-            # it is, so the next poll re-queries the same window. If
-            # this repeats for many consecutive polls, the camera has
-            # effectively stalled on a class of files the poller won't
-            # process; manual recovery (delete the offending dir + bump
-            # HWM) may be needed.
+
+        if (
+            total_seen > 0
+            and not counts["new_added"]
+            and not counts["already_known"]
+            and not counts["settled"]
+            and not counts["deferred"]
+        ):
+            # Every file the camera returned was discarded as a runt, home
+            # footage, or unparseable. Nothing was queued, so nothing can ever
+            # settle, so the watermark cannot move and the next poll re-queries
+            # this exact window — forever. Worth a warning: this is the shape
+            # of the 2026-05-30 stall, where the mark stuck on a runt for 14+
+            # hours and only DEBUG logs could explain why.
             logger.warning(
-                "CAMERA_POLLER: %d files seen but HWM not advanced "
-                "(all filtered out by runt/home-connected/unparseable). "
-                "HWM remains at previous value; next poll will re-query "
-                "the same window.",
+                "CAMERA_POLLER: %d file(s) seen but none actionable "
+                "(all runt/home-connected/unparseable). Nothing queued, so "
+                "the watermark cannot advance; next poll re-queries the same "
+                "window.",
                 total_seen,
             )
+
+        # Advance the watermark over settled work only. Deliberately NOT to
+        # latest_end_time: that is merely "the camera told us this file
+        # exists", which is what the mark used to record. It moved forward
+        # the instant a file was queued -- before a single byte was
+        # downloaded -- so a recording that never finished downloading was
+        # never queried again (the 2026-06-15 loss).
+        await self._advance_completion_watermark(ceiling=oldest_deferred_end)
 
     async def _file_needs_download(
         self, local_path: str, dir_state: DirectoryState, expected_size: int | None
@@ -605,30 +725,26 @@ class CameraPoller(PollingProcessor):
             if abs(actual_size - expected_size) / expected_size >= 0.01:
                 return True
 
-        done_statuses = {
-            "downloaded",
-            "combined",
-            "trimmed",
-            "ball_tracking_complete",
-            "pipeline_complete",
-            "complete",
-            "skipped",
-        }
         existing = dir_state.get_file_by_path(local_path)
-        if existing is not None and existing.status not in done_statuses:
+        if existing is not None and existing.status not in SETTLED_FILE_STATUSES:
             return True
 
         return False
 
     async def _reconcile_files_from_camera(self) -> None:
-        """Full reconcile pass: re-queue anything on the camera missing on disk.
+        """Heal partial downloads: re-queue anything incomplete on disk.
 
-        Unlike the incremental sync (which only queries a forward-moving
-        window and trusts the high-water mark + ``is_file_in_state``), this
-        walks a much larger window and decides purely on on-disk
-        completeness. It never advances the HWM. Self-healing: a game that
-        aged past ``max_lookback_hours`` before it was fully downloaded gets
-        rediscovered here.
+        Decides purely on on-disk completeness rather than on "known in
+        state", so a file recorded as ``pending``/``download_failed`` whose
+        bytes are missing or short gets re-fetched. It never advances the
+        watermark.
+
+        Bounded below by the watermark. On-disk completeness is the right
+        question only for recordings we still owe work on; behind the
+        watermark it is the wrong question entirely, because a game archived
+        off local disk is *supposed* to be missing. Scanning past the
+        watermark is what re-downloaded five published July games after they
+        were moved to the archive.
         """
         self._last_reconcile_time = datetime.now()
 
@@ -636,11 +752,22 @@ class CameraPoller(PollingProcessor):
         end_time = datetime.now()
         start_time = end_time - timedelta(days=reconcile_days)
 
+        watermark = await self._get_latest_processed_time()
+        if watermark is not None and watermark > start_time:
+            start_time = watermark
+
+        if start_time >= end_time:
+            logger.debug(
+                "CAMERA_POLLER: Nothing to reconcile — watermark %s is current.",
+                watermark,
+            )
+            return
+
         logger.info(
-            "CAMERA_POLLER: Reconcile pass scanning %s to %s (%d days)",
+            "CAMERA_POLLER: Reconcile pass scanning %s to %s (watermark=%s)",
             start_time,
             end_time,
-            reconcile_days,
+            watermark,
         )
 
         files = await self.camera.get_file_list(
@@ -671,6 +798,16 @@ class CameraPoller(PollingProcessor):
                     continue
                 if file_end_time is None or file_end_time <= file_start_time:
                     file_end_time = file_start_time
+
+                # Re-check the watermark per file. Narrowing the query range
+                # above is NOT a filter: cameras return recordings that merely
+                # overlap the requested window, so a game ending just before
+                # the watermark still comes back. Without this the pass falls
+                # through to _file_needs_download, which asks whether the .mp4
+                # is on disk -- and for an archived game it deliberately is
+                # not, so all five published July games were re-queued.
+                if watermark is not None and file_end_time <= watermark:
+                    continue
 
                 filename = os.path.basename(file_info["path"])
                 group_dir = find_group_directory(
@@ -737,14 +874,18 @@ class CameraPoller(PollingProcessor):
         )
 
     async def _get_latest_processed_time(self) -> datetime | None:
-        """Get the timestamp of the last processed video file for this camera.
+        """Read this camera's watermark: everything at or before it is settled.
 
-        Reads camera_state.json under the same FileLock the writers use, so it
-        can never observe a half-written/truncated file. Writers now write
-        atomically (temp + os.replace), so even a brief lock contention can't
-        surface a partial document. Returning None here resets the HWM to the
-        max_lookback window, which is exactly how the 2026-06-15 game got lost,
-        so we read defensively.
+        Lives in ``camera_state.json`` at the *storage root*, deliberately not
+        inside any group directory — it has to outlive the videos it describes,
+        since archiving deletes whole group directories (and the per-group
+        ``state.json`` with them).
+
+        Reads under the same FileLock the writers use, so it can never observe
+        a half-written file. Writers write atomically (temp + os.replace).
+        Returning None means "fresh install" and triggers a full first-run
+        scan, so read defensively — a spurious None here re-downloads
+        everything the camera still holds.
         """
         state_path = get_camera_state_path(self.storage_path)
         if not os.path.exists(state_path):
@@ -761,6 +902,142 @@ class CameraPoller(PollingProcessor):
         except Exception as e:
             logger.error(f"CAMERA_POLLER: Could not read latest video timestamp: {e}")
             return None
+
+    def _collect_known_recordings(self) -> list[tuple[datetime, bool, str, str]]:
+        """This camera's known recordings, as (end, settled, name, status).
+
+        Read from the per-group ``state.json`` files. Note these live *inside*
+        each group directory, so they disappear when a game is archived off
+        local disk — which is precisely why they may only ever push the
+        watermark forward and can never be used to re-derive it. See
+        :meth:`_advance_completion_watermark`.
+
+        Scoped to THIS camera via the ``camera_name`` recorded in each file's
+        metadata at discovery. Every poller shares one storage path, and
+        another camera's settled recordings must not push this camera's
+        watermark past footage it never discovered — the poller never looks
+        behind its watermark again.
+
+        A recording with no ``camera_name`` (discovered before attribution
+        existed) is this camera's when it is the only camera configured. With
+        several, it could be anyone's, so it is counted only when it is
+        unsettled: it may hold this watermark back, never push it forward.
+        """
+        configured = getattr(self.config, "cameras", None) or []
+        single_camera = len(configured) <= 1
+        recordings: list[tuple[datetime, bool, str, str]] = []
+        try:
+            entries = os.listdir(self.storage_path)
+        except OSError as e:
+            logger.error("CAMERA_POLLER: Cannot list storage path: %s", e)
+            return recordings
+
+        for entry in entries:
+            group_dir = os.path.join(self.storage_path, entry)
+            if not os.path.isdir(group_dir):
+                continue
+            try:
+                dir_state = DirectoryState(group_dir)
+            except Exception as e:  # noqa: BLE001 — one bad group must not stall the watermark
+                logger.warning("CAMERA_POLLER: Cannot read state for %s: %s", entry, e)
+                continue
+
+            group_settled = dir_state.status in SETTLED_GROUP_STATUSES
+            for file_path, rec in dir_state.files.items():
+                end_time = getattr(rec, "end_time", None)
+                if not isinstance(end_time, datetime):
+                    continue
+                settled = (
+                    group_settled
+                    or bool(getattr(rec, "skip", False))
+                    or getattr(rec, "status", None) in SETTLED_FILE_STATUSES
+                )
+                metadata = getattr(rec, "metadata", None) or {}
+                owner = (
+                    metadata.get("camera_name") if isinstance(metadata, dict) else None
+                )
+                if owner is None:
+                    if not single_camera and settled:
+                        continue
+                elif owner != self.camera.name:
+                    continue
+                recordings.append(
+                    (
+                        end_time,
+                        settled,
+                        os.path.basename(file_path),
+                        str(getattr(rec, "status", "?")),
+                    )
+                )
+        return recordings
+
+    async def _advance_completion_watermark(
+        self, ceiling: datetime | None = None
+    ) -> None:
+        """Move the watermark over the settled prefix of known recordings.
+
+        ``ceiling`` is the earliest end time of a recording this poll listed
+        but deferred under ``max_files_per_poll``. It is in no ``state.json``
+        yet, so the walk below cannot see it; the watermark must stay strictly
+        below it, or a newer known recording could carry the mark past
+        footage that was never discovered.
+
+        The watermark is the newest recording end time ``T`` such that *every*
+        recording at or before ``T`` is settled. That contiguous-prefix rule is
+        what lets "at or before the watermark" mean "finished", so the poller
+        can stop asking the disk whether it still holds the bytes.
+
+        Two properties carry the correctness:
+
+        * **Advance only over settled work.** The old mark moved the instant a
+          file was queued, before a byte was downloaded, so a download that
+          never finished was never queried again (the 2026-06-15 loss).
+        * **Monotonic.** The stored value is a floor and is never lowered. The
+          per-group ``state.json`` files this walks are deleted when a game is
+          archived, so a recompute-from-disk would see nothing and hand back
+          ``None`` — which reads as "fresh install" and re-downloads every
+          archived game. Archived work sits behind the floor, so its absence
+          is unobservable.
+        """
+        stored = await self._get_latest_processed_time()
+
+        recordings = self._collect_known_recordings()
+        if not recordings:
+            return
+
+        recordings.sort(key=lambda r: r[0])
+
+        candidate: datetime | None = None
+        blocker: tuple[str, str] | None = None
+        for end_time, settled, name, status in recordings:
+            if ceiling is not None and end_time >= ceiling:
+                blocker = ("a file deferred by max_files_per_poll", "undiscovered")
+                break
+            if not settled:
+                blocker = (name, status)
+                break
+            candidate = end_time
+
+        if candidate is not None and (stored is None or candidate > stored):
+            await self._update_latest_processed_time(candidate)
+            logger.info(
+                "CAMERA_POLLER: Watermark advanced to %s%s",
+                candidate,
+                ""
+                if blocker is None
+                else f" (held there by {blocker[0]}, status={blocker[1]})",
+            )
+        elif blocker is not None:
+            # Not an error: work in flight is the normal reason the watermark
+            # sits still. It matters when it persists, so name what is holding
+            # it — that is the file to fix, and the one auto-retire will
+            # eventually settle if it can never complete.
+            logger.info(
+                "CAMERA_POLLER: Watermark held at %s by %s (status=%s)",
+                stored,
+                blocker[0],
+                blocker[1],
+            )
 
     async def _check_downloads_complete(self) -> None:
         """Check if all downloads are complete and send unplug notification."""

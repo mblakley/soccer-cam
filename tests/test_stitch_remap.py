@@ -413,3 +413,102 @@ def test_add_output_stream_applies_spec_to_a_real_container(tmp_path: Path) -> N
         assert out_stream.height == 48
     finally:
         container.close()
+
+
+# -- install_pulled_profile (profiles pulled from TTT's calibration tool) -----
+
+
+def _pulled(stamp=None, dx=-10):
+    profile = {
+        "source_width": 7680,
+        "source_height": 2160,
+        "seam_x": 3840,
+        "dx_anchors": [[0, dx], [2160, 0]],
+    }
+    if stamp:
+        profile["metadata"] = {"created_utc": stamp}
+    return profile
+
+
+def test_pulled_profile_is_installed_when_none_is_local(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    assert (
+        install_pulled_profile(target, _pulled("2026-11-27T10:00:00+00:00"))
+        == "written"
+    )
+    assert json.loads(target.read_text())["seam_x"] == 3840
+    assert (
+        install_pulled_profile(target, _pulled("2026-11-27T10:00:00+00:00"))
+        == "unchanged"
+    )
+
+
+def test_a_newer_local_calibration_is_never_clobbered(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    target.write_text(json.dumps(_pulled("2026-11-27T12:00:00+00:00", dx=-7)))
+    assert install_pulled_profile(target, _pulled("2026-11-27T10:00:00+00:00")) == (
+        "kept_local"
+    )
+    # no timestamp to compare: the local file stays
+    assert install_pulled_profile(target, _pulled(None)) == "kept_local"
+    assert json.loads(target.read_text())["dx_anchors"][0][1] == -7
+
+
+def test_a_newer_pulled_profile_replaces_the_local_one(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    target.write_text(json.dumps(_pulled("2026-11-27T10:00:00+00:00", dx=-7)))
+    assert install_pulled_profile(target, _pulled("2026-11-28T10:00:00+00:00")) == (
+        "written"
+    )
+    assert json.loads(target.read_text())["dx_anchors"][0][1] == -10
+
+
+def test_an_invalid_pulled_profile_is_ignored(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    assert install_pulled_profile(target, {"seam_x": 1}) == "invalid"
+    assert not target.exists()
+
+
+def test_pulled_timestamps_compare_as_times_not_strings(tmp_path):
+    """ "Z" and "+00:00" spell the same zone; as strings "...10:00:00Z" sorts
+    after "...10:00:00.500000+00:00" although it is half a second earlier."""
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    target.write_text(json.dumps(_pulled("2026-11-27T10:00:00Z", dx=-7)))
+    assert (
+        install_pulled_profile(target, _pulled("2026-11-27T10:00:00.500000+00:00"))
+        == "written"
+    )
+
+    target.write_text(json.dumps(_pulled("2026-11-27T10:00:00.500000+00:00", dx=-7)))
+    assert install_pulled_profile(target, _pulled("2026-11-27T10:00:00Z")) == (
+        "kept_local"
+    )
+    # Same instant in two spellings: the local one stays.
+    assert install_pulled_profile(target, _pulled("2026-11-27T10:00:00.5Z")) == (
+        "kept_local"
+    )
+
+
+def test_pulled_timestamps_naive_is_utc_and_garbage_never_replaces(tmp_path):
+    from video_grouper.utils.stitch_remap import install_pulled_profile
+
+    target = tmp_path / "stitch_profile.json"
+    # Naive local stamp = UTC; 11:00 at +02:00 is 09:00 UTC, so it is older.
+    target.write_text(json.dumps(_pulled("2026-11-27T10:00:00", dx=-7)))
+    assert install_pulled_profile(target, _pulled("2026-11-27T11:00:00+02:00")) == (
+        "kept_local"
+    )
+    assert install_pulled_profile(target, _pulled("not a time")) == "kept_local"
+    # An unparseable local stamp is no stamp: a timed pulled profile wins.
+    target.write_text(json.dumps(_pulled("yesterday-ish", dx=-7)))
+    assert install_pulled_profile(target, _pulled("2026-11-27T10:00:00Z")) == "written"

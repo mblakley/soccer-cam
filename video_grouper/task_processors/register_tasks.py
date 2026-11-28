@@ -15,6 +15,7 @@ Entry points pick the right registration:
 
 from video_grouper.task_processors.task_registry import task_registry
 
+from .tasks.archive import ArchiveTask
 from .tasks.clip.clip_request_task import ClipRequestTask
 from .tasks.clips.clip_extraction_task import ClipExtractionTask
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
@@ -33,6 +34,7 @@ from .tasks.video.trim_task import TrimTask
 def _register_common_tasks() -> None:
     """Register every task type. None pull heavy ML deps at import time."""
     task_registry.register_task(CombineTask)
+    task_registry.register_task(ArchiveTask)
     task_registry.register_task(TrimTask)
     task_registry.register_task(GameStartTask)
     task_registry.register_task(GameEndTask)
@@ -61,7 +63,7 @@ def register_tray_tasks() -> None:
     """Tray-side registration.
 
     The tray bundle excludes onnxruntime / cv2 / av / googleapiclient
-    (see VideoGrouper.spec ``TRAY_EXCLUDES``); every registered task here is
+    (see SoccerCam.spec ``TRAY_EXCLUDES``); every registered task here is
     import-light, and the pipeline runner only constructs the heavy steps
     lazily on the service side.
     """

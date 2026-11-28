@@ -5,7 +5,7 @@ import shutil
 
 
 # ``av`` is loaded lazily via the proxy below. The tray PyInstaller
-# bundle excludes PyAV (TRAY_EXCLUDES in VideoGrouper.spec) to dodge an
+# bundle excludes PyAV (TRAY_EXCLUDES in SoccerCam.spec) to dodge an
 # onnxruntime/PyQt6 MSVCP140.dll initialization conflict; any module
 # that pulls this file shouldn't fail at import time just because the
 # tray has no av installed. Functions reference ``av`` as a normal

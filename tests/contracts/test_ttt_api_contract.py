@@ -58,6 +58,11 @@ KNOWN_MISSING: dict[tuple[str, str], str] = {
     ("POST", "/api/pipeline-questions"): _PIPELINE_QUESTIONS,
     ("GET", "/api/pipeline-questions/{}"): _PIPELINE_QUESTIONS,
     ("PATCH", "/api/pipeline-questions/{}/respond"): _PIPELINE_QUESTIONS,
+    ("POST", "/api/internal/device-link/register"): (
+        "device self-registration (decided 2026-11-27): the route is in a TTT PR "
+        "stacked on #175; remove this entry when the vendored subset is refreshed "
+        "after it merges"
+    ),
 }
 
 # (METHOD, normalized path, body key) -> why TTT does not accept the key.

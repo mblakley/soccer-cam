@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-End-to-End Test Runner for Video Grouper System
+End-to-End Test Runner for Soccer-Cam System
 
 This module orchestrates a complete end-to-end test of the video processing pipeline
 using mock services and simulated components. It starts the video_grouper application
@@ -735,7 +735,7 @@ class E2ETestRunner:
     def start_video_grouper_app(self) -> bool:
         """Start the video_grouper application as a subprocess with file logging."""
         try:
-            logger.info("=== Starting Video Grouper Application ===")
+            logger.info("=== Starting Soccer-Cam Application ===")
 
             # Build the command to start video_grouper with absolute paths
             config_path_abs = os.path.abspath(self.config_path)
@@ -778,7 +778,7 @@ class E2ETestRunner:
                 return False
 
             logger.info(
-                f"[OK] Video Grouper application started (PID: {self.video_grouper_process.pid})"
+                f"[OK] Soccer-Cam application started (PID: {self.video_grouper_process.pid})"
             )
             logger.info(f"[OK] Logging to: {subprocess_log_path}")
             return True
