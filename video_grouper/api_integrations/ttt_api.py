@@ -463,8 +463,10 @@ class TTTApiClient:
 
         GET {api_base_url}/api/highlights/{reel_id}/game-clips
 
-        Response items include ``recording_group_dir`` + ``camera_id`` so this
-        install can resolve the source ``combined.mp4`` locally.
+        Response items include ``recording_group_dir`` + ``camera_id`` (and the
+        clip's ``video_type``) so this install can resolve the source locally:
+        the trimmed ``<slug>-raw.mp4`` for full-field clips, else the finished
+        broadcast ``<slug>.mp4`` (see ``highlight_reel_processor.reel_source_for``).
         """
         url = f"{self.api_base_url}/api/highlights/{reel_id}/game-clips"
         logger.debug("Fetching game clips for highlight reel %s", reel_id)

@@ -57,9 +57,6 @@ def _make_processor(tmp_path, *, ttt_client=None, youtube_uploader=None):
     return processor
 
 
-GAME_SLUG = "2026.12.05 - Core Loop vs Rivals (home)"
-
-
 def _stage_recording(
     storage_path: Path,
     group_dir: str,
@@ -67,21 +64,38 @@ def _stage_recording(
     processed: bool = True,
     raw: bool = True,
     combined: bool = True,
+    rendered: bool = True,
 ) -> Path:
-    """Stage a recording dir the way the pipeline leaves it: the untrimmed
-    ``combined.mp4`` at the top, and the trimmed full-field ``<slug>-raw.mp4``
-    + broadcast ``<slug>.mp4`` in the game subdirectory. Returns the broadcast
-    path (the file reels should be cut from)."""
+    """Stage a recording dir the way the pipeline leaves it: match info, the
+    untrimmed ``combined.mp4`` at the top, the trimmed full-field
+    ``<slug>-raw.mp4`` at the exact path the match info names, the broadcast
+    ``<slug>.mp4`` beside it, and a group status saying whether the render
+    has finished. Returns the broadcast path (the file reels should use)."""
+    import json
+
+    from video_grouper.models import MatchInfo
+    from video_grouper.utils.paths import get_trimmed_video_path
+
     target = storage_path / group_dir
-    game_dir = target / GAME_SLUG
-    game_dir.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "match_info.ini").write_text(
+        "[MATCH]\nmy_team_name = Core Loop\nopponent_team_name = Rivals\n"
+        "location = home\nstart_time_offset = 00:05:00\n"
+    )
+    info = MatchInfo.from_file(str(target / "match_info.ini"))
+    raw_path = Path(get_trimmed_video_path(str(target), info, str(storage_path)))
+    # conftest's autouse fixture mocks os.makedirs; create the game dir here.
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
     if combined:
         (target / "combined.mp4").write_bytes(b"\x00" * 16)
     if raw:
-        (game_dir / f"{GAME_SLUG}-raw.mp4").write_bytes(b"\x00" * 16)
+        raw_path.write_bytes(b"\x00" * 16)
+    broadcast = raw_path.with_name(raw_path.name[: -len("-raw.mp4")] + ".mp4")
     if processed:
-        (game_dir / f"{GAME_SLUG}.mp4").write_bytes(b"\x00" * 16)
-    return game_dir / f"{GAME_SLUG}.mp4"
+        broadcast.write_bytes(b"\x00" * 16)  # written after the raw: current
+    status = "pipeline_complete" if processed and rendered else "trimmed"
+    (target / "state.json").write_text(json.dumps({"status": status, "files": {}}))
+    return broadcast
 
 
 def _make_clip(idx: int, group_dir: str, start: int = 10, end: int = 20):
@@ -716,7 +730,7 @@ async def test_moment_reel_happy_path_renders_uploads_and_reports(
 async def test_moment_reel_uses_clip_offsets_for_trim(tmp_path, stub_combine_videos):
     """Verify trim_video is called with float clip_start_offset/clip_end_offset
     (not start_time/end_time) — and that sub-second precision survives."""
-    _stage_recording(tmp_path, "game-A")
+    broadcast = _stage_recording(tmp_path, "game-A")
 
     reel = {
         "id": "reel-m-trim",
@@ -755,7 +769,7 @@ async def test_moment_reel_uses_clip_offsets_for_trim(tmp_path, stub_combine_vid
     assert len(captured) == 1
     src, _dst, start_str, duration_str = captured[0]
     # Cut from the broadcast view, not the untrimmed combined.mp4 (decided 2026-11-26).
-    assert src.endswith(f"{GAME_SLUG}.mp4") and not src.endswith("-raw.mp4")
+    assert src == str(broadcast)  # the finished broadcast, not the raw
     # 110.123 formatted to 3 decimals.
     assert start_str == "110.123"
     # duration = 140.456 - 110.123 = 30.333
@@ -979,7 +993,7 @@ def test_reel_source_falls_back_to_the_trimmed_full_field_video(tmp_path):
 
     _stage_recording(tmp_path, "game-A", processed=False)
     src = reel_source_for(str(tmp_path / "game-A"), _make_moment_clip(0, "game-A"))
-    assert src is not None and src.endswith(f"{GAME_SLUG}-raw.mp4")
+    assert src is not None and src.endswith("-raw.mp4")
 
 
 def test_full_field_game_clips_are_cut_from_the_full_field_video(tmp_path):
@@ -988,7 +1002,7 @@ def test_full_field_game_clips_are_cut_from_the_full_field_video(tmp_path):
     _stage_recording(tmp_path, "game-A")
     clip = {**_make_clip(0, "game-A"), "video_type": "full"}
     src = reel_source_for(str(tmp_path / "game-A"), clip)
-    assert src is not None and src.endswith(f"{GAME_SLUG}-raw.mp4")
+    assert src is not None and src.endswith("-raw.mp4")
 
 
 def test_combined_mp4_alone_is_never_used(tmp_path):
@@ -1025,3 +1039,62 @@ async def test_reel_waits_without_claiming_when_only_combined_exists(
     stub_trim_video.assert_not_called()
     ttt_client.report_blocker.assert_called_once()
     assert "trimmed game video" in ttt_client.report_blocker.call_args[0][2]
+
+
+# -- code review of #150 (2026-11-27) ----------------------------------------
+
+
+def test_a_broadcast_still_rendering_is_not_used(tmp_path):
+    # The render (and AutoCam) write <slug>.mp4 in place for the whole render.
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    _stage_recording(tmp_path, "game-A", rendered=False)
+    src = reel_source_for(str(tmp_path / "game-A"), _make_moment_clip(0, "game-A"))
+    assert src is not None and src.endswith("-raw.mp4")
+
+
+def test_a_broadcast_older_than_the_trim_is_not_used(tmp_path):
+    # After a re-trim the old broadcast is on the old timeline.
+    import os as _os
+
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    broadcast = _stage_recording(tmp_path, "game-A")
+    raw = broadcast.with_name(broadcast.name[: -len(".mp4")] + "-raw.mp4")
+    st = _os.stat(raw)
+    _os.utime(broadcast, (st.st_atime, st.st_mtime - 60))
+    src = reel_source_for(str(tmp_path / "game-A"), _make_moment_clip(0, "game-A"))
+    assert src == str(raw)
+
+
+def test_a_leftover_game_subdir_is_never_picked(tmp_path):
+    # A team/opponent fix re-trims into a new subdir; the old one stays.
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    broadcast = _stage_recording(tmp_path, "game-A")
+    stale = tmp_path / "game-A" / "aaa - Core Loop vs Wrong (home)"
+    stale.mkdir()
+    (stale / "core-loop-wrong-home-raw.mp4").write_bytes(b"0")
+    (stale / "core-loop-wrong-home.mp4").write_bytes(b"0")
+    src = reel_source_for(str(tmp_path / "game-A"), _make_moment_clip(0, "game-A"))
+    assert src == str(broadcast)
+
+
+def test_raw_video_type_clips_come_from_the_full_field_video(tmp_path):
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    _stage_recording(tmp_path, "game-A")
+    clip = {**_make_clip(0, "game-A"), "video_type": "raw"}
+    src = reel_source_for(str(tmp_path / "game-A"), clip)
+    assert src is not None and src.endswith("-raw.mp4")
+
+
+def test_no_match_info_means_no_source(tmp_path):
+    from video_grouper.task_processors.highlight_reel_processor import reel_source_for
+
+    _stage_recording(tmp_path, "game-A")
+    (tmp_path / "game-A" / "match_info.ini").unlink()
+    assert (
+        reel_source_for(str(tmp_path / "game-A"), _make_moment_clip(0, "game-A"))
+        is None
+    )

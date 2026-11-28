@@ -39,8 +39,7 @@ from ..utils.ffmpeg_utils import trim_video
 from .base_queue_processor import QueueProcessor
 from .queue_type import QueueType
 from .recording_locator import (
-    find_processed_video,
-    find_trimmed_raw_video,
+    ready_broadcast_for,
     resolve_recording_dir,
 )
 from .tasks.clips.highlight_compilation_task import HighlightCompilationTask
@@ -58,18 +57,47 @@ def reel_source_for(recording_dir: str, clip: dict) -> str | None:
     trimmed offset (ClipDiscoveryProcessor), and game clips are cut by a coach
     on the uploaded game video. So:
 
-    - a game clip cut from the full-field upload (``video_type == "full"``)
-      comes from the trimmed full-field ``<slug>-raw.mp4``;
-    - everything else comes from the broadcast ``<slug>.mp4``, falling back to
-      ``<slug>-raw.mp4`` (same timeline) before the broadcast has rendered.
+    - a game clip cut from the full-field upload (``video_type`` ``full`` or
+      ``raw``) comes from the trimmed full-field ``<slug>-raw.mp4``;
+    - everything else comes from the broadcast ``<slug>.mp4`` once it has
+      finished rendering from this trim, else ``<slug>-raw.mp4`` (same
+      timeline). The raw path is the exact one the game's match info names.
 
     Never ``combined.mp4``: it is untrimmed, so these offsets would land early
     by the length of the trimmed-off pre-game footage. Reels were cut from it
     until 2026-11-27.
     """
-    if clip.get("video_type") == "full":
-        return find_trimmed_raw_video(recording_dir)
-    return find_processed_video(recording_dir) or find_trimmed_raw_video(recording_dir)
+    raw = _trimmed_raw_for(recording_dir)
+    if raw is None:
+        return None
+    if clip.get("video_type") in _FULL_FIELD_TYPES:
+        return raw
+    return ready_broadcast_for(raw, recording_dir)
+
+
+# TTT game_videos.video_type values that mean the full-field (panorama) upload.
+_FULL_FIELD_TYPES = ("full", "raw")
+
+
+def _trimmed_raw_for(recording_dir: str) -> str | None:
+    """The game's trimmed ``<slug>-raw.mp4`` at the exact path its match info
+    names -- the same path clip discovery uses -- or None. Never a directory
+    scan: a re-trim after a team/opponent fix can leave an older game
+    subdirectory beside the current one."""
+    from video_grouper.models import MatchInfo
+    from video_grouper.utils.paths import get_trimmed_video_path
+
+    ini = os.path.join(recording_dir, "match_info.ini")
+    info = MatchInfo.from_file(ini) if os.path.exists(ini) else None
+    if info is None:
+        return None
+    raw = get_trimmed_video_path(
+        recording_dir,
+        info,
+        os.path.dirname(os.path.abspath(recording_dir)),
+        create_dir=False,
+    )
+    return raw if os.path.isfile(raw) else None
 
 
 class HighlightReelProcessor(QueueProcessor):
@@ -266,8 +294,10 @@ class HighlightReelProcessor(QueueProcessor):
                 if not source:
                     if reel_id not in self._already_skipped:
                         reason = (
-                            f"Clip {idx}: no trimmed game video (<slug>.mp4 or "
-                            f"<slug>-raw.mp4) in {resolved_dir} yet"
+                            f"Clip {idx}: no trimmed game video in {resolved_dir}. "
+                            "The game must be trimmed (match info + trim) before a "
+                            "reel can be cut; recordings from before trimming "
+                            "existed only have combined.mp4 and can't be used."
                         )
                         logger.info(
                             "HIGHLIGHT_REEL: reel %s skipped — clip %d has no trimmed game video in %s",
