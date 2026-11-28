@@ -491,6 +491,16 @@ h3 {
   margin-top: 4px;
 }
 
+/* Long unbroken identifiers -- camera file names, errors that quote them --
+   wrap inside their cell instead of widening the whole page. */
+.wrap-anywhere {
+  overflow-wrap: anywhere;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -879,6 +889,25 @@ kbd,
   background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border-light);
   color: var(--color-text-primary);
+}
+
+/* Label / value pairs: the facts about one thing, before acting on it */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 16px 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  color: var(--color-text-secondary);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 pre {

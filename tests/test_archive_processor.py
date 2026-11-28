@@ -989,3 +989,58 @@ class TestFinishInterruptedReclaim:
 
         assert Path(_archived_copy(archive_root)).read_bytes() == b"x" * 4096
         assert not os.path.exists(group_dir)
+
+
+class TestSkippedDownloadUnblocksArchive:
+    """The case that motivated Skip: one corrupt recording the camera keeps
+    listing holds the watermark, so a later, published game can never be
+    archived. Skipping it is the person's way out -- end to end through the
+    real poller watermark and the real archive guard."""
+
+    @pytest.mark.asyncio
+    async def test_skipping_the_stuck_file_lets_the_later_game_archive(
+        self, temp_storage, archive_root, archive_config
+    ):
+        from video_grouper.models.directory_state import skip_download
+        from video_grouper.task_processors.camera_poller import CameraPoller
+
+        # An earlier game whose one recording never downloads.
+        stuck_dir = os.path.join(temp_storage, "2026.07.05-10.00.00")
+        Path(stuck_dir).mkdir(parents=True)
+        stuck_path = os.path.join(stuck_dir, "corrupt.mp4")
+        await DirectoryState(stuck_dir).add_file(
+            stuck_path,
+            RecordingFile(
+                start_time=datetime(2026, 7, 5, 10, 0, 0),
+                end_time=datetime(2026, 7, 5, 10, 30, 0),
+                file_path=stuck_path,
+                status="download_failed",
+                metadata={"path": "/mnt/sd/corrupt.mp4", "camera_name": "default"},
+            ),
+        )
+        # A later game, published and ready to archive.
+        game_dir = await _make_group(
+            temp_storage, "2026.07.12-10.00.00", camera_name="default"
+        )
+
+        camera = Mock()
+        camera.name = "default"
+        poller = CameraPoller(temp_storage, archive_config, camera, Mock())
+        processor = ArchiveProcessor(temp_storage, archive_config)
+
+        await poller._advance_completion_watermark()
+        held = await ArchiveTask(group_dir=game_dir).execute(
+            archive_root=archive_root, watermark=processor._read_watermark({"default"})
+        )
+        assert held is False, "precondition: the stuck file blocks the archive"
+
+        skip_download(
+            temp_storage, "2026.07.05-10.00.00", "corrupt.mp4", by="dashboard"
+        )
+        await poller._advance_completion_watermark()
+
+        ok = await ArchiveTask(group_dir=game_dir).execute(
+            archive_root=archive_root, watermark=processor._read_watermark({"default"})
+        )
+        assert ok is True
+        assert os.path.exists(_archived_copy(archive_root))

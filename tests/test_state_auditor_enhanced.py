@@ -866,5 +866,62 @@ class TestStateAuditorTerminalGroupDownloads:
         download_processor.add_work.assert_called_once()
 
 
+class TestSkippedDownloadsAreNotRequeued:
+    """The auditor re-queues every ``download_failed`` file on each pass --
+    that is what keeps a corrupt recording failing forever. A file a person
+    skipped must drop out of that loop; its unskipped sibling must not."""
+
+    @patch("video_grouper.task_processors.services.teamsnap_service.TeamSnapAPI")
+    @patch("video_grouper.task_processors.services.playmetrics_service.PlayMetricsAPI")
+    @patch("video_grouper.task_processors.services.ntfy_service.NtfyAPI")
+    @pytest.mark.asyncio
+    async def test_skipped_file_is_not_requeued(
+        self,
+        mock_ntfy,
+        mock_playmetrics,
+        mock_teamsnap,
+        mock_config,
+        tmp_path,
+    ):
+        from datetime import datetime, timedelta
+
+        from video_grouper.models import DirectoryState, RecordingFile
+        from video_grouper.models.directory_state import skip_download
+
+        mock_ntfy.return_value.enabled = True
+        mock_ntfy.return_value.initialize = AsyncMock()
+
+        group_dir = tmp_path / "2026.07.01-10.00.00"
+        group_dir.mkdir()
+        dir_state = DirectoryState(str(group_dir))
+        start = datetime(2026, 7, 1, 10, 0, 0)
+        for i, name in enumerate(["corrupt.mp4", "flaky.mp4"]):
+            path = str(group_dir / name)
+            await dir_state.add_file(
+                path,
+                RecordingFile(
+                    start_time=start + timedelta(minutes=30 * i),
+                    end_time=start + timedelta(minutes=30 * (i + 1)),
+                    file_path=path,
+                    status="download_failed",
+                    metadata={"path": f"/mnt/sd/{name}"},
+                ),
+            )
+        skip_download(str(tmp_path), group_dir.name, "corrupt.mp4", by="dashboard")
+
+        download_processor = AsyncMock()
+        auditor = StateAuditor(
+            str(tmp_path), mock_config, download_processor, AsyncMock()
+        )
+        auditor.cleanup_service = AsyncMock()
+
+        await auditor._audit_directory(str(group_dir))
+
+        queued = [
+            c.args[0].file_path for c in download_processor.add_work.call_args_list
+        ]
+        assert queued == [str(group_dir / "flaky.mp4")]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -38,6 +38,24 @@ _STATUS = {
     "queue_sizes": {"download": 2, "video": 0, "upload": 1},
 }
 
+# A download that keeps failing, as list_stuck_downloads reports it: the
+# camera still lists it, so it was never abandoned, and it holds the watermark.
+_STUCK = [
+    {
+        "group": "2026.08.22-09.30.00",
+        "file_name": "RecM09_20260822_093000_101500_6D28808_2F4A1B20.mp4",
+        "camera": "Field cam",
+        "status": "download_failed",
+        "start_time": "2026-08-22T09:30:00",
+        "end_time": "2026-08-22T10:15:00",
+        "failed_attempts": 6,
+        # What a corrupt segment on the card looks like through the HTTP
+        # fast path: the camera stops serving partway, every time.
+        "last_error": "HTTP transfer stopped short: 412,090,368 of 786,432,000 bytes",
+        "last_failed_at": "2026-08-23T07:41:12",
+    }
+]
+
 
 class _CameraState:
     """The few fields the camera step reads off the wizard's session state."""
@@ -72,6 +90,8 @@ def render_all() -> dict[str, str]:
     dash = auth_server._DASHBOARD_BODY
     for placeholder, value in {
         "__AUTH_FLAGS_BANNER__": "",
+        "__FLASH_BANNER__": "",
+        "__STUCK_BLOCK__": auth_server._render_stuck_downloads_section(_STUCK),
         "__AUTH_BLOCK__": '<p><span class="status-dot on"></span>'
         "Signed in as coach@example.com</p>",
         "__YOUTUBE_BLOCK__": '<p class="muted">Connected. Uploads go to '
@@ -118,6 +138,7 @@ def render_all() -> dict[str, str]:
         # leaks into the preview. Its JS finds no live feed here, but the
         # layout is real.
         "stitch.html": stitch_calibration._render_page({"errors": []}),
+        "skip-download.html": auth_server._render_skip_confirm_page(_STUCK[0]),
     }
 
     # The camera step with cameras found. Only reachable for real when ONVIF
@@ -179,6 +200,7 @@ _GROUPS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
             ("config-error.html", "Settings — validation failed", ""),
             ("sign-in-failed.html", "Sign-in failed", ""),
             ("setup-camera-found.html", "Camera step — cameras found", ""),
+            ("skip-download.html", "Skip a failing download — confirm", ""),
         ],
     ),
     (

@@ -15,8 +15,12 @@ from video_grouper.utils.locking import FileLock
 from video_grouper.utils.paths import get_camera_state_path
 
 from . import register_camera
-from .base import Camera, ConfigResult, DeviceInfo
-from .reolink_download import download_and_mux
+from .base import Camera, ConfigResult, DeviceInfo, describe_download_error
+from .reolink_download import (
+    collect_failure_notes,
+    download_and_mux,
+    summarize_failure_notes,
+)
 
 # Default timeout for camera HTTP requests (30 seconds connect, 60 seconds read)
 CAMERA_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=30.0)
@@ -567,6 +571,7 @@ class ReolinkCamera(Camera):
         This uses the native Baichuan binary protocol to stream the recording
         to disk, then remuxes to MP4 via PyAV.
         """
+        self.last_download_error = None
         try:
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
@@ -595,23 +600,29 @@ class ReolinkCamera(Camera):
             # Extract hostname without port (device_ip may be "host:port")
             baichuan_host = self.device_ip.split(":")[0]
 
-            success = await download_and_mux(
-                host=baichuan_host,
-                port=self.config.baichuan_port,
-                username=self.username,
-                password=self.password,
-                file_path=file_path,
-                output_mp4=local_path,
-                channel=self.channel,
-                on_progress=_progress,
-                http_port=self.config.http_port,
-                download_protocol=self.config.download_protocol,
-            )
+            with collect_failure_notes() as notes:
+                success = await download_and_mux(
+                    host=baichuan_host,
+                    port=self.config.baichuan_port,
+                    username=self.username,
+                    password=self.password,
+                    file_path=file_path,
+                    output_mp4=local_path,
+                    channel=self.channel,
+                    on_progress=_progress,
+                    http_port=self.config.http_port,
+                    download_protocol=self.config.download_protocol,
+                )
 
             if success:
                 self.logger.info(f"Download complete: {os.path.basename(file_path)}")
             else:
-                self.logger.error(f"Download failed: {os.path.basename(file_path)}")
+                # None when no path left a note; DownloadProcessor says so.
+                self.last_download_error = summarize_failure_notes(notes)
+                self.logger.error(
+                    f"Download failed: {os.path.basename(file_path)}"
+                    f" ({self.last_download_error or 'no reason given'})"
+                )
                 if os.path.exists(local_path):
                     try:
                         os.remove(local_path)
@@ -621,6 +632,7 @@ class ReolinkCamera(Camera):
 
         except Exception as e:
             self.logger.error(f"Error downloading {file_path}: {e}")
+            self.last_download_error = describe_download_error(e)
             if os.path.exists(local_path):
                 try:
                     os.remove(local_path)
