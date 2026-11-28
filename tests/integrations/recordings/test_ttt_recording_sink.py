@@ -19,7 +19,7 @@ from video_grouper.integrations.registry import IntegrationContext
 
 def _client(signed_in=True):
     c = MagicMock()
-    c.is_authenticated.return_value = signed_in
+    c.ensure_signed_in.return_value = signed_in
     c.get_team_assignments.return_value = [{"team_id": "team-1"}]
     c.register_recordings.return_value = [{"id": "rec-1"}]
     c.get_game_session_by_dir.return_value = {"id": "sess-1"}
@@ -283,3 +283,36 @@ async def test_recordings_are_reported_under_the_camera_that_recorded_them(tmp_p
     sink = TTTRecordingSink(client, cameras=cameras)
     await sink.recording_found(str(_group(tmp_path)), [_file()], camera="back")
     assert client.register_recordings.call_args.args[0] == "c-back"
+
+
+@pytest.mark.asyncio
+async def test_a_camera_ttt_refused_is_not_reported_under_another_id(tmp_path, caplog):
+    import logging
+
+    from video_grouper.integrations.ttt_cameras import TTTCameraIds
+
+    cameras = TTTCameraIds(None, "typed")
+    cameras.update({"front": "c-front"})  # "back" was refused at registration
+    client = _client()
+    sink = TTTRecordingSink(client, cameras=cameras)
+    with caplog.at_level(logging.INFO):
+        for _ in range(3):
+            await sink.recording_found(str(tmp_path), [_file()], camera="back")
+    client.register_recordings.assert_not_called()
+    logged = [r for r in caplog.records if "has no TTT camera id" in r.message]
+    assert len(logged) == 1 and "back" in logged[0].message
+
+
+# -- an expired access token is refreshed, not read as signed out -------------
+
+
+@pytest.mark.asyncio
+async def test_an_expired_token_is_refreshed_and_phases_are_written(expired_ttt):
+    expired_ttt.routes[("GET", "/api/game-sessions")] = [{"id": "sess-1"}]
+    expired_ttt.routes[("PATCH", "/api/internal/game-sessions/sess-1/phases")] = {}
+    sink = TTTRecordingSink(expired_ttt.client, camera_id="cam-1")
+    payload = {"times": {"kickoff": 12.0}, "ok": True}
+    assert await sink.phases("/s/grp-1", payload) is True
+    (patch,) = expired_ttt.calls("PATCH", "/api/internal/game-sessions/sess-1/phases")
+    assert json.loads(patch.content)["phase_kickoff_offset"] == 12.0
+    assert expired_ttt.refreshes == 1

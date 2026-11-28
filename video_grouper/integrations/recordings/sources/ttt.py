@@ -94,6 +94,8 @@ class TTTRecordingSink(IRecordingSink):
         # camera name -> TTT camera id, filled by the TTT device link
         self._cameras = cameras
         self._team_id: str | None = None
+        # cameras already logged as having no TTT id (logged once each)
+        self._unreported_cameras: set[str] = set()
 
     @classmethod
     def from_context(cls, context) -> TTTRecordingSink | None:
@@ -103,9 +105,11 @@ class TTTRecordingSink(IRecordingSink):
 
     # -- helpers -------------------------------------------------------------
 
-    def _signed_in(self) -> bool:
+    async def _signed_in(self) -> bool:
+        """The shared session is usable (refreshed when expired), checked off
+        the event loop because a refresh is a network call."""
         try:
-            return bool(self._client.is_authenticated())
+            return bool(await asyncio.to_thread(self._client.ensure_signed_in))
         except Exception:
             return False
 
@@ -131,7 +135,19 @@ class TTTRecordingSink(IRecordingSink):
         self, group_dir: str, files: list[Any], camera: str | None = None
     ) -> None:
         camera_id = self._cameras.id_for(camera)
-        if not camera_id or not files or not self._signed_in():
+        if not camera_id:
+            # Not registered with TTT (or TTT refused it): its recordings are
+            # not reported, rather than reported under another camera's id.
+            key = camera or ""
+            if key not in self._unreported_cameras:
+                self._unreported_cameras.add(key)
+                logger.info(
+                    "TTT: camera %s has no TTT camera id; its recordings are "
+                    "not reported to TTT",
+                    camera or "(unnamed)",
+                )
+            return
+        if not files or not await self._signed_in():
             return
         try:
             file_group = _dir_name(group_dir)
@@ -168,7 +184,7 @@ class TTTRecordingSink(IRecordingSink):
             from video_grouper.models import DirectoryState
 
             recording_id = DirectoryState(group_dir).ttt_recording_id
-            if not recording_id or not self._signed_in():
+            if not recording_id or not await self._signed_in():
                 return
             await asyncio.to_thread(
                 lambda: self._client.update_recording_step(
@@ -193,7 +209,7 @@ class TTTRecordingSink(IRecordingSink):
     async def published(
         self, group_dir: str, video_url: str, recorded_at: datetime
     ) -> None:
-        if not self._signed_in():
+        if not await self._signed_in():
             return
         try:
             team_id = await asyncio.to_thread(self._team_id_sync)
@@ -226,7 +242,7 @@ class TTTRecordingSink(IRecordingSink):
         return await self._write_session(group_dir, {column: verdict})
 
     async def _write_session(self, group_dir: str, fields: dict[str, Any]) -> bool:
-        if not self._signed_in():
+        if not await self._signed_in():
             return False
         try:
             session_id = await asyncio.to_thread(self._session_id_sync, group_dir)

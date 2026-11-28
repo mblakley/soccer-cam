@@ -33,3 +33,17 @@ def test_in_memory_store_writes_nothing(tmp_path, monkeypatch):
     ids.update({"front": "c-1"})
     assert ids.id_for("front") == "c-1"
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_named_camera_ttt_did_not_register_has_no_id(tmp_path):
+    """Once any camera has registered, an unregistered named camera (TTT
+    refused it) gets None -- not the configured id, which would report camera
+    B's recordings under camera A."""
+    ids = TTTCameraIds(str(tmp_path), "typed")
+    assert ids.id_for("back") == "typed"  # nothing registered yet: fallback
+    ids.update({"front": "c-1"})
+    assert ids.id_for("front") == "c-1"
+    assert ids.id_for("back") is None
+    assert ids.id_for(None) == "c-1"  # unnamed: the only registered camera
+    ids.update({"side": "c-3"})
+    assert ids.id_for(None) == "typed"  # unnamed and ambiguous: configured id

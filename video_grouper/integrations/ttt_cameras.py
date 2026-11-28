@@ -7,8 +7,9 @@ recording under the camera that recorded it. Persisted to
 registration of the run. TTT-implementation state: nothing outside the TTT
 sources reads it.
 
-Until a camera is registered, the hand-typed ``[TTT] camera_id`` still serves
-as its id (installs from before self-registration keep working).
+Until any camera is registered, the hand-typed ``[TTT] camera_id`` still serves
+as the id (installs from before self-registration keep working); once one is,
+a named camera TTT didn't register has no id.
 """
 
 from __future__ import annotations
@@ -61,11 +62,21 @@ class TTTCameraIds:
                 logger.warning("TTT: could not save %s: %s", self._path, e)
 
     def id_for(self, camera_name: str | None) -> str | None:
-        """TTT's id for ``camera_name``; the configured id when unregistered."""
+        """TTT's id for ``camera_name``.
+
+        Before any camera has registered, every camera gets the configured id.
+        Once one has, a named camera that isn't registered (TTT refused it, or
+        it hasn't been described yet) gets None -- never the configured id,
+        which would report camera B's recordings under camera A. With no name:
+        the only registered id, else the configured one.
+        """
         with self._lock:
-            if camera_name and camera_name in self._ids:
-                return self._ids[camera_name]
-            if camera_name is None and len(self._ids) == 1:
+            if camera_name:
+                if camera_name in self._ids:
+                    return self._ids[camera_name]
+                if self._ids:
+                    return None
+            elif len(self._ids) == 1:
                 return next(iter(self._ids.values()))
         return self._fallback
 
