@@ -261,6 +261,14 @@ else
 MULTIWIN_TAG=""
 fi
 
+echo "==> 2c) GATE: the daemon's own test must pass on the script being installed"
+if ! sh "$HERE/../verify/test_roiqp_daemon.sh" > "$WORK/daemon_test.txt" 2>&1; then
+    cat "$WORK/daemon_test.txt"
+    echo "ERROR: verify/test_roiqp_daemon.sh failed; not building a pak around this daemon"
+    exit 1
+fi
+echo "   $(tail -1 "$WORK/daemon_test.txt")"
+
 echo "==> 3) install S37_RoiQp + default config"
 install -m 0755 "$INIT_SRC" rootfs_unpacked/etc/init.d/S37_RoiQp
 install -m 0644 "$CONF_SRC" rootfs_unpacked/etc/soccercam_roi.conf.default
