@@ -532,7 +532,7 @@ treats two enabled windows that overlap, or their priority order. That needs
 the camera. **Answered 2026-11-28 on build 4923: the lower index wins**
 (EXP-ENC-09, three alternating captures per order, ranges do not overlap).
 
-`S37_RoiQp` drove window 0 only through build 4923. From build 4924 (staged
+`S37_RoiQp` drove window 0 only through build 4923. From build 4924 (flashed
 2026-11-28) it drives up to ten from `winN=` lines in `roi.conf`, refuses more
 than window 0 on a build whose manifest does not say `multiwin`, and treats a
 kernel echo that does not match what it sent as a failure. Its disable clears

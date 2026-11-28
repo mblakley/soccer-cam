@@ -1,6 +1,6 @@
 # Current Status
 
-*Last updated: 2026-11-28 — far-field bits: build 4923 (ten ROI windows) flashed and working*
+*Last updated: 2026-11-28 — far-field bits: build 4924 (ten ROI windows, daemon drives them) flashed and working*
 
 ## 2026-11-28 — FAR-FIELD BITS: build 4923 is on the camera; ten windows work; lower index wins an overlap
 
@@ -16,16 +16,18 @@
 - **The far-ball count was rerun with the clip fullscreen and did not give a usable number** (the
   count cannot tell a moving ball from a stale copy; details and the caveat it puts on EXP-ENC-08's
   percentages are in EXP-ENC-09).
-- **Camera left:** build 4923, not recording (`GetRecV20 enable=0`, no override flag, newest file
+- **Camera left:** build 4924, not recording (`GetRecV20 enable=0`, no override flag, newest file
   2026-08-22), image settings identical to the saved start state, encoder 20480 kbps / `gop=2` with
   the kernel's rate control confirmed back at 20.97 Mbps, all ROI windows cleared, `roi.conf`
   `enable=0`. Still at 192.168.86.22.
-- **Build 4924 staged, not flashed (needs Mark's yes):** 4923 plus a daemon that takes
+- **Build 4924 flashed (Mark's go-ahead) and is what the camera runs:** 4923 plus a daemon that takes
   `winN=x,y,w,h,qp` lines for up to ten windows, refuses them on a single-window build, and
   reverts to stock when the kernel's echo does not match. `verify/test_roiqp_daemon.sh`, 27 checks,
-  is a build gate. Against 4923 only the daemon and the manifest differ.
-- **Next:** (1) flash 4924 and run a three-band config on it; then make `fieldroi` write bands
-  (far band on the lowest index) instead of one rectangle — that needs no flash;
+  is a build gate. Against 4923 only the daemon and the manifest differ. On the camera a three-band
+  `roi.conf` was applied with matching kernel echoes, a bad config reverted everything, and
+  `enable=0` cleared all ten (BUILD_LOG). Left with `enable=0`.
+- **Next:** (1) make `fieldroi` write bands (far band on the lowest index) instead of one
+  rectangle — that needs no flash — and choose the QP grading on archived game footage;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
   window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps.
 - **TTT hand-off done (Mark's go-ahead):** the camera checklist ran; results are in PR #163
