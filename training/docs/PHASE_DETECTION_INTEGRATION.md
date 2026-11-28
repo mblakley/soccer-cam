@@ -10,7 +10,7 @@ human-verified + correctable through a TTT-triggered, NTFY-screenshot review loo
 > "suspended", game-start stays NTFY) is **superseded.** The untrimmed-KO detector cleared the
 > trim-safety bar (gate `ko_trustworthy` + 60s backup + Reolink-only + Dahua→NTFY + truncated-start
 > option B); Mark confirmed the flip on 2026-07-02; `[PROCESSING] game_start_method = phase_detection`
-> is the shipped default on `main`. See soccer-cam STATUS.md / DECISIONS.md 2026-07-02. The remaining
+> is the shipped default on `main`. See DECISIONS.md 2026-07-02. The remaining
 > accuracy gap is display-quality (S3 verify-loop + human-verify), not trim-safety.
 
 ---
