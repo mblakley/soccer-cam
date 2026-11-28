@@ -361,9 +361,10 @@ Publisher project: **`team-tech-tools-app`** ("Team Tech Tools", org
 teamtechtools.com, owner admin@teamtechtools.com, number 435575856533).
 
 - [x] Cloud Resource Manager + Service Usage APIs enabled.
-- [x] Data Access: `youtube`, `youtube.upload`, `youtube.readonly`,
-      `cloudplatformprojects`, `service.management` (sensitive); `openid`,
-      `userinfo.email` (non-sensitive).
+- [x] Data Access: `youtube`, `youtube.upload`, `cloudplatformprojects`,
+      `service.management` (sensitive); `openid`, `userinfo.email`
+      (non-sensitive). `youtube.readonly` dropped (covered by `youtube`).
+      Scope justification saved.
 - [x] Branding: home/privacy/terms on www.teamtechtools.com; authorized domains
       `teamtechtools.com` plus both TTT Supabase projects (Preview
       `opirofrhbffpszrnzsyp`, Prod `zmuwmngqqiaectpcqlfj`).
@@ -373,9 +374,13 @@ teamtechtools.com, owner admin@teamtechtools.com, number 435575856533).
       repo secrets `SOCCER_CAM_YT_CLIENT_ID` / `SOCCER_CAM_YT_CLIENT_SECRET`.
       One client serves TTT Preview and Prod alike: it only redirects to
       loopback, and the TTT environment is chosen by `[TTT].api_base_url`.
-- [ ] Submit verification (Verification Center). Needs teamtechtools.com
-      verified in Search Console for admin@teamtechtools.com, a demo video of
-      each scope in use, and the scope justifications.
+- [x] App name **Team Tech Tools**; branding verified by Google and published.
+- [x] TTT Prod Google sign-in moved onto this project: web client
+      `TTT Supabase Google sign-in (production)` (redirect to the Prod Supabase
+      callback), set in Prod Supabase Auth. Preview keeps `Web client 1`.
+- [ ] Submit data-access verification. Blocked on: TTT `/privacy` Google
+      user-data section (team-tech-tools #177) reaching production, and an
+      unlisted YouTube demo video covering every OAuth client in the project.
 
 Note: this consent screen is shared with TTT Preview's Google sign-in
 (`Web client 1`, redirect to the Preview Supabase callback), so its app name
