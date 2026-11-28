@@ -4,6 +4,53 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-11: the field-colour check reads the colour from the field — blue turf accepted (2026-11-28)
+
+**Why:** `fieldroi` refused any frame whose claimed field rows were not mostly green. The indoor
+dome is blue turf (`flash__2026.03.21_vs_Cuyahoga_Valley_SA_home`, same camera, full-size pitch),
+so there it could only be used with the check switched off. Mark: no manual bypass; sample the
+middle of the field and use that as the field's colour.
+
+**Method:** the field's colour is the per-channel median of a patch in the middle of the claimed
+field (middle 30 % of the width, middle 40 % of the rows). It must be a colour (brightest channel
+>= 40, spread between channels >= 24). Then the share of the claimed rows (centre 70 % of the
+width) within a tolerance of that colour, in channel shares r/(r+g+b), g/(r+g+b), must be >= 60 %.
+Tolerance swept on four outdoor games, the dome, camera snapshots of a room, and blank frames;
+each also with the outline deliberately moved (up 35 %, down 35 %, twice as tall).
+
+**Result** (share of claimed rows in the field's colour):
+
+| frame | middle colour (R,G,B) | tol 0.06, outline as found | tol 0.08, as found | tol 0.08, outline moved |
+|---|---|---|---|---|
+| Lakefront | 140,143,97 | 0.92 | 0.96 | 0.90–0.97 |
+| Chili | 111,142,63 | 0.81 | 0.86 | 0.77–0.84 |
+| Fairport | 89,95,47 | 0.76 | 0.86 | 0.70–0.79 |
+| Niagara | 137,131,58 | 0.83 | 0.89 | 0.76–0.88 |
+| blue dome | 26,60,144 | 0.64 | **0.75** | 0.47–0.63 |
+| room, desk | 61,61,61 | refused: not a colour | | |
+| room with a TV | 80,78,78 | refused: not a colour | | |
+| grey / black / black-and-white game frame | | refused: not a colour | | |
+
+Tolerance 0.08 chosen: the dome clears the 60 % line with margin (0.06 left it at 0.64).
+`--min-green` is removed; nothing turns the check off. `verify/test_fieldroi.sh` now also requires
+the reference frame in black and white to be refused for that reason, the old option to be an
+error, and (given a fifth argument) a blue-turf frame to be accepted. On the camera (build 4924)
+the new binary accepted the dome frame, wrote bands 112–592 / 592–1040 / 1040–1824, and the
+daemon applied them; 79 s at `nice 19`.
+
+**What the check is worth — less than it looks.** With the outline moved, the outdoor frames
+still score 0.70–0.97: grass beyond the touchline and trees are the field's colour too, so the
+check cannot tell a misplaced outline from a good one outdoors. (The old green-only check could not
+either.) On the dome it can, because the surroundings are yellow. It also accepted yesterday's
+camera snapshot of the TV showing a pitch (middle colour 125,160,172, share 0.64), which the
+green-only check had refused. So it guards against "this is not a field at all" — a blank frame,
+night vision, a room with no dominant colour — and nothing more.
+
+**Not covered:** the dome is one frame, and the model's keypoint scores there are 0.30–0.45
+against up to 0.87 outdoors; its far line was about 125 rows too low (the known direction, inside
+the 200-row padding). A misplaced outline needs a different check — the obvious one is agreement
+between two or three snapshots taken seconds apart — and that is not built.
+
 ## EXP-ENC-10: which QP grading for field bands — three bands at -10/-6/-3 (2026-11-28)
 
 **Hypothesis:** at the camera's fixed bitrate, bands graded by depth (strong far, weak near) put

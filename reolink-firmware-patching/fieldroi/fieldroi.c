@@ -45,8 +45,9 @@
  *                    Needs the ten-window firmware (build 4923 or later);
  *                    S37_RoiQp refuses the file on anything else.
  *   --min-score F    keypoints below this are ignored   (default 0.15)
- *   --min-green F    share of the claimed field rows that must be grass-
- *                    coloured, or the result is refused (default 0.6)
+ *
+ * There is no switch that turns the field-colour check off. If the frame is
+ * not a field, the answer is no config.
  *   --keypoints      print keypoints only, no roi.conf
  *
  * The far padding is generous on purpose. The model's known error is a far
@@ -72,6 +73,12 @@
 #define IN_W 768
 #define IN_H 384
 #define NKPT 10
+/* The field-colour check (see main). Level and chroma are 8-bit; tolerance is a
+ * distance in channel shares (r/(r+g+b), g/(r+g+b)). Calibrated in EXP-ENC-11. */
+#define MIN_TURF_LEVEL 40
+#define MIN_TURF_CHROMA 24
+#define TURF_TOLERANCE 0.08
+#define MIN_TURF_SHARE 0.60 /* of the claimed rows, centre 70 % of the width */
 
 static void die(const char *msg)
 {
@@ -657,13 +664,13 @@ int main(int argc, char **argv)
 {
     if (argc < 3) {
         fprintf(stderr, "usage: fieldroi <weights.bin> <frame.ppm> [--frame WxH] [--pad-far N]\n"
-                        "                [--pad-near N] [--qp N] [--min-score F] [--min-green F]\n"
+                        "                [--pad-near N] [--qp N] [--min-score F]\n"
                         "                [--bands F,M,N] [--keypoints]\n");
         return 2;
     }
     int fw = 7680, fh = 2160, pad_far = 200, pad_near = 200, qp = -6, only_kpts = 0;
     int bands = 0, band_qp[3] = {0, 0, 0};
-    double min_score = 0.15, min_green = 0.6;
+    double min_score = 0.15;
     const char *dump_input = NULL;
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--keypoints"))
@@ -686,8 +693,6 @@ int main(int argc, char **argv)
             bands = 1;
         } else if (!strcmp(argv[i], "--min-score"))
             min_score = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--min-green"))
-            min_green = atof(argv[++i]);
         else if (!strcmp(argv[i], "--dump-input"))
             dump_input = argv[++i];
         else
@@ -763,30 +768,66 @@ int main(int argc, char **argv)
     /* The network always answers. Shown a uniformly grey or black frame it
      * still returns a tidy outline with ordinary scores (measured), so the
      * scores cannot tell a field from a lens cap. Ask the picture instead: the
-     * rows it claims are pitch must actually be mostly green. Centre 70 % of
+     * rows it claims are pitch must actually be mostly one colour: the colour of its own middle. Centre 70 % of
      * the width, because the pitch's corners fall away at the edges. */
     {
         int ya = (int)(far_y * IN_H / fh), yb = (int)(near_y * IN_H / fh);
         ya = ya < 0 ? 0 : ya;
         yb = yb > IN_H ? IN_H : yb;
-        long green = 0, total = 0;
+        /* What colour is this field? Not every pitch is green: the indoor dome
+         * is blue. Take the colour from the middle of the claimed field -- the
+         * per-channel median of a patch, not one pixel, because the halfway
+         * line, a logo or a player may be standing exactly there. */
+        static long hist[3][256];
+        memset(hist, 0, sizeof(hist));
+        long np = 0;
+        for (int y = ya + (yb - ya) * 30 / 100; y < ya + (yb - ya) * 70 / 100; y++)
+            for (int x = IN_W * 35 / 100; x < IN_W * 65 / 100; x++) {
+                const uint8_t *px = rgb + ((size_t)y * IN_W + x) * 3;
+                hist[0][px[0]]++, hist[1][px[1]]++, hist[2][px[2]]++;
+                np++;
+            }
+        int ref[3] = {0, 0, 0};
+        for (int c = 0; c < 3 && np; c++) {
+            long acc = 0;
+            for (int v = 0; v < 256; v++)
+                if ((acc += hist[c][v]) * 2 >= np) {
+                    ref[c] = v;
+                    break;
+                }
+        }
+        int mx = ref[0] > ref[1] ? ref[0] : ref[1], mn = ref[0] < ref[1] ? ref[0] : ref[1];
+        mx = mx > ref[2] ? mx : ref[2];
+        mn = mn < ref[2] ? mn : ref[2];
+        fprintf(stderr, "colour at the middle of the claimed field: R %d G %d B %d\n", ref[0], ref[1], ref[2]);
+        /* A grey, black or white frame matches its own middle perfectly, so the
+         * middle must first be a colour at all. This is what refuses a lens
+         * cap, a blank frame and the night-vision (black-and-white) picture. */
+        if (mx < MIN_TURF_LEVEL || mx - mn < MIN_TURF_CHROMA) {
+            fprintf(stderr, "fieldroi: REFUSED: the middle of the claimed field is not a colour (R %d G %d B %d)\n",
+                    ref[0], ref[1], ref[2]);
+            return 3;
+        }
+        /* Then most of the claimed rows must be that same colour. Compared by
+         * the share each channel has of the pixel's total, so sunlit and
+         * shadowed turf count as the same surface. */
+        double rs = ref[0] + ref[1] + ref[2], rr = ref[0] / rs, rg = ref[1] / rs;
+        long same = 0, total = 0;
         for (int y = ya; y < yb; y++)
             for (int x = IN_W * 15 / 100; x < IN_W * 85 / 100; x++) {
                 const uint8_t *px = rgb + ((size_t)y * IN_W + x) * 3;
-                int r = px[0], g = px[1], b = px[2];
-                /* "Grass" is yellow-green through green: sunlit turf has
-                 * red about equal to green (measured mean RGB 141,135,66 on
-                 * one game), so the test is that blue is clearly lowest and
-                 * red does not dominate. On four real games this passes 87 to
-                 * 93 % of the field rows; a grey or black frame scores 0. */
-                green += g * 20 >= r * 17 && g * 10 >= b * 11 && g - b >= 12;
+                int s = px[0] + px[1] + px[2];
                 total++;
+                if (s < 3 * MIN_TURF_LEVEL / 2)
+                    continue; /* too dark to have a colour */
+                double dr = (double)px[0] / s - rr, dg = (double)px[1] / s - rg;
+                same += dr * dr + dg * dg <= TURF_TOLERANCE * TURF_TOLERANCE;
             }
-        double frac = total ? (double)green / (double)total : 0.0;
-        fprintf(stderr, "green fraction inside the claimed field rows: %.2f\n", frac);
-        if (frac < min_green) {
-            fprintf(stderr, "fieldroi: REFUSED: only %.0f %% of the claimed field is green (need %.0f %%)\n",
-                    frac * 100, min_green * 100);
+        double frac = total ? (double)same / (double)total : 0.0;
+        fprintf(stderr, "share of the claimed field rows in that colour: %.2f\n", frac);
+        if (frac < MIN_TURF_SHARE) {
+            fprintf(stderr, "fieldroi: REFUSED: only %.0f %% of the claimed field is the colour of its middle (need %.0f %%)\n",
+                    frac * 100, MIN_TURF_SHARE * 100);
             return 3;
         }
     }

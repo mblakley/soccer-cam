@@ -34,6 +34,14 @@
 - **Grading chosen on game footage: `--bands -10,-6,-3`** (EXP-ENC-10, x265 proxy at the camera's
   bitrate): far band +4.7 dB, mid field +2.2 dB, near field unchanged, foreground −2.6 dB. One
   rectangle at −6 gives +1.7 to +2.0 dB everywhere on the field instead.
+- **The detector's colour check is adaptive now (Mark: no manual bypass; sample the middle of the
+  field).** It reads the field's colour from the middle of the claimed field, so the blue indoor
+  dome is accepted (0.75 against a 0.60 line) and grey, black and black-and-white frames are
+  refused; `--min-green` is gone. On the camera's card and run there on the dome frame
+  (EXP-ENC-11). It does NOT catch a misplaced outline outdoors, and it accepts a TV showing a
+  pitch; a multi-snapshot agreement check would, and is not built.
+- **Indoor option for a winter test:** the dome game ran at 12.5 Mbps and QP 31–33, under the cap
+  (outdoor games: at the cap, QP 34–35), on a full-size pitch with the same framing.
 - **Next:** (1) a live game or a real pitch: `fieldroi` on the camera's own snapshot, then the
   bands' effect in the recording — neither has been measured outdoors;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the

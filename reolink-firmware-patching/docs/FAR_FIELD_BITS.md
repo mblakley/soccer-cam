@@ -339,8 +339,11 @@ same numbers as the host build.
 
 **It refuses blank frames, but only because of a second check.** The network
 always answers: shown a uniformly grey or black frame it returns a tidy outline
-with ordinary scores. So the tool also requires the claimed field rows to be
-grass-coloured (87 to 93 % on real games, 0 % on grey or black).
+with ordinary scores. So the tool also checks the picture. Until 2026-11-28 that
+check was "the claimed rows are grass-coloured", which refused the blue indoor
+dome. It now reads the field's colour from the middle of the claimed field and
+requires most of the claimed rows to be that colour, and that colour not to be
+grey (EXP-ENC-11). There is no option that turns it off.
 
 **Not done, and not known:**
 

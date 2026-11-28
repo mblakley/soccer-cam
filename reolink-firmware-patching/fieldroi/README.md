@@ -49,10 +49,23 @@ bash reolink-firmware-patching/verify/test_fieldroi.sh \
 ```
 
 It exits non-zero and prints no config when the result does not look like a
-field: too few keypoints, a field under a quarter of the frame tall, claimed
-field rows that are not grass-coloured, or a snapshot that was cut short. The
-grass check exists because the network itself always answers, even for a black
-frame; the three archived camera snapshots (all indoors) are refused by it.
+field: too few keypoints, a field under a quarter of the frame tall, a field
+whose middle is grey, black or white, claimed field rows that are mostly not the
+colour of that middle, or a snapshot that was cut short.
+
+**The field-colour check is adaptive and has no off switch.** The network always
+answers, even for a black frame, so the picture is asked too. The field's colour
+is the per-channel median of a patch in the middle of the claimed field (not one
+pixel: the halfway line, a logo or a player may be there). That colour must be a
+colour (not grey: this is what refuses a lens cap and night vision), and at
+least 60 % of the claimed rows must match it, compared by channel share so sun
+and shadow count as one surface. Green grass and the blue indoor dome both pass
+(EXP-ENC-11).
+
+**What it does not do:** it cannot tell that an outline is in the wrong place
+when the surroundings are the field's colour too, which is the normal case
+outdoors (grass beyond the touchline, trees). It also accepts a television
+showing a pitch. It is a guard against "this is not a field at all", no more.
 
 A JPEG is read at one-eighth scale from its DC coefficients, which is what
 keeps a 7680x2160 snapshot inside the camera's memory. `--dump-input FILE`

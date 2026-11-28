@@ -14,7 +14,10 @@
 #   3. aarch64 build, JPEG input   == host build, JPEG input (same arithmetic,
 #                                     so the same numbers)
 #   4. refusals: truncated weights, grey / black / noise frames, a truncated
-#      JPEG -- each must exit non-zero AND print no config
+#      JPEG, and the reference frame in black and white -- each must exit
+#      non-zero AND print no config. With a fifth argument, a frame of a pitch
+#      that is not green (the blue indoor dome) must be ACCEPTED: the field's
+#      colour is read from the middle of the field, not assumed.
 #
 # Step 3 is the camera's real case: its build, its input format. It runs under
 # qemu-aarch64-static, which proves the numbers and says nothing about how long
@@ -28,11 +31,12 @@
 #   2. bash verify/test_fieldroi.sh OUT.frw FRAME.ppm REF.txt REF.jpg
 set -euo pipefail
 
-USAGE="usage: $0 <weights.frw> <frame.ppm> <reference.txt> <same-frame.jpg>"
+USAGE="usage: $0 <weights.frw> <frame.ppm> <reference.txt> <same-frame.jpg> [blue-turf-frame.jpg]"
 FRW="${1:?$USAGE}"
 PPM="${2:?$USAGE}"
 REF="${3:?$USAGE}"
 JPG="${4:?$USAGE}"
+BLUE="${5:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$HERE/../fieldroi/fieldroi.c"
 WORK="$(mktemp -d)"
@@ -79,7 +83,7 @@ echo "==> 1) host build, PPM input, matches the real model"
 ./fieldroi_host w.frw frame.ppm > ppm.conf 2> host_ppm.txt \
     || { echo "    FAIL: refused the reference frame:"; tail -2 host_ppm.txt; exit 1; }
 compare "host/ppm vs model" ref.txt host_ppm.txt 0.5 0.01
-grep -E "window rows|green fraction" host_ppm.txt | sed 's/^/    /'
+grep -E "window rows|colour at the middle|share of the claimed" host_ppm.txt | sed 's/^/    /'
 grep -q '^enable=1$' ppm.conf || { echo "    FAIL: no enable=1 in the output"; exit 1; }
 
 echo "==> 2) host build, JPEG input (1/8-scale read), lands on the same rows"
@@ -115,6 +119,17 @@ hdr = b"P6\n768 384\n255\n"
 open("grey.ppm", "wb").write(hdr + bytes([128]) * (768 * 384 * 3))
 open("black.ppm", "wb").write(hdr + bytes(768 * 384 * 3))
 open("noise.ppm", "wb").write(hdr + os.urandom(768 * 384 * 3))
+# The reference frame with its colour taken out: what night vision would send.
+# Same lines, same players, same outline for the model to find -- only the
+# field-colour check stands between this and a config.
+d = open("frame.ppm", "rb").read()
+parts = d.split(None, 4)
+w, h, px = int(parts[1]), int(parts[2]), parts[4][-int(parts[1]) * int(parts[2]) * 3:]
+mono = bytearray()
+for i in range(0, len(px), 3):
+    y = (px[i] * 77 + px[i + 1] * 150 + px[i + 2] * 29) >> 8
+    mono += bytes((y, y, y))
+open("mono.ppm", "wb").write(b"P6\n%d %d\n255\n" % (w, h) + bytes(mono))
 PY
 head -c $(( $(stat -c %s w.frw) / 2 )) w.frw > half.frw
 head -c $(( $(stat -c %s frame.jpg) / 2 )) frame.jpg > half.jpg
@@ -123,6 +138,24 @@ refuses "uniform grey frame" w.frw grey.ppm
 refuses "black frame" w.frw black.ppm
 refuses "noise frame" w.frw noise.ppm
 refuses "truncated JPEG" w.frw half.jpg
+refuses "the reference frame in black and white" w.frw mono.ppm
+grep -q "not a colour" err.txt \
+    || { echo "    FAIL: the black-and-white frame was refused for some other reason"; exit 1; }
+# The colour check has no off switch. The old one must be gone, not ignored.
+if ./fieldroi_host w.frw mono.ppm --min-green 0 > out.conf 2> err.txt || [ -s out.conf ]; then
+    echo "    FAIL: --min-green 0 still switches the colour check off"; exit 1
+fi
+echo "    ok: there is no option that turns the colour check off"
+if [ -n "$BLUE" ]; then
+    cp "$BLUE" blue.jpg
+    ./fieldroi_host w.frw blue.jpg --bands -10,-6,-3 > blue.conf 2> blue.txt \
+        || { echo "    FAIL: refused the blue-turf frame:"; tail -2 blue.txt; exit 1; }
+    grep -q '^win0=' blue.conf || { echo "    FAIL: no bands for the blue-turf frame"; exit 1; }
+    echo "    ok: a blue pitch is accepted ($(grep -E 'colour at the middle' blue.txt | cut -c1-70);"
+    echo "        $(grep -E 'share of the claimed' blue.txt))"
+else
+    echo "    SKIPPED: no blue-turf frame given (5th argument), so only green was shown to pass"
+fi
 
 echo "==> 5) --bands: three windows that tile the same rows, and the daemon takes them"
 ./fieldroi_host w.frw frame.ppm --bands -10,-6,-3 > bands.conf 2> bands.txt \
