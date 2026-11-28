@@ -730,19 +730,52 @@ class TestReolinkCameraDeviceInfo:
         info = await camera.get_device_info()
         assert info["serial_number"] == "SN12345"
         assert info["mac_address"] == "ec:71:db:00:11:22"
+        assert "cmd=GetLocalLink&" in str(mock_client.post.call_args_list[2])
 
     @pytest.mark.asyncio
     @patch(
         "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
         new_callable=AsyncMock,
     )
-    async def test_an_unreadable_local_link_leaves_the_mac_empty(self, mock_log):
-        """The serial still identifies the camera when the MAC can't be read."""
+    @pytest.mark.parametrize(
+        "local_link",
+        [
+            "error",
+            "timeout",
+            "value_null",
+            "dict_body",
+            "list_of_str",
+            "mac_not_a_string",
+        ],
+    )
+    async def test_an_unreadable_local_link_leaves_the_mac_empty(
+        self, mock_log, local_link
+    ):
+        """The serial still identifies the camera when the MAC can't be read,
+        whatever GetLocalLink does."""
+
+        def body(payload):
+            r = MagicMock()
+            r.status_code = 200
+            r.json.return_value = payload
+            r.text = str(payload)
+            return r
+
+        third = {
+            "error": _error_response("GetLocalLink"),
+            "timeout": httpx.ReadTimeout("slow camera"),
+            "value_null": body([{"cmd": "GetLocalLink", "code": 0, "value": None}]),
+            "dict_body": body({"cmd": "GetLocalLink", "code": 0}),
+            "list_of_str": body(["oops"]),
+            "mac_not_a_string": body(
+                [{"cmd": "GetLocalLink", "code": 0, "value": {"LocalLink": {"mac": 7}}}]
+            ),
+        }[local_link]
         mock_client = AsyncMock()
         mock_client.post.side_effect = [
             _login_response(),
             _success_response("GetDevInfo", {"DevInfo": {"serial": "SN12345"}}),
-            _error_response("GetLocalLink"),
+            third,
         ]
 
         camera = ReolinkCamera(
