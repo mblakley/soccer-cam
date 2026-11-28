@@ -20,6 +20,7 @@ import platform
 import socket
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -48,6 +49,27 @@ def _save_state(storage_path: str | Path, data: dict) -> None:
     p = _state_path(storage_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _master_client(
+    master_url: str,
+    token: str | None = None,
+    *,
+    timeout: float = 15.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.AsyncClient:
+    """An HTTP client for the master.
+
+    Carries the master URL's own origin as ``Origin``: the master refuses a
+    state-changing request whose Origin (or Referer) isn't its own scheme,
+    host and port, and an HTTP client sends neither on its own. Plus the
+    bearer token once registered. ``transport`` is for tests.
+    """
+    parts = urlsplit(master_url)
+    headers = {"Origin": f"{parts.scheme}://{parts.netloc}"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return httpx.AsyncClient(headers=headers, timeout=timeout, transport=transport)
 
 
 async def _register(
@@ -162,8 +184,7 @@ async def _poll_loop(
     poll_interval: float = 5.0,
     heartbeat_interval: float = 20.0,
 ) -> None:
-    headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(headers=headers, timeout=15.0) as client:
+    async with _master_client(master_url, token) as client:
         while True:
             processed = await _poll_once(
                 client, master_url, heartbeat_interval=heartbeat_interval
@@ -228,7 +249,7 @@ async def main() -> int:
 
     capabilities = list(config.node.capabilities or ["combine", "trim"])
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with _master_client(master_url, timeout=10.0) as client:
         try:
             token = await _register(client, master_url, node_id, capabilities)
         except httpx.HTTPError as exc:
