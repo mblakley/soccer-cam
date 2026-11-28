@@ -4,6 +4,53 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-07: first session on the camera — baseline, no-flash levers, detector on the camera (2026-11-27)
+
+**Setup:** camera at home on build 4921 (found at 192.168.86.22; neither address in the repo was
+right), pointed at a TV showing a soccer broadcast that fills ~55 % of the frame. Exposure locked
+(Manual, shutter 125, gain 1). Live main stream captured over RTSP
+(`verify/stream_quality.py capture`); QP read from slice headers. Nothing flashed.
+
+**Results, all observed on the hardware:**
+
+- **The trace was right.** `/proc/hdal/venc/info` PATH CONFIG for out 0: `bitrate 20971520`,
+  `enc_ms 6000`. ROI table empty.
+- **Rate control is EVBR, not CBR.** `/proc/vencrc/info` is the kernel's real RC state
+  (`/proc/hdal/venc/info` shows the app's request, and did not change when the kernel's did). EVBR
+  holds QP at its "still QP" of 32 when the scene does not demand the bitrate: this scene ran 7.6–
+  9.1 Mbps at QP 31–32 against a 20.97 Mbps allowance. Setting `bitRate=5120` pins it at the cap at
+  QP 33–36, the game-footage level.
+- **`gop` through the API works, and is currently 2.** `gop=1` → kernel GOP 20; `gop=2` → 40.
+  Keyframe share at 5 Mbps: 24.0 / 22.6 % at GOP 20, 16.5 / 11.8 % at GOP 40 (two alternating 40 s
+  captures each). Mean P-slice QP 33.55 / 33.80 vs 33.24 / 33.99: no difference visible above the
+  noise of a live TV picture. The June/July game footage has GOP 20, so the camera was at `gop=1`
+  for those games.
+- **`apply_optimal_settings` is broken on this camera.** `SetEnc` with `gop=40` returns
+  `rspCode -13 "set config failed"` and changes nothing, including the bitrate sent in the same
+  call. It should send `gop=2`.
+- **`setroi` bug reproduced on the real kernel.** `setroi 0 0 1 -6 1 0 760 7680 900` echoes
+  `QP = 0, QPMode = 0`, as `verify/test_setroi_patch.sh` predicted. The write to the mode-0555
+  node succeeds. The ROI table stayed empty after that enable (QP 0); whether it lists a window
+  with a non-zero QP is for build 4922 to show.
+- **The kernel encodes past the "ceiling".** A `setevbr` write with FrameRate given as `20` — the
+  argument is in thousandths, so the kernel took 0.02 fps and the per-frame budget became
+  effectively unlimited — ran the main stream at **29.7 Mbps, QP 28, 20.07 fps**, nothing dropped,
+  for over a minute. `device` did not notice or re-apply. Re-sending `SetEnc` restored its own RC.
+  That write also zeroed the max-frame-size and tolerance fields, which the command cannot set.
+  `setevbr`'s GOP argument changed the RC's own count (80) but not the keyframe cadence (still 40).
+- **`fieldroi` runs on the camera.** Pushed to the SD card (the camera could not fetch from the PC
+  through the Windows firewall; a one-shot `tcpsvd` receiver and md5 check did it). On the camera's
+  own `cmd=Snap` JPEG (fetched locally with `wget` in 0.4 s): **82 s at nice 19**, MemAvailable
+  120.7 → 98.0 MB, and it refused the scene (13 % grass in the claimed rows), which is correct for
+  a room with a TV in it. The live stream ran 19.53 fps during the run against 20.0 before and
+  after, with no gap over 87 ms.
+
+**Conclusion:** every offline prediction that could be checked held. Two things are new: the mode
+is EVBR with a QP-32 floor on quiet scenes, and the unit of `FrameRate` in the debug commands.
+Not yet done: a controlled higher-bitrate run (FrameRate 20000), and everything that needs the
+4922 flash. A live TV picture is too variable for small A/B differences; a looping clip would fix
+that.
+
 ## EXP-ENC-06: the 20.5 Mbps ceiling fully mapped — enforced in `device`, not the kernel (2026-11-27)
 
 **Hypothesis (from EXP-ENC-05):** the provisioned 20,971,520 is the ceiling; the instruction that

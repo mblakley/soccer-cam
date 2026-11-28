@@ -313,6 +313,7 @@ def capture(source: str, out: str, seconds: float, options: dict[str, str]) -> i
             out_stream = dst.add_stream_from_template(in_stream)
             t0 = None
             base = None
+            last = None
             for pkt in src.demux(in_stream):
                 if pkt.size == 0 or pkt.dts is None or pkt.pts is None:
                     continue
@@ -323,8 +324,20 @@ def capture(source: str, out: str, seconds: float, options: dict[str, str]) -> i
                     t0 = time.monotonic()
                 if float((pkt.dts - base) * pkt.time_base) >= seconds:
                     break
+                dts = pkt.dts - base
+                if last is not None and dts <= last:
+                    # The camera restarts its timestamps when the encode path is
+                    # rebuilt (any SetEnc), and the muxer refuses a clock that
+                    # runs backwards. A clip spanning that is two streams, not
+                    # one: start again from the next keyframe rather than
+                    # stitch them into a measurement that means nothing.
+                    raise SystemExit(
+                        f"{source}: timestamps went backwards after {written} packets "
+                        "(encoder reconfigured mid-capture?); capture again"
+                    )
                 pkt.pts -= base
-                pkt.dts -= base
+                pkt.dts = dts
+                last = dts
                 pkt.stream = out_stream
                 dst.mux(pkt)
                 written += 1
