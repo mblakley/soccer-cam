@@ -63,7 +63,7 @@ def register_tray_tasks() -> None:
     """Tray-side registration.
 
     The tray bundle excludes onnxruntime / cv2 / av / googleapiclient
-    (see VideoGrouper.spec ``TRAY_EXCLUDES``); every registered task here is
+    (see SoccerCam.spec ``TRAY_EXCLUDES``); every registered task here is
     import-light, and the pipeline runner only constructs the heavy steps
     lazily on the service side.
     """

@@ -18,7 +18,7 @@ from video_grouper.update.update_manager import (
 _real_exists = os.path.exists
 _real_getsize = os.path.getsize
 
-# Sample GitHub API release response. Only VideoGrouperSetup.exe is
+# Sample GitHub API release response. Only SoccerCamSetup.exe is
 # required -- the installer ships service + tray + _internal/ as one
 # atomic payload. CI publishes only this single artifact.
 SAMPLE_RELEASE = {
@@ -27,8 +27,8 @@ SAMPLE_RELEASE = {
     "body": "Release notes here",
     "assets": [
         {
-            "name": "VideoGrouperSetup.exe",
-            "browser_download_url": "https://github.com/mblakley/soccer-cam/releases/download/v0.2.0/VideoGrouperSetup.exe",
+            "name": "SoccerCamSetup.exe",
+            "browser_download_url": "https://github.com/mblakley/soccer-cam/releases/download/v0.2.0/SoccerCamSetup.exe",
             "size": 90000000,
             "digest": "sha256:abcdef0123456789",
         },
@@ -91,7 +91,7 @@ class TestCheckForUpdates:
         assert info["version"] == "0.2.0"
         assert info["tag_name"] == "v0.2.0"
         assert len(info["assets"]) == 1
-        assert info["assets"][0]["name"] == "VideoGrouperSetup.exe"
+        assert info["assets"][0]["name"] == "SoccerCamSetup.exe"
 
     @pytest.mark.asyncio
     async def test_same_version_no_update(self, update_manager):
@@ -173,7 +173,7 @@ class TestCheckForUpdates:
 
     @pytest.mark.asyncio
     async def test_missing_setup_exe_skips_update(self, update_manager):
-        """Release exists but doesn't have VideoGrouperSetup.exe yet.
+        """Release exists but doesn't have SoccerCamSetup.exe yet.
 
         Happens during a release-in-progress: tag landed, CI hasn't
         finished publishing the installer artifact. We don't want to
@@ -183,7 +183,7 @@ class TestCheckForUpdates:
             **SAMPLE_RELEASE,
             "assets": [
                 {
-                    "name": "VideoGrouperService.exe",
+                    "name": "SoccerCamService.exe",
                     "browser_download_url": "https://example.com/service.exe",
                     "size": 50000000,
                 }
@@ -234,7 +234,7 @@ class TestCheckForUpdates:
 class TestDownloadUpdate:
     @pytest.mark.asyncio
     async def test_download_setup_exe(self, update_manager, tmp_path, real_filesystem):
-        """Successfully download VideoGrouperSetup.exe."""
+        """Successfully download SoccerCamSetup.exe."""
         version_info = {
             "version": "0.2.0",
             "tag_name": "v0.2.0",
@@ -252,18 +252,18 @@ class TestDownloadUpdate:
         assert result is True
         assert update_manager.download_file.call_count == 1
 
-        installer_path = os.path.join(update_manager.temp_dir, "VideoGrouperSetup.exe")
+        installer_path = os.path.join(update_manager.temp_dir, "SoccerCamSetup.exe")
         assert os.path.exists(installer_path)
 
     @pytest.mark.asyncio
     async def test_download_fails_if_setup_missing(self, update_manager):
-        """Fail when the release doesn't include VideoGrouperSetup.exe."""
+        """Fail when the release doesn't include SoccerCamSetup.exe."""
         version_info = {
             "version": "0.2.0",
             "tag_name": "v0.2.0",
             "assets": [
                 {
-                    "name": "VideoGrouperService.exe",
+                    "name": "SoccerCamService.exe",
                     "browser_download_url": "https://example.com/service.exe",
                     "size": 50000000,
                 }
@@ -336,7 +336,7 @@ class TestVerifyDigest:
 
 class TestSpawnInstaller:
     def test_spawn_invokes_setup_with_silent_flag(self, update_manager, tmp_path):
-        installer = tmp_path / "VideoGrouperSetup.exe"
+        installer = tmp_path / "SoccerCamSetup.exe"
         installer.write_bytes(b"fake installer")
         update_manager.temp_dir = str(tmp_path)
 
@@ -358,7 +358,7 @@ class TestSpawnInstaller:
             update_manager.spawn_installer()
 
     def test_spawn_uses_detached_flags_on_windows(self, update_manager, tmp_path):
-        installer = tmp_path / "VideoGrouperSetup.exe"
+        installer = tmp_path / "SoccerCamSetup.exe"
         installer.write_bytes(b"x")
         update_manager.temp_dir = str(tmp_path)
 

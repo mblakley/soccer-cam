@@ -4,7 +4,7 @@ tests of the auto-upgrade flow without having to cut a real release.
 Usage:
 
     uv run python scripts/serve_test_release.py \\
-        --exe video_grouper/dist/VideoGrouperSetup.exe \\
+        --exe video_grouper/dist/SoccerCamSetup.exe \\
         --version 0.3.7 \\
         --port 9876
 
@@ -12,7 +12,7 @@ Then in another shell:
 
     setx SOCCER_CAM_UPDATE_API_URL ^
         http://127.0.0.1:9876/repos/mblakley/soccer-cam/releases/latest
-    Restart-Service VideoGrouperService
+    Restart-Service SoccerCamService
 
 The service's UpdateCheckProcessor will hit this server next tick,
 download the .exe, verify its digest (which we compute fresh at
@@ -90,17 +90,17 @@ def build_app(
             },
             content={
                 "tag_name": f"v{version}",
-                "name": f"VideoGrouper {version}",
+                "name": f"Soccer-Cam {version}",
                 "published_at": datetime.now(UTC).isoformat(),
                 "body": f"Local test release v{version}. Served by serve_test_release.py.",
                 "draft": False,
                 "prerelease": False,
                 "assets": [
                     {
-                        "name": "VideoGrouperSetup.exe",
+                        "name": "SoccerCamSetup.exe",
                         "browser_download_url": (
                             f"http://{request.url.hostname}:{request.url.port}"
-                            "/assets/VideoGrouperSetup.exe"
+                            "/assets/SoccerCamSetup.exe"
                         ),
                         "size": size,
                         "digest": digest,
@@ -110,7 +110,7 @@ def build_app(
             },
         )
 
-    @app.get("/assets/VideoGrouperSetup.exe")
+    @app.get("/assets/SoccerCamSetup.exe")
     def asset_download() -> StreamingResponse:
         def stream():
             with exe_path.open("rb") as f:
@@ -152,7 +152,7 @@ def build_app(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--exe", required=True, type=Path, help="Path to VideoGrouperSetup.exe"
+        "--exe", required=True, type=Path, help="Path to SoccerCamSetup.exe"
     )
     parser.add_argument(
         "--version",

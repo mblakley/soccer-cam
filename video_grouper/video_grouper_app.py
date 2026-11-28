@@ -1231,8 +1231,7 @@ class VideoGrouperApp:
             import subprocess
 
             subprocess.Popen(
-                'cmd.exe /c "timeout /t 5 /nobreak > nul & '
-                'sc start VideoGrouperService"',
+                'cmd.exe /c "timeout /t 5 /nobreak > nul & sc start SoccerCamService"',
                 shell=True,
                 creationflags=(
                     subprocess.DETACHED_PROCESS

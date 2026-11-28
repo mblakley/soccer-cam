@@ -111,7 +111,7 @@ def test_restart_service_success(mock_restart_service):
         tray_icon = SystemTrayIcon()
         tray_icon.showMessage = MagicMock()
         tray_icon.restart_service()
-        mock_restart_service.assert_called_once_with("VideoGrouperService")
+        mock_restart_service.assert_called_once_with("SoccerCamService")
         tray_icon.showMessage.assert_called_once_with(
             "Service", "Service restarted successfully"
         )

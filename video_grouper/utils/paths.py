@@ -23,7 +23,7 @@ def _get_storage_path_from_registry() -> Path | None:
     try:
         import winreg
 
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\VideoGrouper")
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\SoccerCam")
         storage_path = winreg.QueryValueEx(key, "StoragePath")[0]
         winreg.CloseKey(key)
         return Path(storage_path)
@@ -59,11 +59,11 @@ def get_shared_data_path() -> Path:
         reg_path = _get_storage_path_from_registry()
         if reg_path and reg_path.exists():
             return reg_path
-        # Fall back to %PROGRAMDATA%\VideoGrouper. The install dir lives
+        # Fall back to %PROGRAMDATA%\SoccerCam. The install dir lives
         # under Program Files which is admin-only and shouldn't hold app
         # state; ProgramData is the canonical Windows home for it.
         program_data = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
-        fallback = program_data / "VideoGrouper"
+        fallback = program_data / "SoccerCam"
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 

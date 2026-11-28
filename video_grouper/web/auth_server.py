@@ -580,7 +580,7 @@ def _render_tray_section(storage: Path) -> str:
             "run on this install (Linux/Docker, or the configured "
             "<code>[PIPELINE]</code> has no tray step such as autocam), this "
             "is normal. If the tray IS running on this box but the log "
-            "isn't here, check <code>%LOCALAPPDATA%\\VideoGrouper\\logs\\"
+            "isn't here, check <code>%LOCALAPPDATA%\\SoccerCam\\logs\\"
             "</code> for the bootstrap fallback.</p>"
         )
     try:

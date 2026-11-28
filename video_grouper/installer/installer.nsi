@@ -12,27 +12,30 @@
 !define FULL_VERSION "${VERSION}.${BUILD_NUMBER}"
 
 ; Application information
-!define APPNAME "VideoGrouper"
-!define COMPANYNAME "VideoGrouper"
-!define DESCRIPTION "Video Grouper Service and Tray Agent"
-!define TRAY_TASK_NAME "VideoGrouperTrayLaunch"
+!define APPNAME "SoccerCam"
+; APPNAME is the identifier (folders, registry, service); DISPLAYNAME is
+; what people read.
+!define DISPLAYNAME "Soccer-Cam"
+!define COMPANYNAME "Soccer-Cam"
+!define DESCRIPTION "Soccer-Cam Service and Tray Agent"
+!define TRAY_TASK_NAME "SoccerCamTrayLaunch"
 ; Per-machine state path. Service main.py falls back here when
-; HKLM\Software\VideoGrouper\StoragePath is unset, and the
+; HKLM\Software\SoccerCam\StoragePath is unset, and the
 ; auto-upgrade phase marker lives here so the post-upgrade service
 ; can read what NSIS reached on its way through.
 !define STORAGE_PATH "$APPDATA\${APPNAME}"
 !define NSIS_PHASE_FILE "${STORAGE_PATH}\update\nsis-phase.txt"
 
 ; General settings
-Name "${APPNAME}"
-OutFile "..\dist\VideoGrouperSetup.exe"
+Name "${DISPLAYNAME}"
+OutFile "..\dist\SoccerCamSetup.exe"
 InstallDir "$PROGRAMFILES64\${APPNAME}"
 InstallDirRegKey HKLM "Software\${APPNAME}" "Install_Dir"
 RequestExecutionLevel admin
 
 ; Version information for installer properties
 VIProductVersion "${VERSION}.${BUILD_NUMBER}"
-VIAddVersionKey "ProductName" "${APPNAME}"
+VIAddVersionKey "ProductName" "${DISPLAYNAME}"
 VIAddVersionKey "CompanyName" "${COMPANYNAME}"
 VIAddVersionKey "FileDescription" "${DESCRIPTION}"
 VIAddVersionKey "FileVersion" "${FULL_VERSION}"
@@ -43,8 +46,8 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${COMPANYNAME}"
 !define MUI_ABORTWARNING
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
-!define MUI_WELCOMEPAGE_TITLE "Welcome to ${APPNAME} ${FULL_VERSION} Setup"
-!define MUI_WELCOMEPAGE_TEXT "This will install ${APPNAME} ${FULL_VERSION} on your computer.$\r$\n$\r$\nAfter installation, a setup wizard will guide you through configuration.$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TITLE "Welcome to ${DISPLAYNAME} ${FULL_VERSION} Setup"
+!define MUI_WELCOMEPAGE_TEXT "This will install ${DISPLAYNAME} ${FULL_VERSION} on your computer.$\r$\n$\r$\nAfter installation, a setup wizard will guide you through configuration.$\r$\n$\r$\nClick Next to continue."
 
 ; Pages (simplified - configuration is handled by the onboarding wizard)
 !insertmacro MUI_PAGE_WELCOME
@@ -63,7 +66,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${COMPANYNAME}"
 ; Detect a prior install and let the user choose upgrade-in-place vs
 ; clean reinstall. The auto-upgrade flow runs us silently and always
 ; takes the upgrade path. Interactive runs over an existing install
-; (e.g. legacy v0.3.5 user double-clicking VideoGrouperSetup.exe to
+; (e.g. legacy v0.3.5 user double-clicking SoccerCamSetup.exe to
 ; manually upgrade) get a prompt:
 ;   Yes -> upgrade in place: config + storage preserved
 ;   No  -> uninstall first, wipe ProgramData, then install fresh
@@ -87,7 +90,7 @@ Function .onInit
     ; NSIS MessageBox supports at most 2 return-check pairs; the third
     ; choice (Cancel) is handled by falling through to Abort.
     MessageBox MB_YESNOCANCEL|MB_ICONQUESTION \
-        "An existing VideoGrouper install was found at $0.$\r$\n$\r$\nYes: Upgrade in place (preserves config + storage)$\r$\nNo:  Clean reinstall (wipes ${STORAGE_PATH})$\r$\nCancel: Abort" \
+        "An existing ${DISPLAYNAME} install was found at $0.$\r$\n$\r$\nYes: Upgrade in place (preserves config + storage)$\r$\nNo:  Clean reinstall (wipes ${STORAGE_PATH})$\r$\nCancel: Abort" \
         /SD IDYES \
         IDYES _proceed IDNO _cleanFirst
     ; Fallthrough = Cancel.
@@ -118,7 +121,7 @@ FunctionEnd
     Pop $0
 !macroend
 
-; Block until VideoGrouperService actually reaches STOPPED.
+; Block until SoccerCamService actually reaches STOPPED.
 ;
 ; `sc.exe stop` is ASYNCHRONOUS -- it returns as soon as the SCM
 ; accepts the stop control, NOT when the process has exited. The
@@ -143,14 +146,14 @@ FunctionEnd
     ${Do}
         ; Non-zero (typically 1060) means the service isn't registered
         ; at all -- a fresh install has nothing to wait for.
-        nsExec::ExecToStack 'sc.exe query VideoGrouperService'
+        nsExec::ExecToStack 'sc.exe query SoccerCamService'
         Pop $0
         Pop $2
         ${If} $0 != "0"
             ${ExitDo}
         ${EndIf}
         ; `find` exits 0 only when the STATE line reads STOPPED.
-        nsExec::ExecToStack 'cmd.exe /c "sc query VideoGrouperService | find $\"STOPPED$\" > nul"'
+        nsExec::ExecToStack 'cmd.exe /c "sc query SoccerCamService | find $\"STOPPED$\" > nul"'
         Pop $0
         Pop $2
         ${If} $0 == "0"
@@ -226,19 +229,19 @@ Section "Install" SecInstall
     ; Request the stop, then WAIT for it. Neither command below is
     ; synchronous, so both are followed by an explicit poll (see the
     ; WaitFor* macros above for the reinstall-loop this prevents).
-    nsExec::ExecToLog 'sc.exe stop VideoGrouperService'
-    nsExec::ExecToLog 'taskkill /F /IM VideoGrouperTray.exe'
+    nsExec::ExecToLog 'sc.exe stop SoccerCamService'
+    nsExec::ExecToLog 'taskkill /F /IM SoccerCamTray.exe'
 
     ; 60 x 500ms = 30s for the service (it has async processors to
     ; unwind), 20 x 500ms = 10s for the force-killed tray.
     !insertmacro WaitForServiceStopped 60
-    !insertmacro WaitForProcessGone "VideoGrouperTray.exe" 20
+    !insertmacro WaitForProcessGone "SoccerCamTray.exe" 20
 
     ; Windows can hold the image section a moment past process exit.
     Sleep 500
 
     ; Copy the merged onedir output (service + tray + shared _internal/).
-    ; The multi-target spec at video_grouper/installer/VideoGrouper.spec
+    ; The multi-target spec at video_grouper/installer/SoccerCam.spec
     ; builds both exes against one dependency tree, so service and tray
     ; live side-by-side under $INSTDIR with a single _internal/ folder.
     SetOutPath "$INSTDIR"
@@ -250,7 +253,7 @@ Section "Install" SecInstall
     ClearErrors
     SetOverwrite try
     File "..\icon.ico"
-    File /r "..\dist\VideoGrouper\*"
+    File /r "..\dist\SoccerCam\*"
     SetOverwrite on
     ${If} ${Errors}
         !insertmacro WritePhase "files-copy-failed"
@@ -267,22 +270,22 @@ Section "Install" SecInstall
     ; registration already points binPath at this very exe, which
     ; File /r above just replaced). `sc query` returns 0 when the
     ; service is registered, non-zero (typically 1060) when it isn't.
-    nsExec::ExecToLog 'sc.exe query VideoGrouperService'
+    nsExec::ExecToLog 'sc.exe query SoccerCamService'
     Pop $0
     ${If} $0 != "0"
         ; Fresh install: register the service.
-        nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" --startup delayed install'
+        nsExec::ExecToLog '"$INSTDIR\SoccerCamService.exe" --startup delayed install'
     ${Else}
         ; Upgrade in place: leave registration alone, but force the
         ; start type to delayed-auto-start in case the prior version
         ; was registered with a different setting.
-        nsExec::ExecToLog 'sc.exe config VideoGrouperService start= delayed-auto'
+        nsExec::ExecToLog 'sc.exe config SoccerCamService start= delayed-auto'
     ${EndIf}
 
     ; Always (re-)apply recovery actions. Idempotent and quick, and
     ; it lets us tighten the retry policy in later releases without
     ; needing a clean reinstall.
-    nsExec::ExecToLog 'sc.exe failure VideoGrouperService reset= 86400 actions= restart/5000/restart/30000/restart/60000'
+    nsExec::ExecToLog 'sc.exe failure SoccerCamService reset= 86400 actions= restart/5000/restart/30000/restart/60000'
 
     !insertmacro WritePhase "service-installed"
 
@@ -290,7 +293,7 @@ Section "Install" SecInstall
     ; the task run as whoever is currently logged on -- the only
     ; reliable way for a LocalSystem service (or NSIS spawned by it
     ; during auto-upgrade) to land the tray in the active desktop
-    ; session. Plain subprocess.Popen("VideoGrouperTray.exe") from a
+    ; session. Plain subprocess.Popen("SoccerCamTray.exe") from a
     ; LocalSystem context drops the tray into session 0 where the
     ; user can't see it. See
     ; ``~/.claude/plans/investigate-the-auto-upgrade-process-jiggly-gem.md``
@@ -301,17 +304,17 @@ Section "Install" SecInstall
     ; us a logon trigger so the tray comes back automatically after
     ; reboot; /RL LIMITED runs unelevated since the tray doesn't
     ; need admin. We can additionally drive an on-demand launch via
-    ; ``schtasks /Run /TN VideoGrouperTrayLaunch`` from anywhere
+    ; ``schtasks /Run /TN SoccerCamTrayLaunch`` from anywhere
     ; (installer below, service-side helper post-upgrade).
     ; schtasks /Create /TR "<path with spaces>" silently mangles the
     ; action -- the OS task store ends up with Execute="C:\Program"
-    ; and Arguments="Files\...\VideoGrouperTray.exe", so the logon
+    ; and Arguments="Files\...\SoccerCamTray.exe", so the logon
     ; trigger fires but Windows fails the spawn with 0x80070002
     ; (file not found). Confirmed empirically on Win11 in Phase 6
     ; verification. PowerShell's Register-ScheduledTask has a real
     ; Execute/Arguments split, so we go through it instead.
     FileOpen $0 "$TEMP\vg-register-tray-task.ps1" w
-    FileWrite $0 "$$action = New-ScheduledTaskAction -Execute '$INSTDIR\VideoGrouperTray.exe'$\r$\n"
+    FileWrite $0 "$$action = New-ScheduledTaskAction -Execute '$INSTDIR\SoccerCamTray.exe'$\r$\n"
     FileWrite $0 "$$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
     FileWrite $0 "$$principal = New-ScheduledTaskPrincipal -GroupId 'INTERACTIVE' -RunLevel Limited$\r$\n"
     FileWrite $0 "Register-ScheduledTask -TaskName '${TRAY_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Force | Out-Null$\r$\n"
@@ -323,7 +326,7 @@ Section "Install" SecInstall
     ; open the dashboard. We DON'T create $SMSTARTUP -- the
     ; scheduled task's logon trigger replaces it (avoiding a
     ; double-launch race).
-    CreateShortCut "$DESKTOP\VideoGrouper.lnk" "$INSTDIR\VideoGrouperTray.exe" "" "$INSTDIR\icon.ico"
+    CreateShortCut "$DESKTOP\Soccer-Cam.lnk" "$INSTDIR\SoccerCamTray.exe" "" "$INSTDIR\icon.ico"
 
     !insertmacro WritePhase "scheduled-task-registered"
 
@@ -337,7 +340,7 @@ Section "Install" SecInstall
     ; there is nothing left to distinguish. (The prior comment here
     ; claimed the auto-upgrade path had "exited cleanly before we got
     ; here"; it hadn't, which is what the wait now enforces.)
-    nsExec::ExecToLog 'sc.exe start VideoGrouperService'
+    nsExec::ExecToLog 'sc.exe start SoccerCamService'
 
     !insertmacro WritePhase "service-started"
 
@@ -359,7 +362,7 @@ Section "Install" SecInstall
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
     ; Add uninstall information to Add/Remove Programs
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${APPNAME}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "DisplayName" "${DISPLAYNAME}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
     ; The silent counterpart. winget, Chocolatey and MDM tooling look for
     ; QuietUninstallString; with only UninstallString they fall back to
@@ -374,7 +377,7 @@ Section "Install" SecInstall
 
     ; Pin the per-machine StoragePath the service looks up at boot
     ; (video_grouper/service/main.py reads this before falling back
-    ; to %ProgramData%\VideoGrouper). The wizard can rewrite this
+    ; to %ProgramData%\SoccerCam). The wizard can rewrite this
     ; later if the user picks a different storage path.
     WriteRegStr HKLM "Software\${APPNAME}" "StoragePath" "${STORAGE_PATH}"
 
@@ -394,11 +397,11 @@ Section "Uninstall"
     ; not the per-user profile of whoever is running the uninstaller.
     SetShellVarContext all
     ; Stop and remove the service silently
-    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" stop'
-    nsExec::ExecToLog '"$INSTDIR\VideoGrouperService.exe" remove'
+    nsExec::ExecToLog '"$INSTDIR\SoccerCamService.exe" stop'
+    nsExec::ExecToLog '"$INSTDIR\SoccerCamService.exe" remove'
 
     ; Kill tray if running
-    nsExec::ExecToLog 'taskkill /F /IM VideoGrouperTray.exe'
+    nsExec::ExecToLog 'taskkill /F /IM SoccerCamTray.exe'
 
     ; Drop the scheduled task. /F suppresses the "are you sure"
     ; prompt; missing-task error is harmless on a partial install
@@ -407,7 +410,7 @@ Section "Uninstall"
 
     ; Remove the tray lock file from the storage path so a leftover
     ; lock from a forced-kill doesn't block the next install's tray.
-    ; StoragePath is set by the installer in HKLM\Software\VideoGrouper.
+    ; StoragePath is set by the installer in HKLM\Software\SoccerCam.
     ReadRegStr $0 HKLM "Software\${APPNAME}" "StoragePath"
     ${If} $0 != ""
         Delete "$0\tray_agent.lock"
@@ -420,15 +423,15 @@ Section "Uninstall"
     ; Recursively remove everything we shipped: the merged spec drops
     ; both exes + a shared _internal/ directly under $INSTDIR.
     RMDir /r "$INSTDIR\_internal"
-    Delete "$INSTDIR\VideoGrouperService.exe"
-    Delete "$INSTDIR\VideoGrouperTray.exe"
+    Delete "$INSTDIR\SoccerCamService.exe"
+    Delete "$INSTDIR\SoccerCamTray.exe"
     Delete "$INSTDIR\icon.ico"
     Delete "$INSTDIR\uninstall.exe"
 
     ; Remove shortcuts (legacy $SMSTARTUP entry from pre-Phase-4
     ; installs, plus the desktop one we still create).
-    Delete "$SMSTARTUP\VideoGrouperTray.lnk"
-    Delete "$DESKTOP\VideoGrouper.lnk"
+    Delete "$SMSTARTUP\Soccer-Cam Tray.lnk"
+    Delete "$DESKTOP\Soccer-Cam.lnk"
 
     ; Remove install directory
     RMDir "$INSTDIR"

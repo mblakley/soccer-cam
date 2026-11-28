@@ -65,7 +65,7 @@ Connect to the camera's web interface (usually `http://<camera-ip>`) and configu
 
 ### Option A: Windows Installer (Recommended)
 
-1. Download `VideoGrouperSetup.exe` from the [Releases page](https://github.com/mblakley/soccer-cam/releases)
+1. Download `SoccerCamSetup.exe` from the [Releases page](https://github.com/mblakley/soccer-cam/releases)
 2. Run the installer. It will ask for:
    - **Storage path** -- where to save videos and config (e.g., `C:\SoccerCam`)
    - **Camera IP** -- the static IP you configured in Step 2
