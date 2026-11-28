@@ -437,3 +437,197 @@ async def test_game_start_zero_question_is_truncation_framed(tmp_path):
     q = await task.create_question()
     assert "already in progress" in q["message"].lower()
     assert "Already started" in [a["label"] for a in q["actions"]]
+
+
+# --------------------------------------------------------------------------
+# Single-flight + timeout: one decode per group, never two at once
+# --------------------------------------------------------------------------
+
+_OK_RESULT = {
+    "ok": True,
+    "ko_trustworthy": True,
+    "times": {
+        "kickoff": 600.0,
+        "halftime": 1500.0,
+        "second_half": 2100.0,
+        "end": 3600.0,
+    },
+    "reasons": [],
+    "used": "whistle+kick",
+}
+
+
+def _gated_detector(release: asyncio.Event, result=None):
+    """A fake _run_detector that counts calls and blocks until ``release`` is set
+    (standing in for the multi-minute decode running in a worker thread)."""
+    calls = {"n": 0, "entered": asyncio.Event()}
+
+    async def _fake(*_a, **_k):
+        calls["n"] += 1
+        calls["entered"].set()
+        await release.wait()
+        return result
+
+    return _fake, calls
+
+
+@pytest.fixture
+def fresh_flight_state(monkeypatch):
+    monkeypatch.setattr(pgs, "_INFLIGHT", {})
+    monkeypatch.setattr(pgs, "_ORPHANED", set())
+    monkeypatch.setattr(pgs, "_DECODING", set())
+    monkeypatch.setattr(pgs, "_GAVE_UP", set())
+
+
+@pytest.mark.asyncio
+async def test_duplicate_triggers_share_one_detector_run(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+
+    # Post-combine hook and StateAuditor fire for the same group together.
+    first = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    second = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    # Wait for the first run to really be inside the detector (a fixed sleep
+    # flaked under a loaded parallel run), then let the duplicate settle.
+    await asyncio.wait_for(calls["entered"].wait(), timeout=5)
+    await asyncio.sleep(0.05)
+    assert calls["n"] == 1  # the duplicate is waiting on the first run
+    release.set()
+
+    assert await asyncio.gather(first, second) == [True, True]
+    assert calls["n"] == 1
+    assert pgs._INFLIGHT == {}  # entry cleared once the run finished
+
+
+@pytest.mark.asyncio
+async def test_cancelled_duplicate_does_not_cancel_shared_run(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+
+    first = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    dup = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    # Wait for the first run to really be inside the detector (a fixed sleep
+    # flaked under a loaded parallel run), then let the duplicate settle.
+    await asyncio.wait_for(calls["entered"].wait(), timeout=5)
+    await asyncio.sleep(0.05)
+    dup.cancel()
+    release.set()
+
+    assert await first is True
+    with pytest.raises(asyncio.CancelledError):
+        await dup  # the duplicate really was cancelled...
+    assert calls["n"] == 1  # ...without cancelling the shared run
+    assert pgs._INFLIGHT == {}  # and the in-flight entry is cleared
+
+
+@pytest.mark.asyncio
+async def test_timeout_falls_back_and_never_restarts_that_games_detection(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+    monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0.05)
+
+    # The run exceeds the ceiling: fall back to the NTFY walk, write nothing.
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    assert calls["n"] == 1
+    assert not MatchInfo.get_or_create(group, str(tmp_path))[0].start_time_offset
+
+    # The abandoned decode is still running: a new trigger must not start another.
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    assert calls["n"] == 1
+
+    # Even after the abandoned decode finishes, detection is not restarted
+    # for this game: the NTFY walk owns its game start now (a rerun would take
+    # as long again and could race the answer).
+    release.set()
+
+    async def _orphan_cleared():
+        while pgs._ORPHANED:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_orphan_cleared(), timeout=5)
+    monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0)  # 0 = no ceiling
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_rerun_never_runs_beside_an_abandoned_decode(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+    monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0.05)
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    # The user answers "already started" while the abandoned decode still runs:
+    # the offset is written, but no second decode starts.
+    assert await pgs.resolve_truncated_start(group, combined, _cfg(), str(tmp_path))
+    assert await pgs.resolve_truncated_end(group, combined, _cfg(), str(tmp_path))
+    assert calls["n"] == 1
+    assert MatchInfo.get_or_create(group, str(tmp_path))[0].start_time_offset
+    release.set()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_run_leaves_its_decode_marked(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+    run = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    await asyncio.wait_for(calls["entered"].wait(), timeout=5)
+    pgs._INFLIGHT[pgs._inflight_key(group)].cancel()  # e.g. a shutdown
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    # The decode thread is still going: no second decode may start.
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    assert calls["n"] == 1
+    release.set()
+
+
+@pytest.mark.parametrize(
+    "raw, expected", [("120", 120.0), ("1.5", 1.5), ("-1", 0.0), ("soon", 3600)]
+)
+def test_timeout_setting_is_parsed_safely(monkeypatch, raw, expected):
+    monkeypatch.setenv("PHASE_DETECT_TIMEOUT_SECONDS", raw)
+    assert pgs._env_seconds("PHASE_DETECT_TIMEOUT_SECONDS", 3600) == expected
