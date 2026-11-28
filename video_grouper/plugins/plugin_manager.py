@@ -55,10 +55,8 @@ class PluginManager:
 
     def sync_plugins(self) -> None:
         """Fetch available plugins, download new or soon-to-expire ones, drop stale ones."""
-        try:
-            available = self.entitlements.list_plugins()
-        except Exception:
-            logger.warning("Failed to fetch available plugins from TTT", exc_info=True)
+        available = self._listed_plugins()
+        if available is None:
             return
 
         available_keys = {p["key"] for p in available}
@@ -89,6 +87,37 @@ class PluginManager:
                         "Removing plugin %s (no longer listed)", plugin_dir.name
                     )
                     shutil.rmtree(plugin_dir, ignore_errors=True)
+
+    def _installed_keys(self) -> list[str]:
+        if not self.plugins_dir.exists():
+            return []
+        return [p.name for p in self.plugins_dir.iterdir() if p.is_dir()]
+
+    def _listed_plugins(self) -> list[dict] | None:
+        """The plugins this account is entitled to, or None when that can't be
+        known right now -- in which case nothing is removed or unloaded."""
+        from video_grouper.integrations.entitlements import EntitlementUnavailable
+
+        try:
+            available = self.entitlements.list_plugins()
+        except EntitlementUnavailable as exc:
+            logger.info("Plugins kept as they are: %s", exc)
+            return None
+        except Exception:
+            logger.warning(
+                "Failed to fetch available plugins; keeping current state",
+                exc_info=True,
+            )
+            return None
+        # Belt and braces: an empty list from a provider that isn't signed in
+        # is "can't say", not "entitled to none".
+        if not available and self._installed_keys() and not self.entitlements.available:
+            logger.warning(
+                "Entitlements provider is not signed in and listed no plugins; "
+                "keeping the installed ones"
+            )
+            return None
+        return list(available)
 
     def _get_local_version(self, key: str) -> str | None:
         manifest_path = self.plugins_dir / key / "manifest.json"
@@ -214,14 +243,11 @@ class PluginManager:
 
     def check_entitlements(self) -> None:
         """Re-check available plugins and unload any no longer listed."""
-        try:
-            available = self.entitlements.list_plugins()
-            available_keys = {p["key"] for p in available}
-            for key in list(self._loaded_plugins.keys()):
-                if key not in available_keys:
-                    logger.info("Plugin %s no longer listed, unloading", key)
-                    del self._loaded_plugins[key]
-        except Exception:
-            logger.warning(
-                "Failed to check entitlements, keeping current state", exc_info=True
-            )
+        available = self._listed_plugins()
+        if available is None:
+            return
+        available_keys = {p["key"] for p in available}
+        for key in list(self._loaded_plugins.keys()):
+            if key not in available_keys:
+                logger.info("Plugin %s no longer listed, unloading", key)
+                del self._loaded_plugins[key]

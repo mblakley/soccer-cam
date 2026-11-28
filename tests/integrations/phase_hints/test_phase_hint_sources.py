@@ -18,7 +18,7 @@ TAPS = [
 
 def _client(signed_in=True, session=None):
     c = MagicMock()
-    c.is_authenticated.return_value = signed_in
+    c.ensure_signed_in.return_value = signed_in
     c.get_game_session_by_dir.return_value = (
         {"id": "sess-1"} if session is None else session
     )
@@ -69,3 +69,12 @@ def test_ttt_chosen_only_when_enabled():
 async def test_null_has_no_hints():
     assert await NullPhaseHintSource().event_taps("grp") == []
     assert isinstance(NullPhaseHintSource.from_context(object()), NullPhaseHintSource)
+
+
+@pytest.mark.asyncio
+async def test_ttt_refreshes_an_expired_token_instead_of_going_quiet(expired_ttt):
+    expired_ttt.routes[("GET", "/api/game-sessions")] = [{"id": "sess-1"}]
+    expired_ttt.routes[("GET", "/api/sync-anchors")] = TAPS[:2]
+    taps = await TTTPhaseHintSource(expired_ttt.client).event_taps("/s/grp-1")
+    assert taps == [TAPS[0]]
+    assert expired_ttt.refreshes == 1

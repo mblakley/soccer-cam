@@ -45,7 +45,7 @@ class NullEntitlements(IEntitlements):
         raise EntitlementUnavailable(f"{model_key} is a licensed model: {_HOW}")
 
     def list_plugins(self) -> list[dict[str, Any]]:
-        return []
+        raise EntitlementUnavailable(f"plugins need an entitlement: {_HOW}")
 
     def fetch_plugin(self, key: str, dest: Path) -> None:
         raise EntitlementUnavailable(f"plugin {key} needs an entitlement: {_HOW}")

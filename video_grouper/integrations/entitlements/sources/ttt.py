@@ -1,6 +1,8 @@
 """Team Tech Tools entitlements: capabilities, model licences and plugins for
 the signed-in account. Chosen whenever TTT is enabled; ``available`` follows the
-shared session, so signing in later takes effect without a restart."""
+shared session (refreshing an expired access token, see
+``TTTApiClient.ensure_signed_in``), so signing in later takes effect without a
+restart and the hourly token expiry never reads as "signed out"."""
 
 from __future__ import annotations
 
@@ -29,10 +31,14 @@ class TTTEntitlements(IEntitlements):
 
     @property
     def available(self) -> bool:
-        return bool(self._client.is_authenticated())
+        return bool(self._client.ensure_signed_in())
 
     def licensee(self) -> str | None:
-        return self._client.current_user_id() if self.available else None
+        # The account of the session held on disk, even while its access token
+        # is expired (offline at the field): installed plugins and licences are
+        # bound to the account, and their own signed expiry is what limits
+        # offline use. None only when no session is held at all.
+        return self._client.current_user_id()
 
     def has(self, key: str) -> bool:
         # Fails closed: no session or any error means "not entitled".
@@ -54,8 +60,12 @@ class TTTEntitlements(IEntitlements):
         )
 
     def list_plugins(self) -> list[dict[str, Any]]:
+        # Never [] for "can't ask": an empty list means "entitled to none", and
+        # the plugin manager removes what isn't listed.
         if not self.available:
-            return []
+            raise EntitlementUnavailable(
+                "plugin list: sign in to Team Tech Tools from the dashboard"
+            )
         return list(self._client.get_available_plugins() or [])
 
     def fetch_plugin(self, key: str, dest: Path) -> None:

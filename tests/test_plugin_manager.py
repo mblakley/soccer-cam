@@ -245,3 +245,62 @@ class TestLoad:
 
         mgr.load_plugins()
         assert "premium.test.feature" not in mgr.get_loaded_plugins()
+
+
+# ---------------------------------------------------------------------------
+# signed out: against the port (FakeEntitlements), nothing is removed/unloaded
+# ---------------------------------------------------------------------------
+
+KEY = "premium.test.feature"
+
+
+def _signed_in_fake(tmp_path, priv):
+    from video_grouper.integrations.entitlements.fake import FakeEntitlements
+
+    bundle = tmp_path / "bundle.zip"
+    _make_signed_zip(bundle, priv)
+    return FakeEntitlements(
+        licensee=USER_ID,
+        plugins={KEY: bundle.read_bytes()},
+        plugin_listing=[{"key": KEY, "version": "1.0.0"}],
+    )
+
+
+class TestSignedOut:
+    def test_signed_out_keeps_installed_and_loaded_plugins(self, tmp_path):
+        priv, pub = _keypair()
+        ent = _signed_in_fake(tmp_path, priv)
+        mgr = PluginManager(ent, tmp_path, public_keys=[pub])
+        mgr.sync_plugins()
+        mgr.load_plugins()
+        assert KEY in mgr.get_loaded_plugins()
+
+        ent._licensee = None  # signed out (token expired, offline, ...)
+        mgr.sync_plugins()
+        mgr.check_entitlements()
+        assert (tmp_path / "plugins" / KEY / "manifest.json").is_file()
+        assert KEY in mgr.get_loaded_plugins()
+
+        # Signed in again and genuinely no longer entitled: removed.
+        ent._licensee = USER_ID
+        ent.plugin_listing = []
+        mgr.sync_plugins()
+        mgr.check_entitlements()
+        assert not (tmp_path / "plugins" / KEY).exists()
+        assert KEY not in mgr.get_loaded_plugins()
+
+    def test_an_empty_list_from_a_signed_out_provider_removes_nothing(self, tmp_path):
+        """Belt and braces: a provider that answers [] instead of raising
+        while not available doesn't wipe the installed plugins."""
+        priv, pub = _keypair()
+        ent = _signed_in_fake(tmp_path, priv)
+        mgr = PluginManager(ent, tmp_path, public_keys=[pub])
+        mgr.sync_plugins()
+        mgr.load_plugins()
+
+        ent._licensee = None
+        ent.list_plugins = lambda: []  # type: ignore[method-assign]
+        mgr.sync_plugins()
+        mgr.check_entitlements()
+        assert (tmp_path / "plugins" / KEY).is_dir()
+        assert KEY in mgr.get_loaded_plugins()

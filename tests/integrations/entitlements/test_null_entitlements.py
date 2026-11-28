@@ -11,7 +11,9 @@ def test_grants_nothing():
     assert null.available is False
     assert null.licensee() is None
     assert null.has("premium.anything") is False
-    assert null.list_plugins() == []
+    # "Can't say", never "entitled to none": [] would remove installed plugins.
+    with pytest.raises(EntitlementUnavailable):
+        null.list_plugins()
 
 
 def test_a_licensed_model_explains_the_way_out(tmp_path):

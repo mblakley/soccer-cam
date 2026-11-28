@@ -22,7 +22,9 @@ class IEntitlements(Provider, ABC):
 
     @abstractmethod
     def licensee(self) -> str | None:
-        """The account id licences and plugin bundles are bound to."""
+        """The account id licences and plugin bundles are bound to (None when
+        no account is held). Does not require ``available``: installed bundles
+        stay usable offline until their own signed expiry."""
 
     @abstractmethod
     def has(self, key: str) -> bool:
@@ -40,7 +42,9 @@ class IEntitlements(Provider, ABC):
 
     @abstractmethod
     def list_plugins(self) -> list[dict[str, Any]]:
-        """Plugins this account may install."""
+        """Plugins this account may install. Raises EntitlementUnavailable when
+        it can't say (not signed in, no provider): ``[]`` means "entitled to
+        none", and installed plugins that aren't listed are removed."""
 
     @abstractmethod
     def fetch_plugin(self, key: str, dest: Path) -> None:

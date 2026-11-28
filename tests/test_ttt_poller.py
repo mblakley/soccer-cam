@@ -55,7 +55,7 @@ def _mk_config(*, ttt_enabled: bool = True, camera_id: str | None = None):
 
 def _mk_ttt(authenticated: bool = True):
     c = MagicMock()
-    c.is_authenticated.return_value = authenticated
+    c.ensure_signed_in.return_value = authenticated
     return c
 
 
@@ -402,3 +402,21 @@ async def test_reprocess_other_statuses_are_ignored(tmp_path):
 
     p_rp.add_work.assert_not_called()
     assert work.calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_expired_ttt_token_is_refreshed_for_the_schedule(tmp_path):
+    from tests.integrations.expired_ttt import ExpiredTTTSession
+
+    session = ExpiredTTTSession(str(tmp_path))
+    schedule = MagicMock()
+    poller = _mk_poller(
+        tmp_path,
+        FakeWorkSource(),
+        session.client,
+        ttt_job_processor=_mk_processor(),
+        schedule_service=schedule,
+    )
+    await poller.discover_work()
+    schedule.refresh.assert_called_once()
+    assert session.refreshes == 1

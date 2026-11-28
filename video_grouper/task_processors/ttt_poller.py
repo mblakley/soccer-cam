@@ -14,7 +14,7 @@ processor is wired for; each item goes to its kind's processor. It also owns:
   status reporting for in-flight rows, which aren't discrete enqueueable
   jobs
 * the schedule refresh, still behind the ``ttt.enabled`` +
-  ``is_authenticated`` gate on the TTT client
+  ``ensure_signed_in`` gate on the TTT client
 
 Announcing this install and its heartbeat are not here: they belong to the
 device link (:class:`~video_grouper.task_processors.device_link_processor.DeviceLinkProcessor`).
@@ -125,15 +125,22 @@ class TTTPoller(PollingProcessor):
         refresh (TTT, gated). Exceptions are caught + logged per step and per
         item so one bad endpoint or item can't starve the others."""
         await self._safe_poll("work", self._poll_work)
-        if self._ttt_session_ready():
+        if await self._ttt_session_ready():
             await self._safe_poll("schedule", self._poll_schedule)
 
-    def _ttt_session_ready(self) -> bool:
-        """The TTT gate for the schedule refresh."""
+    async def _ttt_session_ready(self) -> bool:
+        """The TTT gate for the schedule refresh (an expired access token is
+        refreshed first, off the event loop)."""
         ttt_cfg = getattr(self.config, "ttt", None)
         if ttt_cfg is None or not getattr(ttt_cfg, "enabled", False):
             return False
-        if self.ttt_client is None or not self.ttt_client.is_authenticated():
+        if self.ttt_client is None:
+            return False
+        try:
+            signed_in = await asyncio.to_thread(self.ttt_client.ensure_signed_in)
+        except Exception:
+            signed_in = False
+        if not signed_in:
             logger.debug("TTTPoller: TTT client not authenticated, skipping TTT calls")
             return False
         return True

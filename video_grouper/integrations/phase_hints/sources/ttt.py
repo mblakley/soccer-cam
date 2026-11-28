@@ -29,7 +29,7 @@ class TTTPhaseHintSource(IPhaseHintSource):
         return cls(context.ttt_client()) if context.ttt_enabled() else None
 
     def _event_taps_sync(self, group_dir: str) -> list[dict[str, Any]]:
-        if not self._client.is_authenticated():
+        if not self._client.ensure_signed_in():  # in a thread: may refresh
             return []
         name = os.path.basename(str(group_dir).rstrip("/\\"))
         session = self._client.get_game_session_by_dir(name)

@@ -55,7 +55,7 @@ class FakeEntitlements(IEntitlements):
 
     def list_plugins(self) -> list[dict[str, Any]]:
         if not self.available:
-            return []
+            raise EntitlementUnavailable("not signed in")
         if self.plugin_listing is not None:
             return list(self.plugin_listing)
         return [{"key": k} for k in self.plugins]
