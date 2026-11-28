@@ -4,7 +4,7 @@ import asyncio
 import os
 import tempfile
 from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 
@@ -295,12 +295,16 @@ class TestDownloadProcessor:
         with pytest.raises(Exception, match="Download error"):
             await processor.process_item(recording_file)
 
-        # Verify file status was updated to download_failed
+        # Verify file status was updated to download_failed, with the error
+        # kept on the file for the dashboard's failing-downloads list.
         mock_dir_state_instance.update_file_state.assert_any_call(
             "/test/group/test.dav", status="downloading"
         )
         mock_dir_state_instance.update_file_state.assert_any_call(
-            "/test/group/test.dav", status="download_failed"
+            "/test/group/test.dav",
+            status="download_failed",
+            error_message="Download error",
+            last_failed_at=ANY,
         )
 
     @pytest.mark.asyncio
@@ -626,3 +630,105 @@ class TestAbandonExhaustedDownloads:
             await processor.stop()
 
         processor.on_item_permanently_failed.assert_awaited_once()
+
+
+class TestRepeatedFailureAndSkip:
+    """A file that keeps failing is counted, explained, and can be let go.
+
+    Each exhausted retry round is counted on the file and the last error is
+    kept with it, so a person can see how long it has been failing and why
+    without reading logs. Once a person skips it, the downloader neither
+    fetches it nor overwrites that decision.
+    """
+
+    @pytest.mark.asyncio
+    async def test_each_exhausted_round_is_counted(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        # Still listed: the camera has not confirmed it gone, so it stays
+        # download_failed and the auditor will retry it next pass.
+        mock_camera.get_file_list = AsyncMock(return_value=_listing("gone.dav"))
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        await processor.on_item_permanently_failed(rec)
+        await processor.on_item_permanently_failed(rec)
+
+        state = DirectoryState(group_dir).files[file_path]
+        assert state.failed_attempts == 2
+        assert state.status == "download_failed", "#141's abandon rule is unchanged"
+
+    @pytest.mark.asyncio
+    async def test_a_round_that_ends_in_abandon_is_counted_too(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.get_file_list = AsyncMock(return_value=_listing("other.dav"))
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        await processor.on_item_permanently_failed(rec)
+
+        state = DirectoryState(group_dir).files[file_path]
+        assert (state.status, state.failed_attempts) == ("abandoned", 1)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_attempt_keeps_its_error_and_time(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.download_file = AsyncMock(
+            side_effect=RuntimeError("HTTP 500 reading block 4411")
+        )
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        with pytest.raises(RuntimeError):
+            await processor.process_item(rec)
+
+        state = DirectoryState(group_dir).files[file_path]
+        assert state.status == "download_failed"
+        assert state.error_message == "HTTP 500 reading block 4411"
+        assert datetime.fromisoformat(state.last_failed_at)
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_file_still_in_the_queue_is_not_downloaded(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """The auditor may have queued it on its last pass, before the skip."""
+        from video_grouper.models.directory_state import skip_download
+
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        skip_download(
+            temp_storage, os.path.basename(group_dir), "gone.dav", by="dashboard"
+        )
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        await processor.process_item(rec)
+
+        mock_camera.download_file.assert_not_called()
+        assert DirectoryState(group_dir).files[file_path].status == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_running_out_of_retries_never_overwrites_a_skip(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Skipped while its last round was failing: the person's decision
+        stands -- not abandoned, not counted."""
+        from video_grouper.models.directory_state import skip_download
+
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        skip_download(
+            temp_storage, os.path.basename(group_dir), "gone.dav", by="dashboard"
+        )
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.get_file_list = AsyncMock(return_value=_listing("other.dav"))
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+
+        await processor.on_item_permanently_failed(rec)
+
+        state = DirectoryState(group_dir).files[file_path]
+        assert (state.status, state.failed_attempts) == ("skipped", 0)
+        assert state.skipped_by == "dashboard"

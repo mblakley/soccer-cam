@@ -2077,3 +2077,91 @@ async def test_camera_enabled_or_unknown_is_polled(
     poller = await _wired_poller(temp_storage, mock_config, mock_camera, camera_enabled)
     await poller.discover_work()
     mock_camera.check_availability.assert_called_once()
+
+
+class TestSkippedDownloadsAreSettled:
+    """A file a person skipped is settled: the watermark passes it and the
+    poller never queues it again. Without this a corrupt recording the camera
+    keeps listing pins the watermark -- and every later game's archive --
+    until someone edits state.json by hand."""
+
+    @pytest.mark.asyncio
+    async def test_watermark_passes_a_skipped_file(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        from video_grouper.models.directory_state import skip_download
+
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        group_dir, triples = await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["a.dav", "b.dav", "c.dav"],
+            base,
+            "downloaded",
+        )
+        await DirectoryState(group_dir).update_file_state(
+            os.path.join(group_dir, "b.dav"), status="download_failed"
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        await poller._advance_completion_watermark()
+        assert await poller._get_latest_processed_time() == triples[0][2], (
+            "precondition: the failing b.dav holds the watermark"
+        )
+
+        skip_download(temp_storage, "2026.07.01-10.00.00", "b.dav", by="dashboard")
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == triples[2][2]
+
+    @pytest.mark.asyncio
+    async def test_reconcile_does_not_requeue_a_skipped_file(
+        self, temp_storage, mock_config, mock_camera, mock_file_system
+    ):
+        """Reconcile asks the disk, and a skipped file is not on it. Ahead of
+        the watermark (an earlier file still holds it) that must not read as
+        'needs download'."""
+        from video_grouper.models.directory_state import skip_download
+
+        base = (datetime.now() - timedelta(days=3)).replace(microsecond=0)
+        await _write_contiguous_group(
+            temp_storage,
+            base.strftime("%Y.%m.%d-%H.%M.%S"),
+            ["held.dav"],
+            base,
+            "download_failed",
+        )
+        later = base + timedelta(days=1)
+        later_name = later.strftime("%Y.%m.%d-%H.%M.%S")
+        _, triples = await _write_contiguous_group(
+            temp_storage, later_name, ["corrupt.dav"], later, "download_failed"
+        )
+        skip_download(temp_storage, later_name, "corrupt.dav", by="dashboard")
+
+        # Neither recording is on local disk.
+        mock_file_system["exists"].side_effect = lambda p: not str(p).endswith(".dav")
+        fmt = "%Y-%m-%d %H:%M:%S"
+        mock_camera.get_file_list = AsyncMock(
+            return_value=[
+                {
+                    "path": "/held.dav",
+                    "startTime": base.strftime(fmt),
+                    "endTime": (base + timedelta(minutes=30)).strftime(fmt),
+                },
+                {
+                    "path": "/corrupt.dav",
+                    "startTime": triples[0][1].strftime(fmt),
+                    "endTime": triples[0][2].strftime(fmt),
+                },
+            ]
+        )
+        dp = _idle_download_processor()
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+
+        await poller._reconcile_files_from_camera()
+
+        queued = [c.args[0].file_path for c in dp.add_work.call_args_list]
+        assert [os.path.basename(p) for p in queued] == ["held.dav"], (
+            "the unskipped file is retried; the skipped one never is"
+        )

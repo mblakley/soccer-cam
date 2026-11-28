@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
 
 from ..utils.locking import FileLock
@@ -11,6 +12,80 @@ from ..utils.paths import get_state_file_path
 from .recording_file import RecordingFile
 
 logger = logging.getLogger(__name__)
+
+# A recording is settled when we will never need to fetch it from the camera
+# again: either we have the bytes (or something derived from them), or we
+# deliberately gave up on it. The camera poller's watermark may only advance
+# over settled recordings, which is what makes "at or before the watermark"
+# mean "done" rather than merely "seen".
+#
+# Kept as one name shared with the poller's _file_needs_download so the two
+# can't drift: a status that means "done" to one and "needs download" to the
+# other would make the poller re-queue everything behind the watermark.
+#
+# Split in two because the halves answer different questions. A file in
+# DOWNLOADED_FILE_STATUSES got here by succeeding; one in
+# GAVE_UP_FILE_STATUSES got here by failing and being let go. skip_download
+# refuses the first (there is nothing to give up on) and accepts the second.
+DOWNLOADED_FILE_STATUSES = frozenset(
+    {
+        "downloaded",
+        "combined",
+        "trimmed",
+        "ball_tracking_complete",
+        "pipeline_complete",
+        "complete",
+        # Uploaded and moved off local disk. The bytes are deliberately gone;
+        # their absence must never be read as "never downloaded".
+        "archived",
+    }
+)
+# The terminal status a *person* sets on a download they have chosen to give
+# up on (the dashboard's "Downloads that keep failing" Skip button, or the TTT
+# command that calls the same function). Nothing else sets it.
+SKIPPED_FILE_STATUS = "skipped"
+GAVE_UP_FILE_STATUSES = frozenset(
+    {
+        SKIPPED_FILE_STATUS,
+        # Retries exhausted and the camera confirms it no longer has the file.
+        # Settled in the sense that matters here: we are never fetching it, so
+        # it must not hold the watermark (and every later game) hostage.
+        "abandoned",
+    }
+)
+SETTLED_FILE_STATUSES = DOWNLOADED_FILE_STATUSES | GAVE_UP_FILE_STATUSES
+# Group-level statuses that settle every file inside them regardless of the
+# individual file status — the group as a whole is finished with the camera.
+#
+# This is exactly the set of groups the StateAuditor treats as past the
+# download phase (it imports this name), and DownloadProcessor refuses to
+# fetch into them too. The two must agree: a stale non-terminal file entry in
+# a combined group (the camera re-listing an in-progress "_000000_" segment
+# under its final name) is never re-queued and never abandoned, so if the
+# watermark still waited on it, it would wait forever — and hold every later
+# game's archive with it. Nothing is lost by passing it: nothing can download
+# into a group at these statuses anyway.
+SETTLED_GROUP_STATUSES = frozenset(
+    {
+        "combined",
+        "trimmed",
+        "ball_tracking_complete",
+        "pipeline_complete",
+        "complete",
+        "not_a_game",
+        # Uploaded and moved off local disk. Its files are *supposed* to be
+        # missing locally; re-fetching them would undo the archive.
+        "archived",
+    }
+)
+# File statuses a person may skip. Anything with bytes is refused (nothing to
+# give up on); "downloading" is refused because an attempt is in flight right
+# now — wait for it to fail. "abandoned" is accepted so a person can put their
+# name on a give-up the downloader already made.
+SKIPPABLE_FILE_STATUSES = frozenset({"pending", "download_failed", "abandoned"})
+
+# Group directory names, as the camera poller creates them.
+_GROUP_DIR_FORMAT = "%Y.%m.%d-%H.%M.%S"
 
 
 class DirectoryState:
@@ -101,21 +176,25 @@ class DirectoryState:
         autocam_run marker — which would defeat the resume-after-crash
         path during normal operation.
         """
-        files_dict = {fp: fs.to_dict() for fp, fs in self.files.items()}
-        state_data: dict = {}
-        if os.path.exists(self.state_file_path):
-            try:
-                with open(self.state_file_path) as f:
-                    state_data = json.load(f)
-            except (json.JSONDecodeError, FileNotFoundError):
-                state_data = {}
-        state_data["status"] = self.status
-        state_data["error_message"] = self.error_message
-        state_data["files"] = files_dict
-        if self.ttt_recording_id is not None:
-            state_data["ttt_recording_id"] = self.ttt_recording_id
         try:
             with FileLock(self.state_file_path):
+                # Read under the same lock as the write, so nothing written in
+                # between (skip_download, a sibling helper) is lost.
+                state_data: dict = {}
+                if os.path.exists(self.state_file_path):
+                    try:
+                        with open(self.state_file_path) as f:
+                            state_data = json.load(f)
+                    except (json.JSONDecodeError, FileNotFoundError):
+                        state_data = {}
+                self._keep_skips_from_disk(state_data)
+                state_data["status"] = self.status
+                state_data["error_message"] = self.error_message
+                state_data["files"] = {
+                    fp: fs.to_dict() for fp, fs in self.files.items()
+                }
+                if self.ttt_recording_id is not None:
+                    state_data["ttt_recording_id"] = self.ttt_recording_id
                 # Atomic write: temp file then rename to prevent corruption on crash
                 temp_path = self.state_file_path + ".tmp"
                 with open(temp_path, "w") as f:
@@ -128,6 +207,42 @@ class DirectoryState:
         logger.debug(
             f"Saved directory state with {len(self.files)} files to {self.state_file_path}"
         )
+
+    def _keep_skips_from_disk(self, state_data: dict) -> None:
+        """A person's skip on disk wins over a stale in-memory copy.
+
+        This object's ``files`` is a snapshot from whenever it was loaded, and
+        every save writes the whole map back. The download processor holds one
+        for the length of a download, so a file skipped from the dashboard in
+        the meantime would be silently un-skipped by the next save of any
+        sibling — the person clicks Skip, and ten minutes later the file is
+        back to ``download_failed``, holding the watermark again. Nothing in
+        the pipeline un-skips a file, so an on-disk ``skipped`` entry is
+        always the newer truth: adopt it.
+        """
+        disk_files = state_data.get("files")
+        if not isinstance(disk_files, dict):
+            return
+        for fp, entry in disk_files.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("status") != SKIPPED_FILE_STATUS:
+                continue
+            mine = self.files.get(fp)
+            if mine is None or mine.status == SKIPPED_FILE_STATUS:
+                continue
+            try:
+                kept = RecordingFile.from_dict(entry)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.error(
+                    "Unreadable skipped entry %s in %s: %s",
+                    fp,
+                    self.state_file_path,
+                    e,
+                )
+                continue
+            kept.file_path = fp
+            self.files[fp] = kept
 
     async def save_state(self):
         """Asynchronously saves the current state to the JSON file."""
@@ -519,3 +634,261 @@ class DirectoryState:
             logger.error("Timeout updating %s for %s: %s", key, self.directory_path, e)
         except Exception as e:
             logger.error("Could not update %s for %s: %s", key, self.directory_path, e)
+
+
+# ----------------------------------------------------------------------
+# Giving up on a download, deliberately
+# ----------------------------------------------------------------------
+# A file the camera keeps listing but that never downloads (corrupt on the SD
+# card, say) is left ``download_failed``: the camera has not confirmed it gone,
+# so the downloader will not abandon it, and the StateAuditor retries it every
+# pass. It holds that camera's watermark -- and the archiving of every later
+# game -- until someone decides. These two functions are that decision: one to
+# see what is stuck, one to let a file go. The dashboard calls them; the TTT
+# command will call the same ones.
+
+
+class SkipDownloadError(ValueError):
+    """``skip_download`` refused: an unknown group or file, or a file there is
+    nothing to give up on. The message says which, for a person to read."""
+
+
+@dataclass(frozen=True)
+class SkipResult:
+    group: str
+    file_name: str
+    previous_status: str
+    # False when the file was already skipped (a repeat request is a no-op).
+    changed: bool
+
+
+def _base_name(path: str) -> str:
+    """Last component of a path written with either separator.
+
+    state.json keys are local paths, and a request can name a file by its
+    Windows path or its POSIX one; both must find the same entry.
+    """
+    return str(path).replace(os.sep, "/").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _resolve_group_dir(storage_path: str, group_dir: str) -> str:
+    """Return the real group directory for *group_dir* (a name or a path).
+
+    Refuses anything that is not a recording group directly under
+    *storage_path* -- a name the poller would not have made, or a path that
+    escapes the storage root.
+    """
+    raw = str(group_dir or "").strip()
+    if not raw:
+        raise SkipDownloadError("No recording group given.")
+    name = os.path.basename(os.path.normpath(raw))
+    try:
+        datetime.strptime(name, _GROUP_DIR_FORMAT)
+    except ValueError:
+        raise SkipDownloadError(
+            f"{raw!r} is not a recording group (expected a name like "
+            "2026.07.01-10.00.00)."
+        ) from None
+    candidate = raw if os.path.isabs(raw) else os.path.join(storage_path, raw)
+    root = os.path.normcase(os.path.realpath(storage_path))
+    parent = os.path.normcase(os.path.dirname(os.path.realpath(candidate)))
+    if parent != root:
+        raise SkipDownloadError(
+            f"{raw!r} is not a recording group in this storage folder."
+        )
+    if not os.path.isdir(candidate):
+        raise SkipDownloadError(f"No recording group {name} in storage.")
+    return candidate
+
+
+def skip_download(
+    storage_path: str,
+    group_dir: str,
+    file_path: str,
+    by: str,
+    reason: str | None = None,
+) -> SkipResult:
+    """Give up on one download, because a person said so.
+
+    Marks the file ``skipped`` (and ``skip``), which every part of the
+    pipeline treats as settled: the camera poller's watermark passes it, the
+    StateAuditor stops re-queuing it, the download processor will not fetch
+    it, and the rest of its group may combine without it. Records who, when
+    and why on the file entry. Logged at WARNING -- footage is being given up.
+
+    Args:
+        storage_path: The storage root holding the group directories.
+        group_dir: The group, by directory name (``2026.07.01-10.00.00``) or
+            full path. Must sit directly under ``storage_path``.
+        file_path: The file, by name or by its full local path.
+        by: Who decided, e.g. ``"dashboard"`` or a TTT user. Required.
+        reason: Optional note, kept on the file entry.
+
+    Returns:
+        A ``SkipResult``; ``changed`` is False if it was already skipped.
+
+    Raises:
+        SkipDownloadError: unknown group or file, no ``by``, an unreadable
+            state file, or a file that is not a failed download -- one that
+            already downloaded (there is nothing to give up on), is
+            downloading right now, or sits in a group that is already past
+            the download phase.
+    """
+    who = (by or "").strip()
+    if not who:
+        raise SkipDownloadError("Say who is skipping this download (by=...).")
+    group_path = _resolve_group_dir(storage_path, group_dir)
+    group = os.path.basename(os.path.normpath(group_path))
+    file_name = _base_name(file_path or "")
+    if not file_name:
+        raise SkipDownloadError("No file given.")
+
+    state_path = get_state_file_path(group_path, storage_path)
+    if not os.path.isfile(state_path):
+        raise SkipDownloadError(f"Recording group {group} has no state file.")
+
+    note = (reason or "").strip() or None
+    with FileLock(state_path):
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state_data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            raise SkipDownloadError(
+                f"Could not read the state of {group}: {e}"
+            ) from None
+        files = state_data.get("files") if isinstance(state_data, dict) else None
+        if not isinstance(files, dict):
+            files = {}
+        key = next((fp for fp in files if _base_name(fp) == file_name), None)
+        if key is None or not isinstance(files[key], dict):
+            raise SkipDownloadError(f"{file_name} is not a recording in {group}.")
+        entry = files[key]
+        status = str(entry.get("status") or "pending")
+
+        if status == SKIPPED_FILE_STATUS:
+            logger.info(
+                "DOWNLOAD: %s/%s is already skipped (by %s at %s); nothing to do.",
+                group,
+                file_name,
+                entry.get("skipped_by"),
+                entry.get("skipped_at"),
+            )
+            return SkipResult(group, file_name, status, changed=False)
+
+        group_status = state_data.get("status")
+        if group_status in SETTLED_GROUP_STATUSES:
+            raise SkipDownloadError(
+                f"{group} is already {group_status}; its files are past "
+                "downloading and hold nothing up."
+            )
+        if status in DOWNLOADED_FILE_STATUSES:
+            raise SkipDownloadError(
+                f"{file_name} is already {status}. Skip is for downloads that "
+                "keep failing; this one succeeded."
+            )
+        if status == "downloading":
+            raise SkipDownloadError(
+                f"{file_name} is downloading right now. Skip it if this attempt fails."
+            )
+        if status not in SKIPPABLE_FILE_STATUSES:
+            raise SkipDownloadError(
+                f"{file_name} has status {status!r}, which cannot be skipped."
+            )
+
+        now = datetime.now().isoformat()
+        entry["status"] = SKIPPED_FILE_STATUS
+        entry["skip"] = True
+        entry["skipped_at"] = now
+        entry["skipped_by"] = who
+        entry["skip_reason"] = note
+        entry["last_updated"] = now
+
+        temp_path = state_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(state_data, f, indent=4)
+        os.replace(temp_path, state_path)
+
+    logger.warning(
+        "DOWNLOAD: %s/%s SKIPPED by %s (was %s, %s failed round(s)%s). It will "
+        "not be downloaded; the camera watermark may now pass it.",
+        group,
+        file_name,
+        who,
+        status,
+        entry.get("failed_attempts") or 0,
+        f"; reason: {note}" if note else "",
+    )
+    return SkipResult(group, file_name, status, changed=True)
+
+
+def list_stuck_downloads(storage_path: str) -> list[dict]:
+    """Downloads that keep failing and are still holding things up.
+
+    A file is listed when its group is still in the download phase, it is not
+    settled (downloaded, skipped, abandoned ...) or flagged ``skip``, and it
+    has failed: status ``download_failed``, or a failed retry round behind it
+    while it waits in ``pending``. A file mid-download is left out -- it is
+    being tried right now, and ``skip_download`` would refuse it.
+
+    Each such file holds its camera's watermark, and with it the archiving of
+    every later game. Oldest recording first. Reads ``state.json`` directly
+    and passes over any group it cannot read, so one bad file never blanks
+    the list.
+    """
+    stuck: list[dict] = []
+    try:
+        entries = sorted(os.listdir(storage_path))
+    except OSError as e:
+        logger.error("Cannot list storage %s for stuck downloads: %s", storage_path, e)
+        return stuck
+
+    for name in entries:
+        try:
+            datetime.strptime(name, _GROUP_DIR_FORMAT)
+        except ValueError:
+            continue
+        state_path = os.path.join(storage_path, name, "state.json")
+        if not os.path.isfile(state_path):
+            continue
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state_data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Cannot read %s for stuck downloads: %s", state_path, e)
+            continue
+        if not isinstance(state_data, dict):
+            continue
+        if state_data.get("status") in SETTLED_GROUP_STATUSES:
+            continue
+        files = state_data.get("files")
+        if not isinstance(files, dict):
+            continue
+        for fp, entry in files.items():
+            if not isinstance(entry, dict) or entry.get("skip"):
+                continue
+            status = str(entry.get("status") or "pending")
+            if status in SETTLED_FILE_STATUSES or status == "downloading":
+                continue
+            try:
+                attempts = int(entry.get("failed_attempts") or 0)
+            except (TypeError, ValueError):
+                attempts = 0
+            if status != "download_failed" and attempts <= 0:
+                continue
+            metadata = entry.get("metadata")
+            camera = metadata.get("camera_name") if isinstance(metadata, dict) else None
+            stuck.append(
+                {
+                    "group": name,
+                    "file_name": _base_name(fp),
+                    "camera": camera,
+                    "status": status,
+                    "start_time": entry.get("start_time"),
+                    "end_time": entry.get("end_time"),
+                    "failed_attempts": attempts,
+                    "last_error": entry.get("error_message"),
+                    "last_failed_at": entry.get("last_failed_at"),
+                }
+            )
+    stuck.sort(key=lambda s: (str(s["start_time"] or ""), s["group"], s["file_name"]))
+    return stuck

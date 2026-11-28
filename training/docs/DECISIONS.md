@@ -79,6 +79,62 @@ Append-only. Never delete entries — if a decision is reversed, add a new entry
 
 ---
 
+## 2026-11-27: A person can skip a download that keeps failing (`skipped` file status) (Mark)
+
+**Context.** Since the 2026-08-06 watermark decision (shipped as PR #141), a recording the camera
+keeps listing but that never downloads -- corrupt on the SD card, say -- stays `download_failed`.
+The downloader only marks a file `abandoned` when the camera confirms it is gone, which is right
+("when in doubt, keep footage"), so this file is retried by the StateAuditor every pass and holds
+its camera's watermark, and with it the archiving of every later game, indefinitely. The only
+way out was editing `state.json` by hand. Mark: "we should also allow marking a download as
+'skip' if it continuously fails, using the soccer-cam or TTT UI."
+
+**Decided:**
+- **`skipped` is a terminal file status that only a person sets.** It records a deliberate
+  decision to give up on footage, so it is never set automatically -- that is what `abandoned`
+  is for, and #141's rule for it is unchanged. The file entry records `skipped_at`, `skipped_by`
+  (`"dashboard"`, or the TTT user later) and an optional `skip_reason`, and sets `skip=True`.
+- **It is settled everywhere #141 asks "settled?"**: in `SETTLED_FILE_STATUSES` (so the
+  watermark passes it, and with it the archive guard); `skip=True` keeps the StateAuditor and the
+  poller's discovery/reconcile passes from re-queuing it; the DownloadProcessor refuses a skipped
+  file still in its queue and its retry-exhaustion hook never overwrites one. The rest of the
+  group combines without it (`is_ready_for_combining` already ignores `skip` files). The status
+  sets moved from `camera_poller.py` to `models/directory_state.py` (unchanged contents, split
+  into `DOWNLOADED_FILE_STATUSES` + `GAVE_UP_FILE_STATUSES`) so the download processor and the
+  dashboard can share them without importing the poller.
+- **One core function, two callers.** `video_grouper.models.directory_state.skip_download(
+  storage_path, group_dir, file_path, by, reason=None) -> SkipResult` validates and writes under
+  the state file's `FileLock`, and raises `SkipDownloadError` (a `ValueError`) on an unknown
+  group/file, a missing `by`, a file that already downloaded (nothing to give up), one that is
+  downloading right now, or a group already past download. Re-skipping is a no-op that keeps the
+  first record. The dashboard's `POST /downloads/skip` calls it; the TTT command will call the
+  same function. `list_stuck_downloads(storage_path)` is the matching read.
+- **A skip wins over a stale in-memory copy.** `DirectoryState` saves rewrite the whole file map,
+  and the download processor holds one for the length of a download, so a skip made meanwhile
+  was silently reverted by the next sibling save. Saves now read under the lock and adopt any
+  on-disk `skipped` entry. Nothing un-skips a file today; a future "un-skip" must clear the
+  on-disk entry itself.
+- **Repeated failure is recorded on the file** so the dashboard can show it without logs:
+  `failed_attempts` (+1 per exhausted retry round, i.e. per `on_item_permanently_failed`),
+  `error_message` + `last_failed_at` (per failed attempt).
+- **Dashboard UX:** a "Downloads that keep failing" section lists files that are
+  `download_failed` (or `pending` after a failed round) in groups still downloading, with
+  camera, group, recording time, rounds, last error. Skip is two steps -- a confirmation page
+  that says what is given up (and takes the reason), then Confirm skip -- because the dashboard
+  reloads every 10 s and would reset an in-table confirm control. Result messages travel as an
+  unguessable token, not as text in the URL.
+
+**Trade-off:** a skip is one-way from the UI. That is intended -- it is the person's statement
+that the footage is gone -- and the confirmation page says so before they commit.
+
+**Files:** `video_grouper/models/directory_state.py`, `video_grouper/models/recording_file.py`,
+`video_grouper/task_processors/download_processor.py`, `video_grouper/task_processors/camera_poller.py`,
+`video_grouper/web/auth_server.py`, `video_grouper/web/static/soccer-cam.css`,
+`video_grouper/web/preview.py`, `tests/test_skip_download.py` (+ cases in the poller, auditor,
+archive, download processor and dashboard tests).
+
+---
+
 ## 2026-11-26: Product behavior for the game-day loop with team-tech-tools (Mark)
 
 **Context.** A cross-repo audit (code + a full local run of TTT `development`) found the loop

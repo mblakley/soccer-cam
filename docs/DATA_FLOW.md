@@ -44,8 +44,12 @@ stateDiagram-v2
     pending --> downloading: download starts
     downloading --> downloaded: download succeeds
     downloading --> download_failed: download fails or crash
-    download_failed --> downloading: retry (up to 3x)
+    download_failed --> downloading: retry (3x, then again each audit pass)
+    download_failed --> abandoned: retries exhausted + camera confirms it is gone
+    download_failed --> skipped: a person gives up on it (dashboard Skip)
     downloaded --> [*]: ready for combine
+    abandoned --> [*]: settled, never fetched
+    skipped --> [*]: settled, never fetched; group combines without it
 ```
 
 ## Group State Machine

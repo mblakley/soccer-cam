@@ -6,6 +6,7 @@ from video_grouper.cameras.base import Camera, CameraUnreachableError
 from video_grouper.integrations.recordings import IRecordingSink, StepReport
 from video_grouper.integrations.recordings.sources.null import NullRecordingSink
 from video_grouper.models import DirectoryState, RecordingFile
+from video_grouper.models.directory_state import SKIPPED_FILE_STATUS
 from video_grouper.task_processors.video_processor import VideoProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.disk_space import check_disk_space
@@ -102,6 +103,21 @@ class DownloadProcessor(QueueProcessor):
         if dir_state.status in skip_statuses:
             logger.info(
                 f"DOWNLOAD: Skipping {file_name} - group already at status '{dir_state.status}'"
+            )
+            return
+
+        # A person gave up on this file (skip_download). It may still be in
+        # this queue from before they did -- queued by the auditor's last
+        # pass, or restored from the persisted queue -- so check the file's
+        # current state, not the item's copy of it.
+        current = dir_state.get_file_by_path(file_path)
+        if current is not None and (
+            getattr(current, "status", None) == SKIPPED_FILE_STATUS
+            or getattr(current, "skip", False) is True
+        ):
+            logger.info(
+                f"DOWNLOAD: Not downloading {file_name} - it was skipped "
+                f"(by {getattr(current, 'skipped_by', None) or 'a person'})."
             )
             return
 
@@ -316,7 +332,14 @@ class DownloadProcessor(QueueProcessor):
             # .partial.video, .partial.audio) and cleans them up on failure;
             # nothing to do here. StateAuditor mops up any orphans on the next
             # scan if the camera couldn't reach its own finally block.
-            await dir_state.update_file_state(file_path, status="download_failed")
+            # Keep the error on the file, so the dashboard can say why a
+            # download keeps failing without anyone reading logs.
+            await dir_state.update_file_state(
+                file_path,
+                status="download_failed",
+                error_message=str(e) or type(e).__name__,
+                last_failed_at=datetime.now().isoformat(),
+            )
             await self.recordings.progress(
                 dir_state.directory_path,
                 StepReport(
@@ -356,15 +379,37 @@ class DownloadProcessor(QueueProcessor):
         if not file_path:
             return
         name = os.path.basename(file_path)
+        group_dir = os.path.dirname(file_path)
+        dir_state = DirectoryState(group_dir)
+
+        current = dir_state.get_file_by_path(file_path)
+        if current is not None and current.status == SKIPPED_FILE_STATUS:
+            # A person settled it while this round was failing. Theirs is the
+            # decision on record; do not count, and never overwrite it.
+            logger.info(
+                "DOWNLOAD: %s was skipped while its retries ran out; leaving "
+                "it skipped.",
+                name,
+            )
+            return
+
+        # One exhausted retry round, counted on the file. The StateAuditor
+        # re-queues a download_failed file every pass, so this climbs for as
+        # long as the file keeps failing -- the number a person looks at to
+        # decide whether to skip it.
+        attempts = (current.failed_attempts if current is not None else 0) + 1
+        await dir_state.update_file_state(file_path, failed_attempts=attempts)
 
         if not await self._camera_confirms_file_gone(item):
             logger.error(
-                "DOWNLOAD: %s failed %d attempts, but the camera has not "
-                "confirmed it is gone; leaving it retryable (download_failed). "
-                "It holds the camera watermark until it downloads or the "
-                "camera stops listing it.",
+                "DOWNLOAD: %s failed %d attempts (retry round %d), but the "
+                "camera has not confirmed it is gone; leaving it retryable "
+                "(download_failed). It holds the camera watermark until it "
+                "downloads, the camera stops listing it, or a person skips it "
+                "from the dashboard's 'Downloads that keep failing' list.",
                 name,
                 self._max_retries,
+                attempts,
             )
             return
 
@@ -375,8 +420,6 @@ class DownloadProcessor(QueueProcessor):
             name,
             self._max_retries,
         )
-        group_dir = os.path.dirname(file_path)
-        dir_state = DirectoryState(group_dir)
         await dir_state.update_file_state(file_path, status="abandoned")
 
     async def _camera_confirms_file_gone(self, item: RecordingFile) -> bool:
