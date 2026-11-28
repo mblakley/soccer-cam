@@ -86,7 +86,7 @@ class TestClipRequestEndToEnd:
         # 3) Build a TTT client mock that returns one pending request, tracks state.
         req_id = "e2e-00000000-0000-0000-0000-000000000001"
         ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        ttt.ensure_signed_in = MagicMock(return_value=True)
         ttt.get_pending_clip_requests = MagicMock(
             return_value=[
                 _build_request(
@@ -176,7 +176,7 @@ class TestClipRequestEndToEnd:
         (tmp_path / "game-missing").mkdir()
 
         ttt = MagicMock()
-        ttt.is_authenticated = MagicMock(return_value=True)
+        ttt.ensure_signed_in = MagicMock(return_value=True)
         ttt.get_pending_clip_requests = MagicMock(
             return_value=[
                 _build_request(

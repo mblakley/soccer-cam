@@ -18,7 +18,6 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from ..integrations.device_link import (
@@ -65,7 +64,10 @@ class DeviceLinkProcessor(PollingProcessor):
         self.error_tracker = error_tracker
         # This install's camera objects (None: don't register cameras).
         self.cameras = cameras
-        self._cameras_registered_at: float | None = None
+        # time.monotonic() of the next camera registration attempt, and the
+        # wait after the next failure.
+        self._next_camera_registration = 0.0
+        self._camera_retry = self.CAMERA_REGISTRATION_RETRY
         self._profiles_checked_at: float | None = None
         # camera name -> enabled here. Empty: nothing heard yet, all enabled.
         self._camera_enabled: dict[str, bool] = {}
@@ -89,28 +91,38 @@ class DeviceLinkProcessor(PollingProcessor):
 
     # Cameras rarely change; re-announce hourly so an added camera shows up.
     CAMERA_REGISTRATION_INTERVAL = 3600
+    # A failed attempt (camera offline, link refused, no ids back) is retried
+    # after this long, doubling up to the hourly interval.
+    CAMERA_REGISTRATION_RETRY = 300
 
     async def _maybe_register_cameras(self) -> None:
-        if self.cameras is None:
-            return
+        if self.cameras is None or not self.link.registers_cameras:
+            return  # nobody to register with: don't even ask the cameras
         now = time.monotonic()
-        if (
-            self._cameras_registered_at is not None
-            and now - self._cameras_registered_at < self.CAMERA_REGISTRATION_INTERVAL
-        ):
+        if now < self._next_camera_registration:
             return
-        described = [d for d in [await _describe(c) for c in self.cameras()] if d]
-        if not described:
-            return
-        ids = await self.link.register_cameras(described)
-        if ids:  # only a success counts; otherwise retry next tick
-            self._cameras_registered_at = now
+        ids: dict[str, str] = {}
+        try:
+            described = [d for d in [await _describe(c) for c in self.cameras()] if d]
+            if described:
+                ids = await self.link.register_cameras(described)
+        finally:
+            # Every attempt counts, so a failure isn't retried every tick.
+            if ids:
+                self._camera_retry = self.CAMERA_REGISTRATION_RETRY
+                self._next_camera_registration = now + self.CAMERA_REGISTRATION_INTERVAL
+            else:
+                self._next_camera_registration = now + self._camera_retry
+                self._camera_retry = min(
+                    self._camera_retry * 2, self.CAMERA_REGISTRATION_INTERVAL
+                )
 
     STITCH_PROFILE_INTERVAL = 3600
 
     async def _maybe_pull_stitch_profile(self) -> None:
         """Install a stitch profile saved in a web calibration tool at the file
-        the pipeline reads, unless a newer local calibration is there."""
+        the local calibration writes, unless a newer local calibration is
+        there (see :func:`video_grouper.utils.stitch_remap.local_profile_path`)."""
         now = time.monotonic()
         if (
             self._profiles_checked_at is not None
@@ -131,37 +143,49 @@ class DeviceLinkProcessor(PollingProcessor):
                 sorted(profiles),
             )
             return
-        from video_grouper.utils.stitch_remap import install_pulled_profile
+        from video_grouper.utils.stitch_remap import (
+            install_pulled_profile,
+            local_profile_path,
+        )
 
         outcome = await asyncio.to_thread(
             install_pulled_profile,
-            self._stitch_profile_path(),
+            local_profile_path(self.storage_path),
             next(iter(profiles.values())),
         )
         logger.info("DEVICE_LINK: stitch profile from the link: %s", outcome)
-
-    def _stitch_profile_path(self) -> Path:
-        configured = getattr(
-            getattr(self.config, "processing", None), "seam_realign_profile_path", None
-        )
-        if isinstance(configured, str) and configured:
-            return Path(configured)
-        return Path(self.storage_path) / "stitch_profile.json"
 
     def is_camera_enabled(self, camera_name: str) -> bool:
         """False only when the link said this camera is not polled here."""
         return self._camera_enabled.get(camera_name, True)
 
     async def discover_work(self) -> None:
-        """One tick. Called again after ``poll_interval`` whatever happens."""
+        """One tick. Called again after ``poll_interval`` whatever happens.
+
+        Each step runs on its own: one that raises is logged and the rest
+        (above all the heartbeat and its commands) still run."""
         if self.capabilities is not None:
-            await self.link.register(self.capabilities)
-        await self._maybe_register_cameras()
-        await self._maybe_pull_stitch_profile()
-        reply = await self.link.heartbeat(await asyncio.to_thread(self._health))
+            await self._step("register", self.link.register(self.capabilities))
+        await self._step("camera registration", self._maybe_register_cameras())
+        await self._step("stitch profile pull", self._maybe_pull_stitch_profile())
+        reply = await self._step("heartbeat", self._heartbeat())
+        if reply is None:
+            return
         self._apply_camera_state(reply)
         for command in reply.commands:
-            await self._run_command(command)
+            await self._step(f"command {command.id}", self._run_command(command))
+
+    async def _heartbeat(self) -> HeartbeatReply:
+        return await self.link.heartbeat(await asyncio.to_thread(self._health))
+
+    async def _step(self, name: str, coro: Any) -> Any:
+        try:
+            return await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("DEVICE_LINK: %s raised; the other steps still run", name)
+            return None
 
     def _apply_camera_state(self, reply: HeartbeatReply) -> None:
         new_state = reply.camera_enabled

@@ -27,7 +27,9 @@ class FakeDeviceLink(IDeviceLink):
         *,
         heartbeat_interval: int = 30,
         errors: dict[str, BaseException] | None = None,
+        registers_cameras: bool = True,
     ):
+        self.can_register_cameras = registers_cameras
         self.replies = list(replies or [])
         self.heartbeat_interval = heartbeat_interval
         self.errors = dict(errors or {})
@@ -61,8 +63,13 @@ class FakeDeviceLink(IDeviceLink):
         self.registered.append(dict(capabilities))
         self._maybe_raise("register")
 
+    @property
+    def registers_cameras(self) -> bool:
+        return self.can_register_cameras
+
     async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
         self.registered_cameras.append(list(cameras))
+        self._maybe_raise("register_cameras")
         return {
             c.name: self.camera_ids[c.name]
             for c in cameras
@@ -78,6 +85,7 @@ class FakeDeviceLink(IDeviceLink):
         return self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
 
     async def stitch_profiles(self) -> dict[str, dict[str, Any]]:
+        self._maybe_raise("stitch_profiles")
         return dict(self.profiles)
 
     async def acknowledge_command(self, command_id: str) -> None:

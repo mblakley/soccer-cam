@@ -22,6 +22,10 @@ class NullDeviceLink(IDeviceLink):
     async def register(self, capabilities: dict[str, Any]) -> None:
         return None
 
+    @property
+    def registers_cameras(self) -> bool:
+        return False  # nobody to register them with
+
     async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
         return {}
 

@@ -18,7 +18,10 @@ acknowledge_command    acknowledge_command(command_id)
 complete_command       complete_command(command_id, result)
 =====================  ===================================================
 
-``camera_id`` is ``[TTT] camera_id`` (read on each call); ``machine_name`` is
+"Signed in" is ``ensure_signed_in`` (an expired access token is refreshed
+first), checked once per heartbeat; signed out, a heartbeat sends nothing and
+reports no news. ``camera_id`` is each id in the shared ``TTTCameraIds`` (the
+registered ids, else ``[TTT] camera_id``); ``machine_name`` is
 ``[TTT] machine_name`` or the host name; ``machine_id`` is this computer's
 stable id (``utils.machine_id``), looked up once on the first heartbeat.
 Every call is caught and logged on its own, so one failing endpoint never
@@ -100,6 +103,14 @@ class TTTDeviceLink(IDeviceLink):
                 self._machine_id = None
         return self._machine_id
 
+    async def _signed_in(self) -> bool:
+        """The shared session is usable (refreshed when expired), checked off
+        the event loop because a refresh is a network call."""
+        try:
+            return bool(await asyncio.to_thread(self._client.ensure_signed_in))
+        except Exception:
+            return False
+
     # ------------------------------------------------------------------
     # register
     # ------------------------------------------------------------------
@@ -107,7 +118,7 @@ class TTTDeviceLink(IDeviceLink):
     async def register(self, capabilities: dict[str, Any]) -> None:
         if self._service_id is not None:
             return
-        if not self._client.is_authenticated():
+        if not await self._signed_in():
             logger.debug("TTT: not signed in, service registration deferred")
             return
         machine_name = getattr(self._ttt_config, "machine_name", "") or platform.node()
@@ -124,12 +135,20 @@ class TTTDeviceLink(IDeviceLink):
         except Exception as exc:
             logger.error("TTT_JOBS: failed to register service: %s", exc)
 
+    @property
+    def registers_cameras(self) -> bool:
+        """A machine id and a session to register with (no network)."""
+        try:
+            return self._machine() is not None and bool(self._client.has_session())
+        except Exception:
+            return False
+
     async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
         """POST /device-link/register: this machine + its cameras (keyed on
         serial by TTT), ids remembered for the recording sink."""
         cameras = [c for c in cameras if c.serial]
         machine_id = self._machine()
-        if not cameras or not machine_id or not self._client.is_authenticated():
+        if not cameras or not machine_id or not await self._signed_in():
             return {}
         machine_name = getattr(self._ttt_config, "machine_name", "") or platform.node()
         try:
@@ -175,6 +194,8 @@ class TTTDeviceLink(IDeviceLink):
     # ------------------------------------------------------------------
 
     async def heartbeat(self, health: DeviceHealth | None = None) -> HeartbeatReply:
+        if not await self._signed_in():
+            return HeartbeatReply()  # no news: keep the last camera state
         await self._service_heartbeat(health)
         await self._camera_heartbeat()
         camera_enabled = await self._camera_enabled_state()
@@ -182,7 +203,7 @@ class TTTDeviceLink(IDeviceLink):
         return HeartbeatReply(camera_enabled=camera_enabled, commands=commands)
 
     async def _service_heartbeat(self, health: DeviceHealth | None) -> None:
-        if not self._service_id or not self._client.is_authenticated():
+        if not self._service_id:
             return
         metrics = (
             {k: v for k, v in asdict(health).items() if v is not None} if health else {}
@@ -273,7 +294,7 @@ class TTTDeviceLink(IDeviceLink):
     async def stitch_profiles(self) -> dict[str, dict[str, Any]]:
         """GET /device-link/camera-config per registered camera ->
         ``stitch_profile`` (set in TTT's calibration tool)."""
-        if not self._client.is_authenticated():
+        if not await self._signed_in():
             return {}
         profiles: dict[str, dict[str, Any]] = {}
         for name, camera_id in self._cameras.all_ids().items():

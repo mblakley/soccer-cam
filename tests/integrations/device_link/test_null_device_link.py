@@ -28,3 +28,8 @@ async def test_every_verb_is_a_no_op_and_the_reply_says_nothing():
 
 def test_default_heartbeat_cadence():
     assert NullDeviceLink().heartbeat_interval == 30
+
+
+def test_does_not_register_cameras():
+    # The processor then never asks the cameras to describe themselves.
+    assert NullDeviceLink().registers_cameras is False

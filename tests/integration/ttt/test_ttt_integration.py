@@ -925,7 +925,7 @@ class TestStandaloneOperation:
         from video_grouper.task_processors.ttt_poller import TTTPoller
 
         mock_client = MagicMock()
-        mock_client.is_authenticated.return_value = False
+        mock_client.ensure_signed_in.return_value = False
         mock_client.get_pending_jobs = MagicMock()
 
         config = MagicMock()
@@ -961,7 +961,7 @@ class TestStandaloneOperation:
         )
 
         client = MagicMock()
-        client.is_authenticated.return_value = True
+        client.ensure_signed_in.return_value = True
         (tmp_path / "state.json").write_text('{"status": "downloaded", "files": {}}')
         await TTTRecordingSink(client, "test-cam").progress(
             str(tmp_path), StepReport("download", "download", "Download", "complete")
@@ -975,7 +975,7 @@ class TestGracefulDegradation:
     def _failing_client(self):
         """A signed-in TTT client that errors on every method."""
         client = MagicMock()
-        client.is_authenticated.return_value = True
+        client.ensure_signed_in.return_value = True
         for method_name in [
             "register_service",
             "send_heartbeat",
@@ -1062,7 +1062,7 @@ class TestGracefulDegradation:
         from video_grouper.task_processors.ttt_poller import TTTPoller
 
         mock_client = MagicMock()
-        mock_client.is_authenticated.return_value = True
+        mock_client.ensure_signed_in.return_value = True
         mock_client.register_service = MagicMock(return_value={"id": "svc-1"})
         mock_client.send_heartbeat = MagicMock()
         mock_client.get_pending_jobs.side_effect = Exception("Network error")

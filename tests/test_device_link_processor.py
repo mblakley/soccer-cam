@@ -218,18 +218,51 @@ async def test_no_commands_no_command_calls(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_loop_survives_a_raising_link(tmp_path):
-    import asyncio
-
-    link = FakeDeviceLink(heartbeat_interval=0, errors={"heartbeat": RuntimeError()})
+async def test_a_raising_heartbeat_is_logged_and_the_next_tick_runs(tmp_path, caplog):
+    link = FakeDeviceLink(errors={"heartbeat": RuntimeError("bug")})
     processor = _processor(tmp_path, link)
-    await processor.start()
-    for _ in range(50):
-        if link.heartbeats >= 2:
-            break
-        await asyncio.sleep(0)
-    await processor.stop()
-    assert link.heartbeats >= 2
+    with caplog.at_level(logging.ERROR):
+        await processor.discover_work()  # does not raise
+        await processor.discover_work()
+    assert link.heartbeats == 2
+    assert "heartbeat raised" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verb", ["register", "register_cameras", "stitch_profiles"])
+async def test_one_raising_step_does_not_skip_the_heartbeat_or_commands(
+    tmp_path, verb, caplog
+):
+    link = FakeDeviceLink.replying(
+        commands=[DeviceCommand("k-1", "restart")], errors={verb: RuntimeError("bug")}
+    )
+    link.camera_ids = {"front": "c-1"}
+    processor = _processor(
+        tmp_path,
+        link,
+        capabilities={"ffmpeg": True},
+        cameras=lambda: [_Camera("front")],
+        command_executor=_executor(),
+    )
+    with caplog.at_level(logging.ERROR):
+        await processor.discover_work()
+    assert link.heartbeats == 1
+    assert [c[:2] for c in link.command_calls] == [("ack", "k-1"), ("complete", "k-1")]
+    assert "raised; the other steps still run" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_raising_command_does_not_skip_the_next(tmp_path):
+    link = FakeDeviceLink.replying(
+        commands=[DeviceCommand("k-1", "restart"), DeviceCommand("k-2", "restart")]
+    )
+    executor = MagicMock()
+    executor.execute = AsyncMock(
+        side_effect=[RuntimeError("bug"), {"success": True, "message": "ok"}]
+    )
+    processor = _processor(tmp_path, link, command_executor=executor)
+    await processor.discover_work()
+    assert ("complete", "k-2", {"success": True, "message": "ok"}) in link.command_calls
 
 
 @pytest.mark.asyncio
@@ -287,16 +320,68 @@ async def test_registers_cameras_that_can_identify_themselves(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_camera_registration_retries_until_it_succeeds(tmp_path):
-    link = FakeDeviceLink()  # returns no ids: not registered yet (signed out, ...)
+async def test_failed_camera_registration_backs_off(tmp_path, monkeypatch):
+    """A failed attempt (no ids back: link refused, signed out, 404 ...) is
+    retried after 5 min, doubling up to the hourly interval -- not every tick."""
+    import video_grouper.task_processors.device_link_processor as dlp
+
+    clock = [1000.0]
+    monkeypatch.setattr(dlp.time, "monotonic", lambda: clock[0])
+    link = FakeDeviceLink()  # returns no ids
     processor = _processor(tmp_path, link, cameras=lambda: [_Camera("front")])
-    await processor.discover_work()
-    await processor.discover_work()
-    assert len(link.registered_cameras) == 2
+
+    attempts = []
+    for _ in range(2 * 60 * 2):  # two hours of 30 s ticks
+        await processor.discover_work()
+        attempts.append(len(link.registered_cameras))
+        clock[0] += 30
+    # tries at 0, 5, 15, 35 and 75 min (waits of 5, 10, 20, 40, then 60 min)
+    assert len(link.registered_cameras) == 5
+    assert attempts[:10] == [1] * 10  # nothing more in the first 5 minutes
+    assert attempts[10] == 2
+
     link.camera_ids = {"front": "c-1"}
+    clock[0] += 3600
     await processor.discover_work()
+    assert len(link.registered_cameras) == 6
+    clock[0] += 3599
     await processor.discover_work()
-    assert len(link.registered_cameras) == 3
+    assert len(link.registered_cameras) == 6  # success: hourly from here
+
+
+@pytest.mark.asyncio
+async def test_offline_cameras_are_not_asked_every_tick(tmp_path):
+    asked = []
+
+    class _Offline(_Camera):
+        async def get_device_info(self):
+            asked.append(1)
+            raise OSError("offline")
+
+    link = FakeDeviceLink()
+    processor = _processor(tmp_path, link, cameras=lambda: [_Offline("front")])
+    for _ in range(10):
+        await processor.discover_work()
+    assert len(asked) == 1
+    assert link.registered_cameras == []
+
+
+@pytest.mark.asyncio
+async def test_cameras_are_not_described_when_the_link_cannot_register(tmp_path):
+    from video_grouper.integrations.device_link.sources.null import NullDeviceLink
+
+    asked = []
+
+    class _Counting(_Camera):
+        async def get_device_info(self):
+            asked.append(1)
+            return await super().get_device_info()
+
+    for link in (FakeDeviceLink(registers_cameras=False), NullDeviceLink()):
+        processor = _processor(tmp_path, link, cameras=lambda: [_Counting("front")])
+        await processor.discover_work()
+        await processor.discover_work()
+    assert asked == []
 
 
 @pytest.mark.asyncio
@@ -326,15 +411,22 @@ _PROFILE = {
 
 
 @pytest.mark.asyncio
-async def test_a_profile_from_the_link_is_installed_where_the_pipeline_reads(tmp_path):
+async def test_a_pulled_profile_lands_where_the_local_calibration_writes(tmp_path):
+    """Always <storage>/stitch_profile.json -- the file the calibration page
+    writes -- so newer-wins compares the two calibrations, whatever
+    seam_realign_profile_path says."""
     import json
+
+    from video_grouper.utils.stitch_remap import local_profile_path
 
     link = FakeDeviceLink()
     link.profiles = {"front": _PROFILE}
     processor = _processor(tmp_path, link)
-    processor.config.processing.seam_realign_profile_path = None
+    processor.config.processing.seam_realign_profile_path = str(tmp_path / "x.json")
     await processor.discover_work()
+    assert local_profile_path(tmp_path) == tmp_path / "stitch_profile.json"
     assert json.loads((tmp_path / "stitch_profile.json").read_text()) == _PROFILE
+    assert not (tmp_path / "x.json").exists()
 
 
 @pytest.mark.asyncio

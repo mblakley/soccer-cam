@@ -76,6 +76,13 @@ class IDeviceLink(Provider, ABC):
         """Announce this install and what it can do. Idempotent: once it has
         succeeded, later calls do nothing; until then each call retries."""
 
+    @property
+    def registers_cameras(self) -> bool:
+        """Whether :meth:`register_cameras` can do anything right now (cheap,
+        no network). When False the caller doesn't ask the cameras to describe
+        themselves at all."""
+        return True
+
     @abstractmethod
     async def register_cameras(self, cameras: list[DeviceCamera]) -> dict[str, str]:
         """Make this install and its cameras known; idempotent. Returns the

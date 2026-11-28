@@ -23,7 +23,7 @@ CAPS = {"ffmpeg": True, "pipeline": False, "camera_type": "dahua", "camera_ip": 
 
 def _client(signed_in=True):
     c = MagicMock(spec=TTTApiClient)
-    c.is_authenticated.return_value = signed_in
+    c.ensure_signed_in.return_value = signed_in
     c.register_service.return_value = {"id": "svc-1"}
     c.list_machine_cameras.return_value = []
     c.get_pending_commands.return_value = []
@@ -94,7 +94,7 @@ async def test_register_waits_for_sign_in():
     link, _ = _link(client)
     await link.register(CAPS)
     client.register_service.assert_not_called()
-    client.is_authenticated.return_value = True
+    client.ensure_signed_in.return_value = True
     await link.register(CAPS)
     client.register_service.assert_called_once()
 
@@ -129,7 +129,7 @@ async def test_service_heartbeat_only_once_registered_and_signed_in():
     await link.heartbeat()
     client.send_heartbeat.assert_called_once_with("svc-1", "online")
 
-    client.is_authenticated.return_value = False
+    client.ensure_signed_in.return_value = False
     await link.heartbeat()
     client.send_heartbeat.assert_called_once()  # signed out: skipped
 
@@ -439,3 +439,39 @@ async def test_a_camera_ttt_refuses_gets_no_id(caplog):
     with caplog.at_level(logging.WARNING):
         assert await link.register_cameras(CAMS) == {}
     assert "MAC does not match" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# An expired access token is refreshed, not read as signed out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_expired_token_is_refreshed_and_the_service_registers(expired_ttt):
+    expired_ttt.routes[("POST", "/api/internal/device-link/register-service")] = {
+        "id": "svc-1"
+    }
+    link = TTTDeviceLink(expired_ttt.client, _cfg(camera_id=""), machine_id=None)
+    await link.register(CAPS)
+    assert link._service_id == "svc-1"
+    assert expired_ttt.refreshes == 1
+
+
+@pytest.mark.asyncio
+async def test_signed_out_heartbeat_sends_nothing_and_reports_no_news():
+    link, client = _link(_client(signed_in=False), machine_id="me")
+    assert await link.heartbeat() == HeartbeatReply()
+    client.update_camera_status.assert_not_called()
+    client.list_machine_cameras.assert_not_called()
+    client.get_pending_commands.assert_not_called()
+
+
+def test_registers_cameras_only_with_a_machine_id_and_a_session():
+    link, client = _link(machine_id="me")
+    client.has_session.return_value = True
+    assert link.registers_cameras is True
+    client.has_session.return_value = False
+    assert link.registers_cameras is False
+    no_machine, client = _link(machine_id=None)
+    client.has_session.return_value = True
+    assert no_machine.registers_cameras is False
