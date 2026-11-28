@@ -303,6 +303,12 @@ class DirectoryState:
                     file_obj.group_dir = self.directory_path
 
                 self.files[file_path] = file_obj
+                # A file still wanted reopens a group that was settled because
+                # every file was skipped -- at once, in this same write: the
+                # poller advances its watermark in the same poll, and a
+                # settled group would let it pass this file before it downloads.
+                if self.status == SKIPPED_GROUP_STATUS and not self.all_files_skipped():
+                    self.status = "pending"
                 self._save_state_nolock()
 
     async def update_file_state(self, file_path: str, **kwargs) -> None:

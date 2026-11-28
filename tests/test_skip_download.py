@@ -409,3 +409,30 @@ async def test_a_reason_over_200_characters_is_refused(temp_storage):
     with pytest.raises(SkipDownloadError):
         skip_download(temp_storage, GROUP, "a.dav", by="dashboard", reason="x" * 201)
     skip_download(temp_storage, GROUP, "a.dav", by="dashboard", reason="x" * 200)
+
+
+@pytest.mark.asyncio
+async def test_a_new_file_reopens_a_skipped_group_at_once(temp_storage):
+    """The poller adds a file to an all-skipped group and, in the same poll,
+    advances the watermark. If the group still read ``skipped`` (a settled
+    status) the watermark would pass the new file before it downloads."""
+    from video_grouper.models.directory_state import SKIPPED_GROUP_STATUS
+
+    group_dir = await _group(temp_storage, [("a.dav", "download_failed", None)])
+    skip_download(temp_storage, GROUP, "a.dav", by="dashboard")
+    assert DirectoryState(group_dir).status == SKIPPED_GROUP_STATUS
+
+    state = DirectoryState(group_dir)
+    path = os.path.join(group_dir, "b.dav")
+    start = datetime(2026, 7, 1, 11, 0, 0)
+    await state.add_file(
+        path,
+        RecordingFile(
+            start_time=start,
+            end_time=start + timedelta(minutes=30),
+            file_path=path,
+            status="pending",
+            metadata={"path": "/mnt/sd/b.dav", "camera_name": "Field cam"},
+        ),
+    )
+    assert DirectoryState(group_dir).status == "pending"
