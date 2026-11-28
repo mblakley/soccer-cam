@@ -4,6 +4,64 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-08: the ROI window on the camera — it moves bits, and far balls survive (2026-11-27)
+
+**Hypothesis:** with the stream held at a fixed bitrate, a window with a negative QP delta takes
+bits from outside it and spends them inside, and that is enough to keep a far ball visible.
+
+**Setup:** build 4922 flashed (the `setroi` format-string fix; `setroi` then echoes
+`QP = -6, QPMode = 1`). Camera at home, exposure locked, filming a TV. Two looping clips driven from
+Chrome so every capture sees the same content: (a) 60 s of the Lakefront full-field video from
+YouTube at 7680×2160; (b) a generated 10 s clip — a still of that panorama darkened to pitch-like
+levels, with ten ~6 px white balls running back and forth along fixed far-side rows, player-sized
+blocks and grass shimmer. Starvation emulated with `setevbr … ByteRate=150000 FrameRate=20000`
+(1.2 Mbps), because these clips need only 2–4 Mbps unstarved. Windows set with `setroi`, mode 1.
+
+**Result (a), real footage, 60 s per capture, two alternating repeats, keyframes scored:**
+
+| | no window | window −8 on rows 96–1119 |
+|---|---|---|
+| bitrate | 1.23 / 1.20 Mbps | 1.20 / 1.20 Mbps |
+| slice QP | 32.6 / 32.4 | 37.0 / 36.6 |
+| detail, far field (inside) | 2.92 | 3.07 (×1.049) |
+| detail, mid field (inside) | 4.46 | 4.59 (×1.029) |
+| detail, room upper (inside) | 1.14 | 1.29 (×1.129) |
+| detail, TV sideline (outside) | 4.69 | 4.29 (×0.915) |
+| detail, room lower (outside) | 2.62 | 2.41 (×0.920) |
+
+Repeats agree to 0.1–0.4 %. Unstarved (5 Mbps allowance, clip needs 2.2) the same window raises
+the bitrate instead (2.17 → 2.87 Mbps) and inside-window detail by 19–50 %, outside unchanged.
+So: coordinates are pixels, negative is better, and the rate controller compensates by raising
+the frame QP — about 29 inside and 37 outside here.
+
+**Result (b), synthetic balls, 200 frames per capture.** Small bright moving blobs (peak ≥ 18
+grey levels over the capture's own static background) counted in the far band, split into those
+on the tracks the reference capture draws (real balls) and those off them (artefacts); chance
+on-track hits subtracted.
+
+| condition (all but the first at ~1.33 Mbps) | slice QP | real balls / frame | vs reference | artefacts / frame | median peak |
+|---|---|---|---|---|---|
+| reference, unstarved (3.6 Mbps) | 28 | 3.22 | 100 % | 0.00 | 35 |
+| starved, no window | 34.5 | 0.35 | 11 % | 5.36 | 18 |
+| starved, no window (repeat) | 34.4 | 0.27 | 8 % | 4.01 | 19 |
+| starved, window −8 on rows 128–1279 | 39.1 | 1.89 | 59 % | 0.82 | 25 |
+| starved, window −12 on rows 160–543 | 39.7 | 1.86 | 58 % | 1.14 | 28 |
+
+**Conclusion:** hypothesis holds. At the same bitrate the window took far-ball detections from
+about a tenth of the reference to about six tenths, and cut false bright blobs by a factor of
+four to six. A −8 window over the whole pitch and a −12 window over the far band alone did
+equally well on the count; the far-band one kept more contrast. Also shown end to end on the
+camera: `wget` snapshot → `fieldroi` (79 s) → `roi.conf` → `S37_RoiQp` applied it within 30 s.
+
+**Limits, all real:** the balls are synthetic and re-photographed off a TV that the camera cannot
+focus on, so even the reference sees only 3.2 of 8 far balls per frame above threshold; the
+starvation is 1.3 Mbps on a quiet scene, not 20 Mbps on a game; one capture per window setting;
+a threshold detector, not ours. `fieldroi`'s grass-colour check rejected the TV picture (blue
+cast) and was bypassed for the end-to-end run, so it is still untested on a real pitch. A first
+version of the ball score matched frames by a timing marker that turned out unreadable in the
+camera's view; those numbers were wrong and are not reported. `/proc/hdal/venc/info` never lists
+the window. With the default disabled config `S37_RoiQp` in 4922 logs nothing (fixed in source).
+
 ## EXP-ENC-07: first session on the camera — baseline, no-flash levers, detector on the camera (2026-11-27)
 
 **Setup:** camera at home on build 4921 (found at 192.168.86.22; neither address in the repo was

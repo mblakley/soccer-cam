@@ -42,7 +42,22 @@
   app replacement is 12–25 weeks (agent's estimate) and does not lift the hardware limits.
 - **Decided (Mark: "you decide"):** no `device` bitrate patch until `setcbr` shows more bitrate
   helps; no SD auto-run hook in 4922; flash 4922 then 4923.
-- **READY for the camera.** Runbook: `FAR_FIELD_BITS.md` "To test on the camera", phases A–E
+- **ON THE CAMERA, 2026-11-27 evening (EXP-ENC-07/08). Build 4922 is flashed and is what the
+  camera runs.** The ROI window works: pixels, negative = better, the rate controller compensates.
+  With the stream starved to a fixed bitrate, a window took synthetic far-ball detections from ~10 %
+  of an unstarved reference to ~58 %, and on real footage moved +3–13 % detail inside and −8 %
+  outside. `fieldroi` runs on the camera (79–82 s, ~23 MB) and the snapshot → detector →
+  `roi.conf` → daemon chain works with no hands. The kernel encodes at 30 Mbps when unbounded.
+  Rate control is EVBR; the debug commands take FrameRate in thousandths.
+- **Camera left in a test state:** exposure Manual (shutter 125, gain 1) — restore Auto before a
+  game. Bitrate back at 20480, `gop=2`, window off. `fieldroi` + weights are in
+  `/mnt/sda/soccercam/bin/`.
+- **Next:** (1) flash 4923 (ten windows; rebuilt with the daemon logging fix) — Mark's call;
+  (2) fix `apply_optimal_settings` (`gop=40` is rejected whole by the camera; send 2);
+  (3) `fieldroi` on a real pitch — the grass check and the near-edge error are untested there;
+  (4) decide how the detector is triggered at an unattended game (auto-run hook);
+  (5) a controlled run above 20.97 Mbps with `setevbr … FrameRate=20000`.
+- **(superseded) READY for the camera.** Runbook: `FAR_FIELD_BITS.md` "To test on the camera", phases A–E
   (read-only baseline → no-flash levers → detector by hand → flash 4922 → flash 4923). Local
   `camera.env`, `builds/out/fieldroi/` and both paks are in place. Needs from Mark: the camera on
   the LAN, pointed at a busy scene.
