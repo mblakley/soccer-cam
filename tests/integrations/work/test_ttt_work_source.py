@@ -32,7 +32,7 @@ _LISTS = {
 
 def _client(signed_in=True):
     c = MagicMock()
-    c.is_authenticated.return_value = signed_in
+    c.ensure_signed_in.return_value = signed_in
     for method in _LISTS.values():
         getattr(c, method).return_value = []
     return c
@@ -127,7 +127,7 @@ async def test_nothing_is_listed_while_signed_out():
 @pytest.mark.asyncio
 async def test_pending_treats_an_auth_check_error_as_signed_out():
     client = _client()
-    client.is_authenticated.side_effect = RuntimeError("token file unreadable")
+    client.ensure_signed_in.side_effect = RuntimeError("token file unreadable")
     source, _ = _source(client)
     assert await source.pending() == []
     client.get_pending_clip_requests.assert_not_called()
@@ -434,3 +434,104 @@ async def test_signed_out_reports_raise_without_any_request(tmp_path):
     with pytest.raises(TTTApiError, match="Not authenticated"):
         await source.complete(_item(CLIP), {"url": "u"})
     client._http.request.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# An expired access token is refreshed, not read as signed out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_expired_token_is_refreshed_and_work_is_listed(expired_ttt):
+    expired_ttt.routes[("GET", "/api/internal/device-link/clip-requests")] = [
+        {"id": "c1"}
+    ]
+    source = TTTWorkSource(expired_ttt.client, SimpleNamespace(camera_id=""))
+    items = await source.pending([CLIP])
+    assert [(i.kind, i.id) for i in items] == [(CLIP, "c1")]
+    assert expired_ttt.refreshes == 1
+
+
+# ---------------------------------------------------------------------------
+# Self-registered camera ids (shared TTTCameraIds, as the device link fills it)
+# ---------------------------------------------------------------------------
+
+
+def _registered(*pairs, configured=None):
+    from video_grouper.integrations.ttt_cameras import TTTCameraIds
+
+    cameras = TTTCameraIds(None, configured)
+    cameras.update(dict(pairs))
+    return cameras
+
+
+def _self_registered_source(cameras):
+    client = _client()
+    # empty [TTT] camera_id: the ids come from self-registration only
+    return TTTWorkSource(client, SimpleNamespace(camera_id=""), cameras), client
+
+
+def test_from_context_shares_the_installs_camera_ids():
+    client = _client()
+    ctx = IntegrationContext(
+        SimpleNamespace(ttt=SimpleNamespace(enabled=True, camera_id="")),
+        ".",
+        {"ttt": client},
+    )
+    source = TTTWorkSource.from_context(ctx)
+    assert source._cameras is ctx.ttt_cameras()
+
+
+@pytest.mark.asyncio
+async def test_pending_reels_ask_once_per_registered_camera_and_dedupe():
+    source, client = _self_registered_source(
+        _registered(("front", "c-1"), ("back", "c-2"))
+    )
+    client.get_pending_highlights.side_effect = lambda cam: {
+        "c-1": [{"id": "r1"}, {"id": "r2"}],
+        "c-2": [{"id": "r2"}, {"id": "r3"}],
+    }[cam]
+    items = await source.pending([HIGHLIGHT_REEL])
+    assert [i.id for i in items] == ["r1", "r2", "r3"]
+    assert sorted(c.args for c in client.get_pending_highlights.call_args_list) == [
+        ("c-1",),
+        ("c-2",),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_claim_and_blocker_use_the_only_registered_camera():
+    source, client = _self_registered_source(_registered(("front", "c-1")))
+    await source.pending([HIGHLIGHT_REEL])
+    client.get_pending_highlights.assert_called_once_with("c-1")
+    await source.claim(_item(HIGHLIGHT_REEL))
+    client.claim_highlight.assert_called_once_with("w-1", "c-1")
+    await source.blocked(_item(HIGHLIGHT_REEL), "missing")
+    client.report_blocker.assert_called_once_with("w-1", "c-1", "missing")
+
+
+@pytest.mark.asyncio
+async def test_with_several_cameras_the_one_that_recorded_the_clips_claims():
+    source, client = _self_registered_source(
+        _registered(("front", "c-1"), ("back", "c-2"))
+    )
+    client.get_highlight_game_clips.return_value = [
+        {"id": "k1", "camera_id": "someone-else"},
+        {"id": "k2", "camera_id": "c-2"},
+    ]
+    await source.details(_item(HIGHLIGHT_REEL))
+    await source.blocked(_item(HIGHLIGHT_REEL), "missing")
+    client.report_blocker.assert_called_once_with("w-1", "c-2", "missing")
+    await source.claim(_item(HIGHLIGHT_REEL))
+    client.claim_highlight.assert_called_once_with("w-1", "c-2")
+
+
+@pytest.mark.asyncio
+async def test_with_several_cameras_and_no_clue_the_configured_id_is_used():
+    source, client = _self_registered_source(
+        _registered(("front", "c-1"), ("back", "c-2"), configured="typed")
+    )
+    client.get_highlight_game_clips.return_value = [{"id": "k1"}]  # no camera
+    await source.details(_item(HIGHLIGHT_REEL))
+    await source.claim(_item(HIGHLIGHT_REEL))
+    client.claim_highlight.assert_called_once_with("w-1", "typed")
