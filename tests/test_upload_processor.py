@@ -296,3 +296,41 @@ class TestUploadProcessorAuthCheck:
             await processor.process_item(upload_task)
 
             mock_execute.assert_not_called()
+
+
+class TestArchiveHandoff:
+    """A finished upload hands its group to the archive queue."""
+
+    @pytest.mark.asyncio
+    async def test_archive_task_gets_the_group_resolved_against_storage(
+        self, temp_storage, mock_config
+    ):
+        """Regression: upload tasks carry a group_dir RELATIVE to the storage
+        path, and the archive task was handed it verbatim -- so it resolved
+        against whatever the process's working directory happened to be."""
+        archive_processor = Mock()
+        archive_processor.add_work = AsyncMock()
+        processor = UploadProcessor(
+            temp_storage, mock_config, archive_processor=archive_processor
+        )
+
+        with (
+            patch(
+                "video_grouper.utils.youtube_upload.ensure_valid_token",
+                return_value=(True, "Token is valid"),
+            ),
+            patch.object(
+                YoutubeUploadTask, "execute", new_callable=AsyncMock
+            ) as mock_execute,
+        ):
+            mock_execute.return_value = True
+            await processor.process_item(
+                YoutubeUploadTask(group_dir="2026.07.12-10.00.00")
+            )
+
+        archive_processor.add_work.assert_awaited_once()
+        handed = archive_processor.add_work.await_args.args[0]
+        assert os.path.isabs(handed.group_dir)
+        assert os.path.normpath(handed.group_dir) == os.path.normpath(
+            os.path.join(temp_storage, "2026.07.12-10.00.00")
+        )

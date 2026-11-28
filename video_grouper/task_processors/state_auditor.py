@@ -14,6 +14,7 @@ from ..utils.paths import (
     get_state_file_path,
 )
 from .base_polling_processor import PollingProcessor
+from .camera_poller import SETTLED_GROUP_STATUSES
 from .download_processor import DownloadProcessor
 from .services import (
     CleanupService,
@@ -34,17 +35,13 @@ logger = logging.getLogger(__name__)
 # non-idle, which starves the camera poller's reconcile pass — exactly what
 # blocked the 2026-06-15 game from being re-ingested (a stale 2026-06-23
 # "_000000_" zombie in a not_a_game group monopolized the queue). Mirrors
-# DownloadProcessor.process_item's skip_statuses, plus not_a_game.
-_DOWNLOAD_DONE_STATUSES = frozenset(
-    {
-        "combined",
-        "trimmed",
-        "ball_tracking_complete",
-        "pipeline_complete",
-        "complete",
-        "not_a_game",
-    }
-)
+# DownloadProcessor.process_item's skip_statuses, plus not_a_game and
+# archived.
+#
+# Shared with the camera poller, which treats the same groups as settled for
+# its completion watermark: a file this auditor will never re-queue must not
+# be one the watermark waits on forever.
+_DOWNLOAD_DONE_STATUSES = SETTLED_GROUP_STATUSES
 
 
 class StateAuditor(PollingProcessor):
@@ -92,6 +89,10 @@ class StateAuditor(PollingProcessor):
             self._download_processors = {}
         self.video_processor = video_processor
         self.ntfy_processor = ntfy_processor
+        # Attribute-injected by VideoGrouperApp after construction, mirroring
+        # how ttt_reporter is wired onto the pollers. None in the tray and in
+        # tests, where nothing archives.
+        self.archive_processor = None
 
         # Initialize API services using mock service factory functions
         self.teamsnap_service = create_teamsnap_service(config.teamsnap)
@@ -384,6 +385,20 @@ class StateAuditor(PollingProcessor):
             # this branch is a harmless no-op (the upload queue dedupes).
             elif dir_state.status in ("ball_tracking_complete", "pipeline_complete"):
                 await self._queue_upload(group_dir)
+
+            # Uploaded, but still occupying the working drive. The upload task
+            # hands finished groups straight to the archive queue, so this only
+            # fires when that was missed — a crash between upload and enqueue,
+            # or a group completed by a build that predates archiving. The
+            # archive step re-checks everything itself, and the queue dedupes,
+            # so a redundant enqueue costs nothing.
+            elif dir_state.status == "complete":
+                if self.archive_processor is not None:
+                    from .tasks.archive import ArchiveTask
+
+                    await self.archive_processor.add_work(
+                        ArchiveTask(group_dir=group_dir)
+                    )
 
             # Check for not_a_game status (user confirmed there was no match)
             elif dir_state.status == "not_a_game":

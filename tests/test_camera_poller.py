@@ -347,10 +347,11 @@ class TestCameraPoller:
         self, temp_storage, mock_config, mock_camera, caplog
     ):
         """When the camera returns only runts (isolated short recordings),
-        no file advances the HWM. The poll-summary log must report
-        all-files-filtered AND a warning must fire so future stalls are
-        debuggable. Regression guard for the 2026-05-30 tournament
-        incident where the HWM stuck at a runt's end_time."""
+        nothing is queued, so nothing can settle and the watermark cannot
+        advance. The poll-summary log must report all-files-filtered AND a
+        warning must fire so future stalls are debuggable. Regression guard
+        for the 2026-05-30 tournament incident where the mark stuck at a
+        runt's end_time."""
         mock_camera.get_file_list.return_value = [
             {
                 "path": "/runt1.dav",
@@ -376,18 +377,25 @@ class TestCameraPoller:
             and "new=0" in r.message
             for r in caplog.records
         ), f"missing or wrong poll summary, got: {[r.message for r in caplog.records]}"
-        # Warning must fire to flag the HWM-stall risk.
+        # Warning must fire to flag the watermark-stall risk.
         assert any(
-            "HWM not advanced" in r.message and r.levelname == "WARNING"
+            "none actionable" in r.message and r.levelname == "WARNING"
             for r in caplog.records
-        ), "expected HWM-not-advanced warning for all-runts case"
+        ), "expected none-actionable warning for all-runts case"
 
     @pytest.mark.asyncio
     async def test_poll_summary_logs_normal_new_file(
         self, temp_storage, mock_config, mock_camera, caplog
     ):
-        """A normal poll with one new file must emit a summary showing
-        new=1 and an HWM-advanced INFO line citing the file."""
+        """A normal poll with one new file emits a summary showing new=1, and
+        must NOT advance the watermark.
+
+        This test previously asserted the opposite — that queueing a file
+        advanced the mark. That was the 2026-06-15 bug written down as an
+        expectation: the mark moved the instant a file was queued, before a
+        byte was downloaded, so a download that never completed was never
+        queried again. A merely-queued file is not settled.
+        """
         mock_camera.get_file_list.return_value = [
             {
                 "path": "/normal.dav",
@@ -410,10 +418,12 @@ class TestCameraPoller:
             "poll summary -- 1 files seen" in r.message and "new=1" in r.message
             for r in caplog.records
         )
-        assert any(
-            "HWM advanced to" in r.message and "normal.dav" in r.message
-            for r in caplog.records
-        ), "expected HWM-advanced INFO line citing the new file"
+        assert not any("Watermark advanced to" in r.message for r in caplog.records), (
+            "a queued-but-not-downloaded file must not advance the watermark"
+        )
+        assert await poller._get_latest_processed_time() is None, (
+            "watermark must stay unset until the download actually settles"
+        )
 
     def test_find_group_directory_new_group(self, temp_storage):
         """Test finding group directory when creating a new group."""
@@ -1432,3 +1442,594 @@ class TestAtomicStateWrites:
         assert state["reo"]["latest_video_time"] == "2026-06-15 10:00:00"
         assert state["reo"]["is_connected"] is True
         assert state["reo"]["connection_events"]
+
+
+class TestCompletionWatermark:
+    """The watermark is the single date that decides what to download.
+
+    It means "every recording at or before this is settled", so it may only
+    advance over a contiguous prefix of settled recordings, and it is
+    monotonic. Those two properties are what let the poller stop asking the
+    local disk whether it still holds the bytes — which is the question
+    archiving deliberately makes unanswerable.
+    """
+
+    async def _write_group(self, storage, name, files):
+        """Create a group dir with state.json holding (basename, end, status).
+
+        Uses Path.mkdir, not os.makedirs — conftest's autouse mock_file_system
+        patches os.makedirs to a no-op, so the directory would never appear and
+        DirectoryState's FileLock would fail to create its lock file.
+        """
+        group_dir = os.path.join(storage, name)
+        Path(group_dir).mkdir(parents=True, exist_ok=True)
+        dir_state = DirectoryState(group_dir)
+        for basename, end_time, status in files:
+            path = os.path.join(group_dir, basename)
+            await dir_state.add_file(
+                path,
+                RecordingFile(
+                    start_time=end_time - timedelta(minutes=30),
+                    end_time=end_time,
+                    file_path=path,
+                    status=status,
+                ),
+            )
+        return group_dir
+
+    @pytest.mark.asyncio
+    async def test_watermark_stops_at_first_unsettled_recording(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Contiguous prefix only: a settled recording AFTER an unsettled one
+        must not drag the watermark past the gap, or the unfinished download
+        in between is never queried again."""
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await self._write_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            [
+                ("a.dav", base, "complete"),
+                ("b.dav", base + timedelta(hours=1), "download_failed"),
+                ("c.dav", base + timedelta(hours=2), "complete"),
+            ],
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == base, (
+            "watermark must stop at the unsettled b.dav, not jump to c.dav"
+        )
+
+    @pytest.mark.asyncio
+    async def test_watermark_does_not_regress_when_games_are_archived(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """The bug that started this work.
+
+        Archiving deletes the whole group directory — videos AND the per-group
+        state.json that recorded "we handled this". If the watermark were
+        re-derived from what remains on local disk it would collapse to None,
+        read as a fresh install, and re-download every archived game. The
+        stored value is a floor.
+        """
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        archived_through = datetime(2026, 7, 12, 10, 35, 15)
+        await poller._update_latest_processed_time(archived_through)
+
+        # Archive ran: every group directory is gone from local storage.
+        assert not [
+            d
+            for d in os.listdir(temp_storage)
+            if os.path.isdir(os.path.join(temp_storage, d))
+        ]
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == archived_through
+
+    @pytest.mark.asyncio
+    async def test_archived_game_is_not_rediscovered(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """End-to-end: a published game still on the camera, archived off local
+        disk, behind the watermark — must not be re-downloaded."""
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        await poller._update_latest_processed_time(datetime(2026, 7, 12, 10, 35, 15))
+
+        mock_camera.get_file_list = AsyncMock(
+            return_value=[
+                {
+                    "path": "/archived_game.dav",
+                    "startTime": "2026-07-12 10:00:00",
+                    "endTime": "2026-07-12 10:35:15",
+                    "size": 5_000_000,
+                }
+            ]
+        )
+        await poller._sync_files_from_camera()
+
+        poller.download_processor.add_work.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_first_run_scans_a_year_and_later_runs_start_at_watermark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """No watermark => scan the whole card. With one => start there, with
+        no lookback clamp skipping it forward."""
+        mock_camera.get_file_list = AsyncMock(return_value=[])
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._sync_files_from_camera()
+        first_start = mock_camera.get_file_list.call_args.kwargs["start_time"]
+        assert (datetime.now() - first_start).days >= 364
+
+        watermark = datetime.now() - timedelta(days=25)
+        await poller._update_latest_processed_time(watermark)
+        await poller._sync_files_from_camera()
+        resumed = mock_camera.get_file_list.call_args.kwargs["start_time"]
+
+        # Seconds-resolution round-trip through camera_state.json.
+        assert abs((resumed - watermark).total_seconds()) <= 1, (
+            "a 25-day-old watermark must be honoured, not clamped forward"
+        )
+
+    @pytest.mark.asyncio
+    async def test_abandoned_download_stops_blocking_the_watermark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """A recording the camera no longer has would otherwise pin the
+        watermark — and every later game with it — forever."""
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        group = await self._write_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            [
+                ("gone.dav", base, "download_failed"),
+                ("later.dav", base + timedelta(hours=2), "complete"),
+            ],
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+        assert await poller._get_latest_processed_time() is None
+
+        # DownloadProcessor gives up and records the terminal outcome.
+        dir_state = DirectoryState(group)
+        await dir_state.update_file_state(
+            os.path.join(group, "gone.dav"), status="abandoned"
+        )
+
+        await poller._advance_completion_watermark()
+        assert await poller._get_latest_processed_time() == base + timedelta(hours=2)
+
+    @pytest.mark.asyncio
+    async def test_reconcile_ignores_files_behind_the_watermark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Narrowing reconcile's query range is not a filter.
+
+        Cameras return recordings that merely *overlap* the requested window,
+        so a game ending just before the watermark still comes back. If the
+        pass does not re-check per file it falls through to
+        _file_needs_download, which asks whether the .mp4 is on disk — and an
+        archived game's deliberately is not. Found by replaying the live
+        server's state (watermark 2026-07-12, all July groups archived off
+        local disk): reconcile re-queued all five published games.
+        """
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        await poller._update_latest_processed_time(datetime(2026, 7, 12, 10, 35, 15))
+
+        # Camera still holds an archived game, and returns it despite the
+        # narrowed range — exactly what a real Reolink/Dahua search does.
+        mock_camera.get_file_list = AsyncMock(
+            return_value=[
+                {
+                    "path": "/archived.dav",
+                    "startTime": "2026-07-12 10:30:00",
+                    "endTime": "2026-07-12 10:35:15",
+                    "size": 5_000_000,
+                }
+            ]
+        )
+
+        await poller._reconcile_files_from_camera()
+
+        poller.download_processor.add_work.assert_not_called()
+
+
+def _camera_listing(name: str, start: datetime, end: datetime) -> dict:
+    """One entry as a camera's get_file_list returns it."""
+    return {
+        "path": f"/{name}",
+        "startTime": start.strftime("%Y-%m-%d %H:%M:%S"),
+        "endTime": end.strftime("%Y-%m-%d %H:%M:%S"),
+        "size": 5_000_000,
+    }
+
+
+async def _write_contiguous_group(
+    storage,
+    group_name,
+    names,
+    base,
+    status,
+    camera_name: str | None = "default",
+    group_status: str | None = None,
+):
+    """A group of back-to-back 30-minute recordings, all at *status*.
+
+    Path.mkdir, not os.makedirs: conftest patches the latter to a no-op.
+    Returns the (name, start, end) triples so a test can list them on the
+    camera too. ``camera_name=None`` writes a recording with no camera
+    attribution, as files discovered before attribution existed have.
+    """
+    group_dir = os.path.join(storage, group_name)
+    Path(group_dir).mkdir(parents=True, exist_ok=True)
+    dir_state = DirectoryState(group_dir)
+    triples = []
+    for i, name in enumerate(names):
+        start = base + timedelta(minutes=30 * i)
+        end = start + timedelta(minutes=30)
+        path = os.path.join(group_dir, name)
+        await dir_state.add_file(
+            path,
+            RecordingFile(
+                start_time=start,
+                end_time=end,
+                file_path=path,
+                status=status,
+                metadata=(
+                    {"path": f"/{name}", "camera_name": camera_name}
+                    if camera_name is not None
+                    else {"path": f"/{name}"}
+                ),
+            ),
+        )
+        triples.append((name, start, end))
+    if group_status is not None:
+        await dir_state.update_group_status(group_status)
+    return group_dir, triples
+
+
+class TestPerPollCapCountsOnlyNewWork:
+    """``max_files_per_poll`` bounds what a poll *queues*, not what it reads.
+
+    While the watermark is held (a download in flight, a stuck file), every
+    poll re-lists the recordings behind the hold. Capping the raw listing
+    meant those same already-known files filled the cap on every poll and a
+    newer recording was never discovered at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_files_held_behind_the_watermark_do_not_starve_new_ones(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        mock_config.app.max_files_per_poll = 3
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        # Five known, unsettled recordings (the watermark is held on them).
+        _, known = await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            [f"known{i}.dav" for i in range(5)],
+            base,
+            "pending",
+        )
+        # Two genuinely new recordings, a separate session later that day.
+        later = base + timedelta(hours=6)
+        new = [
+            ("new0.dav", later, later + timedelta(minutes=30)),
+            (
+                "new1.dav",
+                later + timedelta(minutes=30),
+                later + timedelta(minutes=60),
+            ),
+        ]
+        mock_camera.get_file_list = AsyncMock(
+            return_value=[_camera_listing(n, s, e) for n, s, e in known + new]
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+        await poller._update_latest_processed_time(base - timedelta(hours=1))
+
+        await poller._sync_files_from_camera()
+
+        queued = sorted(
+            os.path.basename(c.args[0].file_path)
+            for c in poller.download_processor.add_work.call_args_list
+        )
+        assert queued == ["new0.dav", "new1.dav"], (
+            "the cap was consumed by already-known files and the new "
+            f"recordings were never discovered; queued={queued}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cap_still_bounds_new_work_oldest_first(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        mock_config.app.max_files_per_poll = 2
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        listing = [
+            _camera_listing(
+                f"n{i}.dav",
+                base + timedelta(minutes=30 * i),
+                base + timedelta(minutes=30 * (i + 1)),
+            )
+            for i in range(4)
+        ]
+        # Camera order is not guaranteed; hand them back newest-first.
+        mock_camera.get_file_list = AsyncMock(return_value=list(reversed(listing)))
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._sync_files_from_camera()
+
+        queued = [
+            os.path.basename(c.args[0].file_path)
+            for c in poller.download_processor.add_work.call_args_list
+        ]
+        assert queued == ["n0.dav", "n1.dav"]
+
+    @pytest.mark.asyncio
+    async def test_watermark_never_passes_a_deferred_file(
+        self, temp_storage, mock_config, mock_camera, mock_file_system
+    ):
+        """A deferred file is in no state.json, so the watermark walk cannot
+        see it. If the queued file settles within the same poll (a tiny file,
+        a fast link) and a newer recording is already known and settled, the
+        mark must still stop short of the deferred one -- the poller never
+        looks behind its watermark again."""
+        # New groups must really be created on disk for their state to persist;
+        # conftest's autouse mock makes os.makedirs a no-op.
+        mock_file_system["makedirs"].side_effect = lambda p, *a, **kw: Path(p).mkdir(
+            parents=True, exist_ok=True
+        )
+        mock_file_system["exists"].side_effect = os.path.lexists
+        mock_config.app.max_files_per_poll = 1
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        _, newer_known = await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-15.00.00",
+            ["known_later.dav"],
+            base + timedelta(hours=5),
+            "complete",
+        )
+        listing = [
+            _camera_listing(
+                "queued.dav",
+                base + timedelta(hours=1),
+                base + timedelta(hours=1, minutes=30),
+            ),
+            _camera_listing(
+                "deferred.dav",
+                base + timedelta(hours=2),
+                base + timedelta(hours=2, minutes=30),
+            ),
+        ] + [_camera_listing(n, s, e) for n, s, e in newer_known]
+        mock_camera.get_file_list = AsyncMock(return_value=listing)
+
+        dp = _idle_download_processor()
+
+        async def downloads_instantly(rec):
+            await DirectoryState(os.path.dirname(rec.file_path)).update_file_state(
+                rec.file_path, status="downloaded"
+            )
+
+        dp.add_work = AsyncMock(side_effect=downloads_instantly)
+        poller = CameraPoller(temp_storage, mock_config, mock_camera, dp)
+        await poller._update_latest_processed_time(base)
+
+        await poller._sync_files_from_camera()
+
+        mark = await poller._get_latest_processed_time()
+        assert mark < base + timedelta(hours=2, minutes=30), (
+            f"watermark {mark} passed the deferred recording, which was never "
+            "discovered"
+        )
+        await poller._sync_files_from_camera()
+        queued = [
+            os.path.basename(c.args[0].file_path) for c in dp.add_work.call_args_list
+        ]
+        assert queued == ["queued.dav", "deferred.dav"]
+
+
+def _two_camera_config(config):
+    """The same Config with a second camera sharing the storage path."""
+    config.cameras.append(
+        CameraConfig(
+            name="other",
+            type="reolink",
+            device_ip="127.0.0.2",
+            username="admin",
+            password="password",
+        )
+    )
+    return config
+
+
+class TestWatermarkIsPerCamera:
+    """Each camera's watermark is computed from that camera's recordings only.
+
+    Every poller shares one storage path. Walking every group there let
+    another camera's settled recordings push this camera's watermark past
+    footage it had never even discovered -- and the poller never looks behind
+    its watermark again.
+    """
+
+    @pytest.mark.asyncio
+    async def test_another_cameras_settled_work_does_not_advance_this_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        _two_camera_config(mock_config)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["theirs0.dav", "theirs1.dav"],
+            datetime(2026, 7, 1, 10, 0, 0),
+            "complete",
+            camera_name="other",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() is None, (
+            "camera 'default' has discovered nothing; another camera's "
+            "settled recordings must not move its watermark"
+        )
+
+    @pytest.mark.asyncio
+    async def test_own_recordings_still_advance_the_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        _two_camera_config(mock_config)
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["mine0.dav"],
+            base,
+            "complete",
+            camera_name="default",
+        )
+        # The other camera has an unsettled file earlier: not ours to wait on.
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-08.00.00",
+            ["theirs.dav"],
+            base - timedelta(hours=2),
+            "pending",
+            camera_name="other",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == base + timedelta(minutes=30)
+
+    @pytest.mark.asyncio
+    async def test_unattributed_settled_files_cannot_push_a_multi_camera_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """A recording with no camera_name (written before attribution) could
+        be any camera's; with several cameras it must not move this mark."""
+        _two_camera_config(mock_config)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["legacy.dav"],
+            datetime(2026, 7, 1, 10, 0, 0),
+            "complete",
+            camera_name=None,
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() is None
+
+    @pytest.mark.asyncio
+    async def test_unattributed_unsettled_files_still_hold_a_multi_camera_mark(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """...but it may be ours, so an unfinished one still holds the line."""
+        _two_camera_config(mock_config)
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["legacy.dav"],
+            base,
+            "download_failed",
+            camera_name=None,
+        )
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-14.00.00",
+            ["mine.dav"],
+            base + timedelta(hours=4),
+            "complete",
+            camera_name="default",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() is None
+
+
+class TestSettledGroupsMatchTheAuditor:
+    """A group the StateAuditor treats as past download is settled here too.
+
+    The auditor stops re-queuing files once a group is combined (or later),
+    and DownloadProcessor refuses them. A stale non-terminal file entry left
+    in such a group -- the camera re-listing an in-progress "_000000_" segment
+    under its final name is the known source -- is then never retried and
+    never abandoned, so a watermark that still waited on it would wait
+    forever, and hold every later game's archive with it.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_status",
+        ["combined", "trimmed", "ball_tracking_complete", "pipeline_complete"],
+    )
+    async def test_stale_file_in_a_past_download_group_does_not_hold_the_mark(
+        self, temp_storage, mock_config, mock_camera, group_status
+    ):
+        base = datetime(2026, 7, 1, 10, 0, 0)
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.01-10.00.00",
+            ["seg0.dav", "zombie_000000.dav"],
+            base,
+            "pending",
+            group_status=group_status,
+        )
+        await _write_contiguous_group(
+            temp_storage,
+            "2026.07.02-10.00.00",
+            ["next_game.dav"],
+            base + timedelta(days=1),
+            "complete",
+        )
+        poller = CameraPoller(
+            temp_storage, mock_config, mock_camera, _idle_download_processor()
+        )
+
+        await poller._advance_completion_watermark()
+
+        assert await poller._get_latest_processed_time() == base + timedelta(
+            days=1, minutes=30
+        )
+
+    def test_poller_and_auditor_share_one_definition(self):
+        from video_grouper.task_processors import state_auditor
+        from video_grouper.task_processors.camera_poller import (
+            SETTLED_GROUP_STATUSES,
+        )
+
+        assert state_auditor._DOWNLOAD_DONE_STATUSES == SETTLED_GROUP_STATUSES

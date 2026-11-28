@@ -1,5 +1,6 @@
 """Task processors package for video grouper application."""
 
+from .archive_processor import ArchiveProcessor
 from .base_polling_processor import PollingProcessor
 from .base_queue_processor import QueueProcessor
 from .camera_poller import CameraPoller
@@ -20,6 +21,7 @@ __all__ = [
     "DownloadProcessor",
     "NtfyProcessor",
     "StateAuditor",
+    "ArchiveProcessor",
     "UploadProcessor",
     "VideoProcessor",
     "ClipProcessor",

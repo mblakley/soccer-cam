@@ -1,5 +1,6 @@
 """Tests for the DownloadProcessor."""
 
+import asyncio
 import os
 import tempfile
 from datetime import datetime
@@ -477,3 +478,151 @@ class TestDownloadProcessor:
 
         key = processor.get_item_key(recording_file)
         assert key == "recording:/test/path/test.dav"
+
+
+async def _failed_recording(temp_storage, name="gone.dav"):
+    """A recording whose download has failed, persisted in its group's state."""
+    from pathlib import Path
+
+    group_dir = os.path.join(temp_storage, "2026.07.01-10.00.00")
+    # Path.mkdir, not os.makedirs — conftest patches the latter to a no-op.
+    Path(group_dir).mkdir(parents=True, exist_ok=True)
+    file_path = os.path.join(group_dir, name)
+    rec = RecordingFile(
+        start_time=datetime(2026, 7, 1, 10, 0, 0),
+        end_time=datetime(2026, 7, 1, 10, 30, 0),
+        file_path=file_path,
+        status="download_failed",
+        metadata={"path": f"/mnt/sd/{name}", "camera_name": "default"},
+    )
+    await DirectoryState(group_dir).add_file(file_path, rec)
+    return group_dir, file_path, rec
+
+
+def _listing(*names):
+    return [
+        {
+            "path": f"/mnt/sd/{n}",
+            "startTime": "2026-07-01 10:00:00",
+            "endTime": "2026-07-01 10:30:00",
+        }
+        for n in names
+    ]
+
+
+class TestAbandonExhaustedDownloads:
+    """Retries running out is not, by itself, a reason to give up on footage.
+
+    The base queue processor drops an item once its fast retries are
+    exhausted, whatever the cause. Marking the file ``abandoned`` settles it,
+    and the watermark then passes it forever — so that is only correct when
+    the failure is confirmed permanent: the camera answers a listing for the
+    file's time window and the file is not in it. A full disk, a timeout or a
+    flaky link must leave it retryable (``download_failed``, which the
+    StateAuditor re-queues on its next pass), even though it holds the
+    watermark meanwhile. When in doubt, keep footage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_file_the_camera_no_longer_lists_is_abandoned(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        # The camera answers for that window, with a neighbour but not ours.
+        mock_camera.get_file_list = AsyncMock(return_value=_listing("other.dav"))
+
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        await processor.on_item_permanently_failed(rec)
+
+        assert DirectoryState(group_dir).files[file_path].status == "abandoned"
+
+    @pytest.mark.asyncio
+    async def test_file_gone_from_an_otherwise_empty_window_is_abandoned(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """An empty answer for the file's own window is ambiguous (both
+        backends return [] on error), so the camera is asked again up to now:
+        newer recordings listed without ours confirms it was overwritten."""
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.get_file_list = AsyncMock(
+            side_effect=[[], _listing("newer_game.dav")]
+        )
+
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        await processor.on_item_permanently_failed(rec)
+
+        assert DirectoryState(group_dir).files[file_path].status == "abandoned"
+
+    @pytest.mark.asyncio
+    async def test_file_the_camera_still_lists_stays_retryable(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """Regression: the hook used to abandon after 3 fast retries for ANY
+        cause — a full disk or a timeout settled real footage for good."""
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=True)
+        mock_camera.get_file_list = AsyncMock(
+            return_value=_listing("gone.dav", "other.dav")
+        )
+
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        await processor.on_item_permanently_failed(rec)
+
+        assert DirectoryState(group_dir).files[file_path].status == "download_failed"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "available,listing",
+        [
+            (False, None),  # camera unreachable: cannot ask
+            (True, []),  # empty both times: ambiguous, could be an error
+            (True, RuntimeError("search failed")),  # listing raised
+        ],
+        ids=["unreachable", "empty-listing", "listing-raises"],
+    )
+    async def test_unconfirmed_failure_stays_retryable(
+        self, temp_storage, mock_config, mock_camera, available, listing
+    ):
+        group_dir, file_path, rec = await _failed_recording(temp_storage)
+        mock_camera.check_availability = AsyncMock(return_value=available)
+        if isinstance(listing, Exception):
+            mock_camera.get_file_list = AsyncMock(side_effect=listing)
+        else:
+            mock_camera.get_file_list = AsyncMock(return_value=listing)
+
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        await processor.on_item_permanently_failed(rec)
+
+        assert DirectoryState(group_dir).files[file_path].status == "download_failed"
+
+    @pytest.mark.asyncio
+    async def test_base_processor_invokes_the_hook_on_retry_exhaustion(
+        self, temp_storage, mock_config, mock_camera
+    ):
+        """The hook is only useful if the base actually calls it."""
+        processor = DownloadProcessor(temp_storage, mock_config, mock_camera, Mock())
+        processor.on_item_permanently_failed = AsyncMock()
+        processor.process_item = AsyncMock(side_effect=RuntimeError("404 gone"))
+
+        rec = RecordingFile(
+            start_time=datetime(2026, 7, 1, 10, 0, 0),
+            end_time=datetime(2026, 7, 1, 10, 30, 0),
+            file_path=os.path.join(temp_storage, "grp", "gone.dav"),
+            status="pending",
+        )
+
+        await processor.add_work(rec)
+        await processor.start()
+        try:
+            # Retries are requeued at the back of the queue; give the loop
+            # enough turns to burn through _max_retries + the final drop.
+            for _ in range(200):
+                if processor.on_item_permanently_failed.await_count:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await processor.stop()
+
+        processor.on_item_permanently_failed.assert_awaited_once()

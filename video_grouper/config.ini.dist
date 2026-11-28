@@ -47,6 +47,39 @@ backup_count = 30
 check_interval_seconds = 60
 timezone = America/New_York
 
+[ARCHIVE]
+# What happens to a game's local files once it is safely on YouTube.
+#
+#   keep     leave them alone (default)
+#   copy     copy to `path`, keep the local files too
+#   move     copy to `path`, then reclaim the local files
+#   discard  reclaim the local files; YouTube holds the only copy
+#
+# A second location is one answer, not a requirement — a single-drive
+# install uses `discard` and still gets its space back.
+#
+# Verification is never optional. `copy`/`move` compare SHA-256 file by file
+# before anything is removed, and `discard` refuses unless the group has a
+# recorded YouTube video id. The group is marked archived BEFORE any delete,
+# so an interrupted run leaves a game that plainly reads as finished instead
+# of one that looks half-processed and gets reprocessed.
+#
+# Nothing is reclaimed before the camera poller has finished with the game's
+# recordings, or the poller would rediscover it as new and download it again.
+after_upload = keep
+# Archives are per-team: set `archive_path` in each team's [TEAM.<key>]
+# section (bottom of this file). A team's root cannot be derived from its
+# name -- a team recorded in match_info as "Guzzetta" archives to Heat_2012s,
+# and one account can carry several age groups that must not be mixed.
+# Games land directly in their team's root:
+#   <root>/2026.07.12 - vs Niagara Falls Soccer Club (away)/
+# Two games the same day against the same opponent get "(2)", "(3)" ...
+#
+# `path` is the fallback root for games whose team has no archive_path, and
+# is enough on its own for a single-team install. A game with neither is
+# refused rather than filed under some other team. Unused by keep/discard.
+path =
+
 [TEAMSNAP]
 # Credentials only. WHICH teams to pull is configured per team, under
 # [TEAM.<key>] at the bottom of this file — set teamsnap_team_id there.
@@ -261,6 +294,9 @@ capabilities =
 # [PIPELINE.<step_id>] sections above. Set it to run a different subset or
 # order for this team's games; leave it blank to use [PIPELINE] steps.
 #
+# `archive_path` is where this team's games go under [ARCHIVE] after_upload =
+# copy/move. Blank falls back to [ARCHIVE] path.
+#
 # [TEAM.heat2012]
 # name = BU14 - Guzzetta
 # aliases = Guzzetta, Hilton Heat
@@ -270,3 +306,4 @@ capabilities =
 # calendar_url = webcal://club.example.byga.net/cal/your-calendar.ics
 # youtube_playlist = Hilton Heat 2012s
 # pipeline = stitch, render
+# archive_path = F:\Heat_2012s
