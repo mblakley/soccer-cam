@@ -632,7 +632,7 @@ def test_service_bundle_collects_integration_port_sources():
     from video_grouper.integrations import registry
     from video_grouper.integrations.entitlements import IEntitlements
 
-    spec = (NSI.parent / "VideoGrouper.spec").read_text(encoding="utf-8")
+    spec = (NSI.parent / "SoccerCam.spec").read_text(encoding="utf-8")
     assert 'collect_submodules("video_grouper.integrations")' in spec
     service = spec[spec.index("a_service = Analysis(") :]
     assert service.index("hiddenimports=INTEGRATION_SOURCES") < service.index(
