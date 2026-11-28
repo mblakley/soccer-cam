@@ -328,7 +328,7 @@ Pydantic models in `video_grouper/utils/config.py`. Loaded from INI file (defaul
 ### External Integrations
 
 - **TeamSnap** (`api_integrations/teamsnap.py`): OAuth 2.0, fetches game schedules
-- **PlayMetrics** (`api_integrations/playmetrics.py`): Selenium-based web scraping
+- **PlayMetrics** (`api_integrations/playmetrics.py`): pure HTTP (Firebase sign-in + REST API); no browser
 - **NTFY** (`api_integrations/ntfy.py`): Push notifications with image attachments
 - **YouTube** (`utils/youtube_upload.py`): Google OAuth 2.0 upload
 - **Dahua Camera** (`cameras/dahua.py`): HTTP/Digest auth for file listing and download
