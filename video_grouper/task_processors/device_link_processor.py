@@ -87,6 +87,8 @@ class DeviceLinkProcessor(PollingProcessor):
         # next tick sends one) and time.monotonic() when it took it.
         self._stuck_sent: list[StuckDownload] | None = None
         self._stuck_sent_at = 0.0
+        # After a report the link could not deliver, wait this long (monotonic).
+        self._stuck_retry_at = 0.0
 
     def _health(self) -> DeviceHealth:
         """This install's health for the heartbeat (blocking: psutil samples)."""
@@ -179,6 +181,9 @@ class DeviceLinkProcessor(PollingProcessor):
     # An unchanged stuck-download list is sent again this often, so the other
     # end can tell the report is current rather than an install gone quiet.
     STUCK_DOWNLOADS_REFRESH = 3600
+    # A report the link could not deliver is tried again after this long, not
+    # every tick (an older TTT without the route answers 404 for good).
+    STUCK_DOWNLOADS_RETRY = 300
 
     async def _maybe_report_stuck_downloads(self) -> None:
         # The account gate camera registration uses: with nobody signed in to
@@ -186,9 +191,11 @@ class DeviceLinkProcessor(PollingProcessor):
         if not self.link.registers_cameras:
             self._stuck_sent = None  # signing in again sends it at once
             return
+        now = time.monotonic()
+        if now < self._stuck_retry_at:
+            return
         entries = await asyncio.to_thread(list_stuck_downloads, self.storage_path)
         stuck = [_stuck_download(e) for e in entries]
-        now = time.monotonic()
         if (
             stuck == self._stuck_sent
             and now - self._stuck_sent_at < self.STUCK_DOWNLOADS_REFRESH
@@ -196,6 +203,9 @@ class DeviceLinkProcessor(PollingProcessor):
             return
         if await self.link.report_stuck_downloads(stuck):
             self._stuck_sent, self._stuck_sent_at = stuck, now
+            self._stuck_retry_at = 0.0
+        else:
+            self._stuck_retry_at = now + self.STUCK_DOWNLOADS_RETRY
 
     def is_camera_enabled(self, camera_name: str) -> bool:
         """False only when the link said this camera is not polled here."""

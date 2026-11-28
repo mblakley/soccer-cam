@@ -584,16 +584,22 @@ async def test_an_unchanged_list_is_re_sent_hourly(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_a_report_the_link_could_not_deliver_is_tried_next_tick(tmp_path):
+async def test_a_report_the_link_could_not_deliver_is_retried_after_a_wait(
+    tmp_path, clock
+):
+    """Not every tick: an older TTT without the route refuses it for good."""
     link = FakeDeviceLink()
     link.accepts_stuck_reports = False
     processor = _processor(tmp_path, link)
     await processor.discover_work()
+    clock[0] += processor.STUCK_DOWNLOADS_RETRY - 1
     await processor.discover_work()
+    assert len(link.stuck_reports) == 1  # refused once, not re-sent yet
     link.accepts_stuck_reports = True
+    clock[0] += 1
     await processor.discover_work()
     await processor.discover_work()
-    assert len(link.stuck_reports) == 3  # two refused, then delivered once
+    assert len(link.stuck_reports) == 2  # retried after the wait, delivered once
 
 
 @pytest.mark.asyncio
