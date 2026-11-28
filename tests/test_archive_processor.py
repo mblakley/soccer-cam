@@ -102,9 +102,20 @@ def archive_config(temp_storage):
 
 
 async def _make_group(
-    storage, name, *, status="complete", newest=None, payload=b"x" * 4096
+    storage,
+    name,
+    *,
+    status="complete",
+    newest=None,
+    payload=b"x" * 4096,
+    with_recording=True,
+    camera_name=None,
 ):
-    """A completed group with one real video file on disk."""
+    """A completed group with one real video file on disk.
+
+    ``camera_name`` is recorded in the recording's metadata, as the poller
+    does at discovery; None leaves it unattributed.
+    """
     group_dir = os.path.join(storage, name)
     # Path.mkdir, not os.makedirs — conftest patches the latter to a no-op.
     Path(group_dir).mkdir(parents=True, exist_ok=True)
@@ -113,15 +124,17 @@ async def _make_group(
 
     newest = newest or datetime(2026, 7, 12, 10, 35, 15)
     dir_state = DirectoryState(group_dir)
-    await dir_state.add_file(
-        video,
-        RecordingFile(
-            start_time=newest - timedelta(minutes=30),
-            end_time=newest,
-            file_path=video,
-            status="complete",
-        ),
-    )
+    if with_recording:
+        await dir_state.add_file(
+            video,
+            RecordingFile(
+                start_time=newest - timedelta(minutes=30),
+                end_time=newest,
+                file_path=video,
+                status="complete",
+                metadata={"camera_name": camera_name} if camera_name else None,
+            ),
+        )
     await dir_state.update_group_status(status)
 
     match_info = os.path.join(group_dir, "match_info.ini")
@@ -130,6 +143,30 @@ async def _make_group(
         encoding="utf-8",
     )
     return group_dir
+
+
+WATERMARK_PAST = datetime(2026, 7, 12, 10, 35, 15)
+
+
+def _configure_cameras(config, *names):
+    config.cameras = [
+        CameraConfig(
+            name=name,
+            type="dahua",
+            device_ip="127.0.0.1",
+            username="admin",
+            password="password",
+        )
+        for name in names
+    ]
+
+
+def _write_camera_state(storage, state):
+    Path(get_camera_state_path(storage)).write_text(json.dumps(state), encoding="utf-8")
+
+
+def _archived_copy(archive_root, folder="2026.07.12 - vs Kenmore (away)"):
+    return os.path.join(archive_root, folder, "game.mp4")
 
 
 class TestArchiveOrdering:
@@ -212,21 +249,26 @@ class TestArchiveOrdering:
         assert DirectoryState(group_dir).status == "archived"
 
     @pytest.mark.asyncio
-    async def test_rerunning_an_archived_group_is_a_no_op(
+    async def test_rerunning_an_archived_group_without_reclaim_is_a_no_op(
         self, temp_storage, archive_root
     ):
+        """`copy` already happened; with nothing to reclaim there is nothing
+        left to do. (This used to be asserted for `move` too — which is the
+        bug that left a half-deleted group occupying the disk forever; see
+        TestFinishInterruptedReclaim.)"""
         group_dir = await _make_group(
             temp_storage, "2026.07.12-10.00.00", status="archived"
         )
 
         ok = await ArchiveTask(group_dir=group_dir).execute(
-            archive_root=archive_root, watermark=datetime(2026, 7, 12, 10, 35, 15)
+            archive_root=archive_root,
+            reclaim_local_space=False,
+            watermark=WATERMARK_PAST,
         )
 
         assert ok
-        assert os.path.exists(os.path.join(group_dir, "game.mp4")), (
-            "an already-archived group must not be touched again"
-        )
+        assert os.path.exists(os.path.join(group_dir, "game.mp4"))
+        assert not os.path.exists(_archived_copy(archive_root))
 
 
 class TestWatermarkGuard:
@@ -269,21 +311,74 @@ class TestWatermarkGuard:
     ):
         """With several cameras, only the slowest one's mark is safe: a fast
         camera must not license deleting footage another is still behind on."""
-        state_path = get_camera_state_path(temp_storage)
-        Path(state_path).write_text(
-            json.dumps(
-                {
-                    "is_connected": False,  # legacy top-level key, must be skipped
-                    "fast_cam": {"latest_video_time": "2026-07-12 10:35:15"},
-                    "slow_cam": {"latest_video_time": "2026-07-01 08:00:00"},
-                }
-            ),
-            encoding="utf-8",
+        _configure_cameras(archive_config, "fast_cam", "slow_cam")
+        _write_camera_state(
+            temp_storage,
+            {
+                "is_connected": False,  # legacy top-level key, must be skipped
+                "fast_cam": {"latest_video_time": "2026-07-12 10:35:15"},
+                "slow_cam": {"latest_video_time": "2026-07-01 08:00:00"},
+            },
         )
 
         processor = ArchiveProcessor(temp_storage, archive_config)
 
         assert processor._read_watermark() == datetime(2026, 7, 1, 8, 0, 0)
+
+    @pytest.mark.asyncio
+    async def test_a_removed_camera_does_not_block_archiving(
+        self, temp_storage, archive_config
+    ):
+        """Regression: the minimum was taken over every entry in
+        camera_state.json, so a camera removed or renamed in config left its
+        last mark behind and pinned the guard there forever."""
+        _configure_cameras(archive_config, "default")
+        _write_camera_state(
+            temp_storage,
+            {
+                "default": {"latest_video_time": "2026-07-12 10:35:15"},
+                "old_camera": {"latest_video_time": "2025-01-01 00:00:00"},
+            },
+        )
+
+        processor = ArchiveProcessor(temp_storage, archive_config)
+
+        assert processor._read_watermark() == datetime(2026, 7, 12, 10, 35, 15)
+
+    @pytest.mark.asyncio
+    async def test_a_configured_camera_with_no_mark_refuses(
+        self, temp_storage, archive_config
+    ):
+        """A camera that has never settled anything has not finished with any
+        time range; its absence must not be read as permission."""
+        _configure_cameras(archive_config, "default", "new_cam")
+        _write_camera_state(
+            temp_storage, {"default": {"latest_video_time": "2026-07-12 10:35:15"}}
+        )
+
+        processor = ArchiveProcessor(temp_storage, archive_config)
+
+        assert processor._read_watermark() is None
+
+    @pytest.mark.asyncio
+    async def test_only_the_cameras_that_recorded_the_group_are_asked(
+        self, temp_storage, archive_config
+    ):
+        """A group recorded by one camera is not held back by another camera
+        that never saw it (say, one not yet plugged in)."""
+        _configure_cameras(archive_config, "default", "new_cam")
+        _write_camera_state(
+            temp_storage, {"default": {"latest_video_time": "2026-07-12 10:35:15"}}
+        )
+        group_dir = await _make_group(
+            temp_storage, "2026.07.12-10.00.00", camera_name="default"
+        )
+
+        processor = ArchiveProcessor(temp_storage, archive_config)
+
+        assert processor._read_watermark(
+            ArchiveTask(group_dir=group_dir).recording_cameras()
+        ) == datetime(2026, 7, 12, 10, 35, 15)
 
 
 class TestArchiveIsOptIn:
@@ -543,7 +638,7 @@ class TestRootLookupMatchesRealTeamNames:
 
         processor = ArchiveProcessor(temp_storage, archive_config)
         Path(get_camera_state_path(temp_storage)).write_text(
-            json.dumps({"cam": {"latest_video_time": "2026-07-12 10:35:15"}}),
+            json.dumps({"default": {"latest_video_time": "2026-07-12 10:35:15"}}),
             encoding="utf-8",
         )
 
@@ -553,3 +648,264 @@ class TestRootLookupMatchesRealTeamNames:
         assert os.path.exists(
             os.path.join(archive_root, "2026.07.12 - vs Kenmore (away)", "game.mp4")
         )
+
+
+class TestRefusesAGroupItCannotVouchFor:
+    """Every refusal here is a hard failure: nothing copied, nothing deleted,
+    nothing recorded."""
+
+    @pytest.mark.asyncio
+    async def test_relative_group_dir_is_refused(
+        self, temp_storage, archive_root, tmp_path, monkeypatch
+    ):
+        """Regression: the upload step handed over a group_dir relative to the
+        storage path. Resolved against the process's working directory it
+        named nothing, the walk found no files, and the task recorded an
+        empty "archived" group there -- reporting success."""
+        await _make_group(temp_storage, "2026.07.12-10.00.00")
+        elsewhere = tmp_path / "cwd"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        with pytest.raises(ValueError, match="absolute"):
+            await ArchiveTask(group_dir="2026.07.12-10.00.00").execute(
+                archive_root=archive_root, watermark=WATERMARK_PAST
+            )
+
+        assert list(elsewhere.iterdir()) == [], "nothing may be written in CWD"
+        assert os.listdir(archive_root) == []
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_group_dir_is_refused(self, temp_storage, archive_root):
+        missing = os.path.join(temp_storage, "2026.07.12-10.00.00")
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await ArchiveTask(group_dir=missing).execute(
+                archive_root=archive_root, watermark=WATERMARK_PAST
+            )
+
+        assert not os.path.exists(missing)
+        assert os.listdir(archive_root) == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status", ["pending", "combined", "trimmed", "pipeline_complete"]
+    )
+    @pytest.mark.parametrize("reclaim", [True, False], ids=["move", "copy"])
+    async def test_a_group_that_is_not_complete_is_refused(
+        self, temp_storage, archive_root, status, reclaim
+    ):
+        """Regression: the task never checked the group had reached
+        `complete`, so a queued task for an unfinished group would copy a
+        partial game, mark it terminally `archived` and -- for move/discard --
+        delete footage that was never published."""
+        group_dir = await _make_group(
+            temp_storage, "2026.07.12-10.00.00", status=status
+        )
+
+        ok = await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root,
+            reclaim_local_space=reclaim,
+            watermark=WATERMARK_PAST,
+        )
+
+        assert ok is False
+        assert os.path.exists(os.path.join(group_dir, "game.mp4"))
+        assert DirectoryState(group_dir).status == status
+        assert os.listdir(archive_root) == []
+
+    @pytest.mark.asyncio
+    async def test_reclaim_refused_when_no_recording_has_an_end_time(
+        self, temp_storage, archive_root
+    ):
+        """Regression: with no recording end time the watermark guard was
+        skipped entirely, so the one check standing between "delete" and "the
+        poller rediscovers this game as new" silently did not run."""
+        group_dir = await _make_group(
+            temp_storage, "2026.07.12-10.00.00", with_recording=False
+        )
+
+        ok = await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+
+        assert ok is False
+        assert os.path.exists(os.path.join(group_dir, "game.mp4"))
+        assert DirectoryState(group_dir).status == "complete"
+
+
+class TestDestinationIsUniquePerGroup:
+    """Two games on one day against one opponent -- a tournament, a
+    double-header -- produce the same "<date> - vs <opp> (away)" name."""
+
+    @pytest.mark.asyncio
+    async def test_second_game_never_overwrites_the_firsts_archive(
+        self, temp_storage, archive_root
+    ):
+        """Regression: the second game's copy landed in the first game's
+        folder. A larger file was copied straight over the first game's only
+        remaining copy (its local files already reclaimed); an equal-sized one
+        failed its hash check on every retry, forever."""
+        first = await _make_group(
+            temp_storage, "2026.07.12-09.00.00", payload=b"A" * 4096
+        )
+        second = await _make_group(
+            temp_storage, "2026.07.12-10.00.00", payload=b"B" * 8192
+        )
+
+        assert await ArchiveTask(group_dir=first).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+        assert await ArchiveTask(group_dir=second).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+
+        first_copy = Path(_archived_copy(archive_root))
+        second_copy = Path(
+            _archived_copy(archive_root, "2026.07.12 - vs Kenmore (away) (2)")
+        )
+        assert first_copy.read_bytes() == b"A" * 4096, "first game's copy destroyed"
+        assert second_copy.read_bytes() == b"B" * 8192
+
+    @pytest.mark.asyncio
+    async def test_same_size_second_game_archives_instead_of_failing_forever(
+        self, temp_storage, archive_root
+    ):
+        first = await _make_group(
+            temp_storage, "2026.07.12-09.00.00", payload=b"A" * 4096
+        )
+        second = await _make_group(
+            temp_storage, "2026.07.12-10.00.00", payload=b"B" * 4096
+        )
+
+        assert await ArchiveTask(group_dir=first).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+        assert await ArchiveTask(group_dir=second).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+        assert not os.path.exists(second)
+
+    @pytest.mark.asyncio
+    async def test_an_unmarked_existing_folder_is_left_alone(
+        self, temp_storage, archive_root
+    ):
+        """A same-named folder nothing claims (an earlier hand-run archive) is
+        not ours to write into."""
+        foreign = Path(archive_root, "2026.07.12 - vs Kenmore (away)")
+        foreign.mkdir()
+        (foreign / "game.mp4").write_bytes(b"F" * 9000)
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+
+        assert await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+
+        assert (foreign / "game.mp4").read_bytes() == b"F" * 9000
+        assert (
+            os.path.getsize(
+                _archived_copy(archive_root, "2026.07.12 - vs Kenmore (away) (2)")
+            )
+            == 4096
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_resumed_archive_reuses_its_own_folder(
+        self, temp_storage, archive_root
+    ):
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+
+        assert await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root,
+            reclaim_local_space=False,
+            watermark=WATERMARK_PAST,
+        )
+        assert await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+
+        assert sorted(os.listdir(archive_root)) == ["2026.07.12 - vs Kenmore (away)"]
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_copy_of_our_own_is_recopied_once(
+        self, temp_storage, archive_root
+    ):
+        """Regression: a same-size destination whose bytes differ (a torn
+        write from an interrupted run) failed verification on every retry,
+        forever. It is our own folder, so it is re-copied once and verified
+        again."""
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+        assert await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root,
+            reclaim_local_space=False,
+            watermark=WATERMARK_PAST,
+        )
+        Path(_archived_copy(archive_root)).write_bytes(b"\0" * 4096)
+
+        assert await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+
+        assert Path(_archived_copy(archive_root)).read_bytes() == b"x" * 4096
+        assert not os.path.exists(group_dir)
+
+
+class TestFinishInterruptedReclaim:
+    """`archived` is written before anything is deleted. A delete that then
+    fails (a file locked by a player or the indexer) must not leave the group
+    on disk forever."""
+
+    @pytest.mark.asyncio
+    async def test_retry_finishes_a_reclaim_that_failed_partway(
+        self, temp_storage, archive_root, monkeypatch
+    ):
+        """Regression: the retry saw `archived` and returned "already
+        archived" without deleting anything, so the space was never
+        reclaimed."""
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+        video = os.path.join(group_dir, "game.mp4")
+        real_remove = os.remove
+
+        def locked(path, *a, **kw):
+            if os.path.abspath(path) == os.path.abspath(video):
+                raise PermissionError("file is locked")
+            return real_remove(path, *a, **kw)
+
+        monkeypatch.setattr(os, "remove", locked)
+        ok = await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+        assert ok is False
+        assert DirectoryState(group_dir).status == "archived"
+        assert os.path.exists(video)
+
+        monkeypatch.setattr(os, "remove", real_remove)
+        ok = await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+
+        assert ok
+        assert not os.path.exists(group_dir)
+        assert Path(_archived_copy(archive_root)).read_bytes() == b"x" * 4096
+
+    @pytest.mark.asyncio
+    async def test_reclaim_of_an_archived_group_reverifies_first(
+        self, temp_storage, archive_root
+    ):
+        """`archived` alone is not proof the copy is still there. Finishing a
+        reclaim goes back through copy+verify, so a copy lost since is
+        restored before the local files go."""
+        group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
+        assert await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root,
+            reclaim_local_space=False,
+            watermark=WATERMARK_PAST,
+        )
+        os.remove(_archived_copy(archive_root))
+
+        assert await ArchiveTask(group_dir=group_dir).execute(
+            archive_root=archive_root, watermark=WATERMARK_PAST
+        )
+
+        assert Path(_archived_copy(archive_root)).read_bytes() == b"x" * 4096
+        assert not os.path.exists(group_dir)

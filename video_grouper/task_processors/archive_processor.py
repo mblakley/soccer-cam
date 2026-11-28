@@ -6,8 +6,10 @@ own queue because verifying a game means hashing tens of gigabytes, which
 must not sit on the upload path.
 """
 
+import json
 import logging
 import os
+from collections.abc import Iterable
 from datetime import datetime
 
 from video_grouper.utils.config import Config
@@ -37,40 +39,72 @@ class ArchiveProcessor(QueueProcessor):
     def get_item_key(self, item: BaseTask) -> str:
         return f"archive:{item.get_item_path()}"
 
-    def _read_watermark(self) -> datetime | None:
-        """Newest watermark across all cameras in ``camera_state.json``.
+    def _read_watermark(
+        self, camera_names: Iterable[str] | None = None
+    ) -> datetime | None:
+        """The watermark that is safe to archive behind: the slowest camera's.
 
         The archive guard needs "has the poller finished with this time
         range?", and with several cameras the answer is only yes when the
-        *slowest* one has passed it. Take the minimum across cameras that
-        have a watermark, so one lagging camera cannot let a game be archived
-        out from under it.
+        *slowest* one has passed it, so this is the minimum.
+
+        Only cameras in ``self.config.cameras`` count. ``camera_state.json``
+        keeps an entry for every camera that ever ran, and a removed or
+        renamed camera's last mark never moves again; taking it into the
+        minimum would block archiving forever.
+
+        ``camera_names`` narrows it further to the cameras that recorded the
+        group (see :meth:`ArchiveTask.recording_cameras`); None means every
+        configured camera. A camera in that set with no readable mark has not
+        finished with anything, so the answer is None -- refuse -- rather
+        than the minimum of the others.
         """
+        configured = [c.name for c in getattr(self.config, "cameras", None) or []]
+        if camera_names is None:
+            relevant = set(configured)
+        else:
+            relevant = set(camera_names)
+            unknown = relevant - set(configured)
+            if unknown:
+                # A removed camera has no poller left to rediscover anything,
+                # so it needs no watermark of its own; the configured ones do.
+                logger.warning(
+                    "ARCHIVE: group recorded by camera(s) %s that are no longer "
+                    "configured; using every configured camera's watermark.",
+                    sorted(unknown),
+                )
+                relevant = set(configured)
+        if not relevant:
+            logger.error("ARCHIVE: no cameras configured; no watermark to trust.")
+            return None
+
         state_path = get_camera_state_path(self.storage_path)
         if not os.path.exists(state_path):
             return None
         try:
             with FileLock(state_path):
-                import json
-
                 with open(state_path) as fh:
                     all_state = json.load(fh)
         except Exception as e:  # noqa: BLE001
             logger.error("ARCHIVE: cannot read camera state: %s", e)
             return None
+        if not isinstance(all_state, dict):
+            return None
 
         marks: list[datetime] = []
-        for value in all_state.values():
-            if not isinstance(value, dict):
-                continue  # legacy top-level connection_events / is_connected
-            raw = value.get("latest_video_time")
-            if not raw:
-                continue
+        for name in sorted(relevant):
+            value = all_state.get(name)
+            raw = value.get("latest_video_time") if isinstance(value, dict) else None
             try:
                 marks.append(datetime.strptime(str(raw).strip(), _DATE_FORMAT))
-            except ValueError:
-                continue
-        return min(marks) if marks else None
+            except (TypeError, ValueError):
+                logger.info(
+                    "ARCHIVE: camera %r has no watermark yet; nothing can be "
+                    "reclaimed behind it.",
+                    name,
+                )
+                return None
+        return min(marks)
 
     async def process_item(self, item: BaseTask) -> None:
         if not isinstance(item, ArchiveTask):
@@ -84,6 +118,10 @@ class ArchiveProcessor(QueueProcessor):
                 item.group_dir,
             )
             return
+
+        # Hard-fail on a relative or vanished group_dir before anything reads
+        # from it: a relative one resolves against the working directory.
+        item.require_real_group_dir()
 
         # Archives are per-team; resolve this game's root from its
         # my_team_name before anything is copied or deleted.
@@ -103,7 +141,7 @@ class ArchiveProcessor(QueueProcessor):
             archive_root=team_root,
             make_second_copy=archive_cfg.makes_second_copy,
             reclaim_local_space=archive_cfg.reclaims_local_space,
-            watermark=self._read_watermark(),
+            watermark=self._read_watermark(item.recording_cameras()),
         )
         if not ok:
             # Raise so the base class applies its retry/backoff. A refusal on

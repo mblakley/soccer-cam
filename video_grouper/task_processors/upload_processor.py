@@ -184,12 +184,23 @@ class UploadProcessor(QueueProcessor):
                 # The archive step re-checks everything that matters
                 # (verification, the watermark guard), so a duplicate or
                 # premature enqueue is harmless.
+                # Upload tasks carry group_dir RELATIVE to the storage path;
+                # the archive task needs it absolute (it refuses otherwise),
+                # or it would resolve against the working directory.
                 if self.archive_processor is not None:
                     try:
+                        from video_grouper.utils.paths import resolve_path
+
                         from .tasks.archive import ArchiveTask
 
                         await self.archive_processor.add_work(
-                            ArchiveTask(group_dir=item.get_item_path())
+                            ArchiveTask(
+                                group_dir=str(
+                                    resolve_path(
+                                        item.get_item_path(), self.storage_path
+                                    )
+                                )
+                            )
                         )
                     except Exception as e:  # noqa: BLE001
                         logger.warning(
