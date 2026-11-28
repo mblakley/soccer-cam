@@ -185,12 +185,21 @@ WEB_STATIC_DATAS = [
     )
 ]
 
+# Integration ports pick their implementation by scanning each port's
+# ``sources`` package at runtime (integrations/registry.py, pkgutil). Nothing
+# imports those modules statically, so PyInstaller's import graph never sees
+# them and the frozen service died at startup with "no implementation of
+# IEntitlements accepted this install". Collect them explicitly.
+from PyInstaller.utils.hooks import collect_submodules  # noqa: E402
+
+INTEGRATION_SOURCES = collect_submodules("video_grouper.integrations")
+
 a_service = Analysis(
     [SERVICE_MAIN],
     pathex=[],
     binaries=[],
     datas=PHASE_MODEL_DATAS + WEB_STATIC_DATAS,
-    hiddenimports=[],
+    hiddenimports=INTEGRATION_SOURCES,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
