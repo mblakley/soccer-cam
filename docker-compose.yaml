@@ -1,5 +1,5 @@
 services:
-  video-grouper:
+  soccer-cam:
     build:
       context: .
       dockerfile: ./video_grouper/Dockerfile

@@ -32,9 +32,9 @@ def mock_ffmpeg():
 
 
 def _app(youtube_queued=0, youtube_busy=None, quota_blocked=False):
-    from video_grouper.video_grouper_app import VideoGrouperApp
+    from video_grouper.video_grouper_app import SoccerCamApp
 
-    app = VideoGrouperApp.__new__(VideoGrouperApp)
+    app = SoccerCamApp.__new__(SoccerCamApp)
 
     def _proc(qsize=0, busy=None, blocked=False):
         p = MagicMock()

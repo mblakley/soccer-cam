@@ -88,7 +88,7 @@ class TestMainFunction:
         return config
 
     @pytest.mark.asyncio
-    @patch("video_grouper.__main__.VideoGrouperApp")
+    @patch("video_grouper.__main__.SoccerCamApp")
     @patch("video_grouper.__main__.load_application_config")
     @patch("video_grouper.__main__.parse_arguments")
     async def test_main_with_custom_config(
@@ -125,7 +125,7 @@ class TestMainFunction:
         mock_app.shutdown.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("video_grouper.__main__.VideoGrouperApp")
+    @patch("video_grouper.__main__.SoccerCamApp")
     @patch("video_grouper.__main__.load_application_config")
     @patch("video_grouper.__main__.parse_arguments")
     async def test_main_with_default_config(
@@ -153,13 +153,13 @@ class TestMainFunction:
         # Verify calls
         mock_parse_args.assert_called_once()
         # Phase 1: when no --config is given, __main__ resolves the default
-        # to <shared_data>/config.ini and passes it through to VideoGrouperApp
+        # to <shared_data>/config.ini and passes it through to SoccerCamApp
         # so the auth server's /config editor knows where to save.
         load_config_args = mock_load_config.call_args[0]
         assert len(load_config_args) == 1
         assert load_config_args[0] is not None
         assert load_config_args[0].name == "config.ini"
-        # Same Path passed to VideoGrouperApp
+        # Same Path passed to SoccerCamApp
         app_kwargs = mock_app_class.call_args.kwargs
         assert app_kwargs["config_path"] == load_config_args[0]
         mock_app.run.assert_called_once()

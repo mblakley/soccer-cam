@@ -311,7 +311,7 @@ class UpdateManager:
         SoccerCamService`` early in its install, which would
         SIGTERM our process if we were the parent. By the time NSIS
         runs the service has already exited cleanly (see
-        ``VideoGrouperApp._shutdown_event``), and the helper survives
+        ``SoccerCamApp._shutdown_event``), and the helper survives
         as an orphaned process group.
         """
         path = installer_path or self.installer_path()
