@@ -126,15 +126,15 @@ class ArchiveProcessor(QueueProcessor):
         # Archives are per-team; resolve this game's root from its
         # my_team_name before anything is copied or deleted.
         team = item.team_name()
-        team_root = archive_cfg.root_for_team(team)
+        team_root = self.config.archive_root_for(team)
         if archive_cfg.makes_second_copy and not team_root:
             # Refuse rather than dumping the game into some other team's
             # archive: the roots are age-group specific and mixing them is
             # not something a later pass can untangle.
             raise RuntimeError(
                 f"[ARCHIVE] no archive root for team {team!r} "
-                f"({item.group_dir}). Add it under [ARCHIVE.PER_TEAM], or set "
-                "a fallback `path`."
+                f"({item.group_dir}). Set archive_path in its [TEAM.<key>] "
+                "section, or a fallback [ARCHIVE] path."
             )
 
         ok = await item.execute(

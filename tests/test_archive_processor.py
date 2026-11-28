@@ -30,8 +30,10 @@ from video_grouper.utils.config import (
     ProcessingConfig,
     RecordingConfig,
     StorageConfig,
+    TeamConfig,
     TeamSnapConfig,
     YouTubeConfig,
+    load_config,
 )
 from video_grouper.utils.paths import get_camera_state_path
 
@@ -466,6 +468,19 @@ class TestSingleDriveDiscard:
         assert os.path.exists(os.path.join(group_dir, "game.mp4"))
 
 
+def _config_with(after_upload="move", path="", teams=None):
+    """A minimal real Config: an [ARCHIVE] section plus [TEAM.<key>] teams.
+
+    ``teams`` maps a handle to TeamConfig kwargs, exactly as a
+    ``[TEAM.<key>]`` section would hold them.
+    """
+    return Config(
+        storage=StorageConfig(path="unused"),
+        archive=ArchiveConfig(after_upload=after_upload, path=path),
+        teams={key: TeamConfig(**kw) for key, kw in (teams or {}).items()},
+    )
+
+
 class TestDispositionConfig:
     def test_keep_is_the_default(self):
         cfg = ArchiveConfig()
@@ -493,17 +508,20 @@ class TestDispositionConfig:
         a second copy and silently got none finds out only once the working
         drive is already gone."""
         with pytest.raises(ValueError, match="needs somewhere to put games"):
-            ArchiveConfig(after_upload=mode)
+            _config_with(after_upload=mode)
 
     @pytest.mark.parametrize("mode", ["copy", "move"])
-    def test_per_team_map_alone_satisfies_the_requirement(self, mode):
-        """A per-team map is somewhere to put games; no `path` needed."""
-        cfg = ArchiveConfig(after_upload=mode, PER_TEAM={"Guzzetta": HEAT_2012})
-        assert cfg.root_for_team("Guzzetta") == HEAT_2012
+    def test_a_team_archive_path_alone_satisfies_the_requirement(self, mode):
+        """A team's archive_path is somewhere to put games; no `path` needed."""
+        cfg = _config_with(
+            after_upload=mode,
+            teams={"heat2012": {"name": "Guzzetta", "archive_path": HEAT_2012}},
+        )
+        assert cfg.archive_root_for("Guzzetta") == HEAT_2012
 
     @pytest.mark.parametrize("mode", ["keep", "discard"])
     def test_pathless_dispositions_are_valid(self, mode):
-        assert ArchiveConfig(after_upload=mode).path == ""
+        assert _config_with(after_upload=mode).archive.path == ""
 
 
 class TestPerTeamArchiveRoots:
@@ -513,37 +531,83 @@ class TestPerTeamArchiveRoots:
     and Flash_2013s under F:, holding folders named
     "2026.07.12 - vs Niagara Falls Soccer Club (away)". The team recorded in
     match_info is "Guzzetta" while its root is Heat_2012s, and the two Heat
-    age groups must never be mixed — so the mapping is configured, not
-    inferred.
+    age groups must never be mixed — so the root is configured, not
+    inferred: ``archive_path`` in the team's own ``[TEAM.<key>]`` section,
+    resolved by ``Config.team_for`` like every other per-team setting.
     """
 
     def test_team_maps_to_its_own_root(self):
-        cfg = ArchiveConfig(
-            after_upload="move",
-            PER_TEAM={
-                "Guzzetta": HEAT_2012,
-                "Heat 2013": HEAT_2013,
-                "Flash": FLASH_2013,
+        cfg = _config_with(
+            teams={
+                "heat2012": {"name": "Guzzetta", "archive_path": HEAT_2012},
+                "heat2013": {"name": "Heat 2013", "archive_path": HEAT_2013},
+                "flash": {"name": "Flash", "archive_path": FLASH_2013},
             },
         )
-        assert cfg.root_for_team("Guzzetta") == HEAT_2012
-        assert cfg.root_for_team("Heat 2013") == HEAT_2013
-        assert cfg.root_for_team("Flash") == FLASH_2013
+        assert cfg.archive_root_for("Guzzetta") == HEAT_2012
+        assert cfg.archive_root_for("Heat 2013") == HEAT_2013
+        assert cfg.archive_root_for("Flash") == FLASH_2013
 
-    def test_lookup_survives_configparser_lowercasing_and_stray_whitespace(self):
-        """configparser lowercases option keys, and match_info is hand-edited."""
-        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"guzzetta": HEAT_2012})
-        assert cfg.root_for_team("  Guzzetta  ") == HEAT_2012
+    def test_lookup_survives_case_and_stray_whitespace(self):
+        """match_info is hand-edited."""
+        cfg = _config_with(
+            teams={"heat2012": {"name": "guzzetta", "archive_path": HEAT_2012}}
+        )
+        assert cfg.archive_root_for("  Guzzetta  ") == HEAT_2012
 
     def test_unmapped_team_falls_back_to_path(self):
-        cfg = ArchiveConfig(
-            after_upload="move", path=FALLBACK, PER_TEAM={"Flash": FLASH_2013}
+        cfg = _config_with(
+            path=FALLBACK,
+            teams={"flash": {"name": "Flash", "archive_path": FLASH_2013}},
         )
-        assert cfg.root_for_team("Someone Else") == FALLBACK
+        assert cfg.archive_root_for("Someone Else") == FALLBACK
+
+    def test_known_team_without_an_archive_path_falls_back_to_path(self):
+        cfg = _config_with(
+            path=FALLBACK,
+            teams={
+                "flash": {"name": "Flash", "archive_path": FLASH_2013},
+                "heat2012": {"name": "Guzzetta"},
+            },
+        )
+        assert cfg.archive_root_for("Guzzetta") == FALLBACK
 
     def test_unmapped_team_with_no_fallback_has_nowhere_to_go(self):
-        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"Flash": FLASH_2013})
-        assert cfg.root_for_team("Guzzetta") == ""
+        cfg = _config_with(
+            teams={"flash": {"name": "Flash", "archive_path": FLASH_2013}}
+        )
+        assert cfg.archive_root_for("Guzzetta") == ""
+
+    def test_archive_path_is_read_from_a_team_section(self, tmp_path):
+        """Regression: per-team roots were a separate [ARCHIVE.PER_TEAM] map
+        with its own matching rule; the team's own section had no field for
+        it, so an archive_path written there was silently ignored."""
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[STORAGE]\npath = unused\n"
+            "[ARCHIVE]\nafter_upload = move\n"
+            "[TEAM.heat2012]\nname = BU14 - Guzzetta\naliases = Guzzetta\n"
+            f"archive_path = {HEAT_2012}\n",
+            encoding="utf-8",
+        )
+
+        cfg = load_config(ini)
+
+        assert cfg.archive_root_for("BU14 - Guzzetta") == HEAT_2012
+
+    def test_a_leftover_archive_per_team_section_refuses_to_load(self, tmp_path):
+        """Pre-release builds read [ARCHIVE.PER_TEAM]. Ignoring it would send
+        every game to the fallback root (or nowhere) without a word."""
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[STORAGE]\npath = unused\n"
+            f"[ARCHIVE]\nafter_upload = move\npath = {FALLBACK}\n"
+            f"[ARCHIVE.PER_TEAM]\nguzzetta = {HEAT_2012}\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match=r"ARCHIVE\.PER_TEAM"):
+            load_config(ini)
 
     @pytest.mark.asyncio
     async def test_game_lands_directly_in_its_team_root(
@@ -566,7 +630,9 @@ class TestPerTeamArchiveRoots:
         group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
         archive_config.archive.after_upload = "move"
         archive_config.archive.path = ""
-        archive_config.archive.per_team = {"Flash": FLASH_2013}
+        archive_config.teams = {
+            "flash": TeamConfig(name="Flash", archive_path=FLASH_2013)
+        }
 
         processor = ArchiveProcessor(temp_storage, archive_config)
         with pytest.raises(RuntimeError, match="no archive root for team 'Heat'"):
@@ -580,61 +646,75 @@ class TestRootLookupMatchesRealTeamNames:
 
     That value is the full registered name — on the live install
     "BU14 - Guzzetta", not "Guzzetta" — while an operator writes the short
-    handle they think of the team by. An exact match misses, and archiving
-    refuses every game with "no archive root for team". Substring matching is
-    the same rule [YOUTUBE.PLAYLIST_MAP] has always used.
+    handle they think of the team by. ``resolve_team`` matches exactly, then
+    by substring with the longest identifier winning, for every per-team
+    setting; the archive root uses it rather than a rule of its own.
     """
 
-    def test_the_real_my_team_name_resolves_from_a_short_key(self):
-        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"guzzetta": HEAT_2012})
-
-        assert cfg.root_for_team("BU14 - Guzzetta") == HEAT_2012
-
-    def test_both_live_teams_resolve(self):
-        cfg = ArchiveConfig(
-            after_upload="move",
-            PER_TEAM={"guzzetta": HEAT_2012, "flash": FLASH_2013},
+    def test_the_real_my_team_name_resolves_from_a_short_alias(self):
+        cfg = _config_with(
+            teams={"heat2012": {"name": "guzzetta", "archive_path": HEAT_2012}}
         )
 
-        assert cfg.root_for_team("BU14 - Guzzetta") == HEAT_2012
+        assert cfg.archive_root_for("BU14 - Guzzetta") == HEAT_2012
+
+    def test_both_live_teams_resolve(self):
+        cfg = _config_with(
+            teams={
+                "heat2012": {"name": "guzzetta", "archive_path": HEAT_2012},
+                "flash": {"name": "flash", "archive_path": FLASH_2013},
+            },
+        )
+
+        assert cfg.archive_root_for("BU14 - Guzzetta") == HEAT_2012
         assert (
-            cfg.root_for_team("Western New York Flash - 13B ECNL-RL Rochester")
+            cfg.archive_root_for("Western New York Flash - 13B ECNL-RL Rochester")
             == FLASH_2013
         )
 
-    def test_longest_key_wins_so_age_groups_are_not_mixed(self):
+    def test_longest_identifier_wins_so_age_groups_are_not_mixed(self):
         """Filing a game under another team's root then deleting the original
         is not something a later pass can undo."""
-        cfg = ArchiveConfig(
-            after_upload="move",
-            PER_TEAM={"flash": FLASH_2013, "wny flash rochester": HEAT_2013},
+        cfg = _config_with(
+            teams={
+                "flash": {"name": "flash", "archive_path": FLASH_2013},
+                "rochester": {
+                    "name": "wny flash rochester",
+                    "archive_path": HEAT_2013,
+                },
+            },
         )
 
-        assert cfg.root_for_team("WNY Flash Rochester ECNL") == HEAT_2013
+        assert cfg.archive_root_for("WNY Flash Rochester ECNL") == HEAT_2013
 
     def test_an_unmapped_team_still_has_nowhere_to_go(self):
         """The refusal must survive: a near-miss must not fall back silently."""
-        cfg = ArchiveConfig(after_upload="move", PER_TEAM={"guzzetta": HEAT_2012})
-
-        assert cfg.root_for_team("Some Other Club") == ""
-
-    def test_path_is_still_the_fallback_when_configured(self):
-        cfg = ArchiveConfig(
-            after_upload="move", path=FALLBACK, PER_TEAM={"guzzetta": HEAT_2012}
+        cfg = _config_with(
+            teams={"heat2012": {"name": "guzzetta", "archive_path": HEAT_2012}}
         )
 
-        assert cfg.root_for_team("Some Other Club") == FALLBACK
+        assert cfg.archive_root_for("Some Other Club") == ""
+
+    def test_path_is_still_the_fallback_when_configured(self):
+        cfg = _config_with(
+            path=FALLBACK,
+            teams={"heat2012": {"name": "guzzetta", "archive_path": HEAT_2012}},
+        )
+
+        assert cfg.archive_root_for("Some Other Club") == FALLBACK
 
     @pytest.mark.asyncio
     async def test_a_real_game_archives_instead_of_being_refused(
         self, temp_storage, archive_root, archive_config
     ):
-        """End to end: the group's match_info says "Heat", the operator
-        configured "heat", and the archive must actually run."""
+        """End to end: the group's match_info says "Heat", the team section
+        names "heat", and the archive must actually run."""
         group_dir = await _make_group(temp_storage, "2026.07.12-10.00.00")
         archive_config.archive.after_upload = "move"
         archive_config.archive.path = ""
-        archive_config.archive.per_team = {"heat": archive_root}
+        archive_config.teams = {
+            "heat": TeamConfig(name="heat", archive_path=archive_root)
+        }
 
         processor = ArchiveProcessor(temp_storage, archive_config)
         Path(get_camera_state_path(temp_storage)).write_text(

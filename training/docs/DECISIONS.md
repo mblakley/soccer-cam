@@ -1966,8 +1966,23 @@ so a game straddling the boundary comes back regardless. Reconcile is bounded be
 completeness is the right question only for work we still owe. `max_lookback_hours` is removed (it
 only ever skipped a stale watermark forward, silently dropping what it skipped); first run scans a
 year, since neither camera backend can list "everything" and both return `[]` if handed `None`.
-Retries that exhaust now mark the file `abandoned` via a new `on_item_permanently_failed` hook, so
-one recording the camera has deleted cannot pin the watermark and every later game behind it.
+Retries that exhaust can mark the file `abandoned` via a new `on_item_permanently_failed` hook, so
+one recording the camera has deleted cannot pin the watermark and every later game behind it —
+but **only when the camera confirms it is gone** (it answers a listing for the file's window, or up
+to now if that is empty, and the file is not in it). Exhausting three fast retries proves nothing on
+its own: a full disk or a timeout would otherwise settle real footage forever. Every uncertain
+outcome (unreachable, listing failed or empty — both backends return `[]` on error) leaves it
+`download_failed`, which the StateAuditor re-queues each pass, holding the watermark meanwhile.
+
+The watermark is **per camera**: each poller counts only recordings whose discovery-time
+`camera_name` is its own (pollers share one storage path, and another camera's settled work must not
+carry this camera's mark past footage it never discovered). Pre-attribution recordings count on a
+single-camera install; with several cameras they may hold a mark back but never push it forward. A
+group the StateAuditor treats as past download (`combined` … `archived`, `not_a_game`) settles every
+file in it — the poller imports the same set — because a stale non-terminal entry there is never
+re-queued or abandoned and would otherwise hold the mark forever. `max_files_per_poll` caps files
+*queued*, not files listed: while the mark is held, the same known files re-listed every poll used
+to fill the cap and starve discovery of anything newer.
 
 Archiving becomes a real pipeline step (`ArchiveProcessor`, post-`complete`, `[ARCHIVE]`) rather
 than an ad-hoc script: copy → verify SHA-256 → record `archived` → delete, in that order, with
@@ -1982,26 +1997,31 @@ working drive. `discard` answers the single-drive case (YouTube is the archive) 
 the group carries a recorded YouTube video id, since those files are then the only copy. `copy`/`move`
 with nowhere to put games is a config-load hard failure rather than a silent no-op.
 
-Archive roots are matched against a game's `my_team_name` **by substring, not exactly** — the
-same rule `[YOUTUBE.PLAYLIST_MAP]` has always used. The live value is the full registered name
-(`BU14 - Guzzetta`), while an operator writes the short handle (`guzzetta`); an exact match misses
-and archiving refuses every game. Longest configured key wins, so two teams sharing a word do not
-get filed into each other's archive — which, followed by deleting the original, is unrecoverable.
-
-Archive roots are **per-team** and configured, never derived: `[ARCHIVE.PER_TEAM]` maps
-`my_team_name` to a root. Verified against the live layout 2026-08-07 — `F:\Heat_2012s`,
+Archive roots are **per-team** and configured, never derived: `archive_path` in each team's
+`[TEAM.<key>]` section, found through `Config.team_for` / `resolve_team` like every other per-team
+setting (2026-08-22 "one `[TEAM.<key>]` section per team"; an `[ARCHIVE.PER_TEAM]` map with its
+own matching rule existed only in pre-release builds of this PR, and a config still carrying it
+refuses to load rather than silently falling back). `resolve_team` already handles the live name
+(`BU14 - Guzzetta`) against a short alias, exact before substring, longest identifier winning — so
+two teams sharing a word are not filed into each other's archive, which followed by deleting the
+original is unrecoverable. Verified against the live layout 2026-08-07 — `F:\Heat_2012s`,
 `F:\Heat_2013s`, `F:\Flash_2013s`, holding `2026.07.12 - vs Niagara Falls Soccer Club (away)`.
 The root is not derivable from the team name (match_info says "Guzzetta", the root is `Heat_2012s`),
 and one account carries two Heat age groups that must not be mixed, so a game whose team has no root
-(and no `path` fallback) is refused rather than filed under another team's archive. Lookup is
-case-insensitive because configparser lowercases option keys. The earlier name
+(and no `[ARCHIVE] path` fallback) is refused rather than filed under another team's archive.
+Each archive folder is owned by one source group (a marker written before the first copy): two games
+the same day against the same opponent share a name, and the second gets `(2)` instead of being
+copied over the first's only copy. The earlier name
 `delete_after_verify` was rejected for encoding an invariant as an option — we never delete without
 verifying, so the name implied a `delete_before_verify` mode that must not exist. The ordering is the point. The ad-hoc version deleted first and
 recorded nothing; interrupted by a dropped remote session it left a group whose `state.json` still
 said `combined`, which the pipeline read as mid-processing — it blanked `match_info.ini` to a stub
 and would have re-rendered and re-uploaded an already-published game. The step also **hard-refuses**
-to archive a group the watermark has not passed, since doing so is precisely what lets the poller
-rediscover it.
+to archive a group the watermark has not passed (the minimum over the configured cameras that
+recorded it — a removed camera's stale mark must not pin it), since doing so is precisely what lets
+the poller rediscover it; likewise a group that is not `complete`, one with no recording end time
+to check, and a relative or missing group path. An `archived` group still on disk (a delete that
+failed partway) is finished on retry, back through copy + verify, rather than reported done.
 
 **Trade-off:** the watermark is a single scalar, not a per-file ledger, so it cannot express
 out-of-order completion — a stuck recording holds the line until it settles or is abandoned. That is
@@ -2023,9 +2043,10 @@ stated intent ("Supplementary — used for remote visibility, not for local deci
 `video_grouper/task_processors/tasks/archive/archive_task.py`,
 `video_grouper/task_processors/base_queue_processor.py`,
 `video_grouper/task_processors/download_processor.py`,
-`video_grouper/task_processors/state_auditor.py`, `video_grouper/utils/config.py`,
-`tests/test_camera_poller.py`, `tests/test_archive_processor.py`,
-`tests/test_download_processor.py`
+`video_grouper/task_processors/state_auditor.py`,
+`video_grouper/task_processors/upload_processor.py`, `video_grouper/utils/config.py`,
+`video_grouper/config.ini.dist`, `tests/test_camera_poller.py`, `tests/test_archive_processor.py`,
+`tests/test_download_processor.py`, `tests/test_upload_processor.py`
 
 ---
 

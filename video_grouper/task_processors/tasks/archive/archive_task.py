@@ -135,7 +135,7 @@ class ArchiveTask(BaseTask):
     def destination(self, team_root: str) -> str:
         """Where this group's archive copy belongs, inside its team's root.
 
-        ``team_root`` is already team-specific (see ``[ARCHIVE.PER_TEAM]``) —
+        ``team_root`` is already team-specific (``archive_path`` in its ``[TEAM.<key>]``) —
         no team component is appended here. The root name cannot be derived
         from the team name anyway: a team recorded as "Guzzetta" archives to
         ``Heat_2012s``, and one account can hold several age groups that must

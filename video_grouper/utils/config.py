@@ -130,6 +130,11 @@ class TeamConfig(BaseModel):
     youtube_playlist: str = ""
     # Pipeline preset or step-list override for this team's games.
     pipeline: str = ""
+    # Archive root for this team's games under [ARCHIVE] after_upload =
+    # copy/move. Not derivable from the name (a team recorded as "Guzzetta"
+    # archives to F:\Heat_2012s, and age groups must never be mixed), so it is
+    # configured here. Blank falls back to [ARCHIVE] path.
+    archive_path: str = ""
 
     @field_validator("aliases", mode="before")
     @classmethod
@@ -237,78 +242,28 @@ class ArchiveConfig(BaseModel):
     Archives are per-team, and a team's root is NOT derivable from its name.
     A team recorded in match_info as "Guzzetta" archives to ``Heat_2012s``,
     and one account can carry several age groups (``Heat_2012s`` and
-    ``Heat_2013s``) that must never be mixed. So the mapping is supplied,
-    not guessed::
+    ``Heat_2013s``) that must never be mixed. So each team's root is
+    supplied, not guessed -- as ``archive_path`` in its ``[TEAM.<key>]``
+    section, the one place per-team settings live, resolved by the same
+    ``resolve_team`` every other per-team lookup uses::
 
-        [ARCHIVE.PER_TEAM]
-        Guzzetta = F:\\Heat_2012s
-        Flash = F:\\Flash_2013s
+        [TEAM.heat2012]
+        name = BU14 - Guzzetta
+        archive_path = F:\\Heat_2012s
 
-    ``path`` is the fallback for teams with no entry, and is enough on its
-    own for a single-team install. Per-game subdirectories are named from
-    match_info: ``<root>/<date> - vs <opponent> (home|away)``.
+    ``path`` here is the fallback for games whose team has no
+    ``archive_path``, and is enough on its own for a single-team install.
+    Per-game subdirectories are named from match_info:
+    ``<root>/<date> - vs <opponent> (home|away)``.
+
+    "Somewhere to put games" for ``copy``/``move`` is checked on
+    :class:`Config`, which can see the teams; this section alone cannot.
     """
 
     after_upload: Literal["keep", "copy", "move", "discard"] = "keep"
-    # Fallback destination root for `copy`/`move`, used for teams with no
-    # PER_TEAM entry. Unused by `keep` and `discard`.
+    # Fallback destination root for `copy`/`move`, used for games whose team
+    # has no [TEAM.<key>] archive_path. Unused by `keep` and `discard`.
     path: str = ""
-    # my_team_name -> archive root. Wins over `path`.
-    per_team: dict[str, str] = Field(default_factory=dict, alias="PER_TEAM")
-
-    model_config = {"populate_by_name": True}
-
-    @model_validator(mode="after")
-    def _second_copy_needs_somewhere_to_go(self) -> ArchiveConfig:
-        # Hard-fail rather than silently degrading to a no-op: an operator who
-        # asked for a second copy and got none would find out only when the
-        # working drive was already gone.
-        if self.after_upload in ("copy", "move") and not (
-            self.path.strip() or self.per_team
-        ):
-            raise ValueError(
-                f"[ARCHIVE] after_upload = {self.after_upload} needs somewhere "
-                "to put games: set `path`, or map teams to roots under "
-                "[ARCHIVE.PER_TEAM]. Use `discard` to reclaim local space "
-                "without a second copy, or `keep` to do nothing."
-            )
-        return self
-
-    def root_for_team(self, team_name: str) -> str:
-        """Archive root for *team_name*, or "" when it has nowhere to go.
-
-        *team_name* is a game's ``my_team_name`` from match_info.ini, and that
-        is the full registered name — on the live install, ``BU14 - Guzzetta``,
-        not ``Guzzetta``. An exact match therefore misses: an operator writes
-        the short handle they think of the team by, and archiving would refuse
-        every game with "no archive root for team".
-
-        So match exactly first, then by substring, which is the same rule
-        ``[YOUTUBE.PLAYLIST_MAP]`` has always used and the only reason a key
-        like ``guzzetta`` resolves ``BU14 - Guzzetta`` there. Longest key wins
-        among substring matches, so with two teams sharing a word ("Flash" and
-        "WNY Flash Rochester") the more specific root is chosen rather than
-        whichever happens to be first — filing a game under another team's
-        archive and then deleting the original is not recoverable.
-
-        Case-insensitive and whitespace-tolerant throughout: configparser
-        lowercases option keys, and match_info is hand-edited.
-        """
-        wanted = (team_name or "").strip().casefold()
-        if not wanted:
-            return self.path.strip()
-
-        for name, root in self.per_team.items():
-            if name.strip().casefold() == wanted:
-                return root.strip()
-
-        best_root = ""
-        best_len = 0
-        for name, root in self.per_team.items():
-            folded = name.strip().casefold()
-            if folded and folded in wanted and len(folded) > best_len:
-                best_root, best_len = root.strip(), len(folded)
-        return best_root or self.path.strip()
 
     @property
     def makes_second_copy(self) -> bool:
@@ -695,6 +650,36 @@ class Config(BaseModel):
         """
         return resolve_team(self.teams, my_team_name)
 
+    def archive_root_for(self, my_team_name: str | None) -> str:
+        """Archive root for a game's team, or "" when it has nowhere to go.
+
+        The team's ``[TEAM.<key>] archive_path``, found through
+        :meth:`team_for` like every other per-team setting, else
+        ``[ARCHIVE] path``. Never a guess at some other team's root: filing a
+        game there and then deleting the original cannot be undone.
+        """
+        team = self.team_for(my_team_name)
+        if team is not None and team.archive_path.strip():
+            return team.archive_path.strip()
+        return self.archive.path.strip()
+
+    @model_validator(mode="after")
+    def _second_copy_needs_somewhere_to_go(self) -> Config:
+        # Hard-fail rather than silently degrading to a no-op: an operator who
+        # asked for a second copy and got none would find out only when the
+        # working drive was already gone.
+        if self.archive.after_upload in ("copy", "move") and not (
+            self.archive.path.strip()
+            or any(t.archive_path.strip() for t in self.teams.values())
+        ):
+            raise ValueError(
+                f"[ARCHIVE] after_upload = {self.archive.after_upload} needs "
+                "somewhere to put games: set [ARCHIVE] path, or archive_path "
+                "in each [TEAM.<key>]. Use `discard` to reclaim local space "
+                "without a second copy, or `keep` to do nothing."
+            )
+        return self
+
     def post_trim_processing_active(self) -> bool:
         """True when a post-trim processing stage owns ``trimmed`` groups.
 
@@ -730,12 +715,14 @@ def load_config(config_path: Path) -> Config:
     # cannot look like it is still being honoured.
     config_dict.pop("YOUTUBE.PLAYLIST_MAP", None)
 
-    # `[ARCHIVE.PER_TEAM]` -> dict of my_team_name -> archive root. Archives
-    # are per-team and the root is not derivable from the name (match_info
-    # "Guzzetta" -> Heat_2012s), so the mapping has to come from config.
+    # Per-team archive roots are `archive_path` in [TEAM.<key>]. An
+    # [ARCHIVE.PER_TEAM] section only ever existed on pre-release builds of
+    # the archive step; ignoring it would silently send every game to the
+    # `path` fallback (or nowhere), so refuse to start instead.
     if "ARCHIVE.PER_TEAM" in config_dict:
-        config_dict.setdefault("ARCHIVE", {})["PER_TEAM"] = config_dict.pop(
-            "ARCHIVE.PER_TEAM"
+        raise ValueError(
+            "[ARCHIVE.PER_TEAM] is not supported: set archive_path in each "
+            "team's [TEAM.<key>] section instead, then remove [ARCHIVE.PER_TEAM]."
         )
 
     # Handle BALL_TRACKING sub-sections (provider configs + per-team overrides).
