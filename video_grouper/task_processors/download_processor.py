@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 
 from video_grouper.cameras.base import Camera, CameraUnreachableError
 from video_grouper.models import DirectoryState, RecordingFile
@@ -324,33 +325,93 @@ class DownloadProcessor(QueueProcessor):
             raise
 
     async def on_item_permanently_failed(self, item: RecordingFile) -> None:
-        """Record a download we are never going to complete as terminal.
+        """Abandon a download only when the camera confirms the file is gone.
 
-        The base class drops the item from the queue after its retries are
-        exhausted, but the file stays at ``download_failed`` — a non-terminal
-        status. That is enough to pin the camera poller's watermark forever:
-        the watermark may only advance over settled recordings, so a single
-        recording the camera has since deleted (404-gone), or that is corrupt
-        on the card, would hold the line and every later game with it.
+        The base class drops the item from the queue after its fast retries
+        are exhausted, whatever the cause. The file stays at
+        ``download_failed``, which is not settled, so it holds the camera
+        poller's watermark. Marking it ``abandoned`` settles it and the
+        watermark passes it for good — correct for a recording the camera has
+        since overwritten, and a silent loss of real footage for one that
+        merely hit a full disk, a timeout or a flaky link.
 
-        Marking it ``abandoned`` settles it, so the watermark moves past and
-        the reconcile pass stops re-queuing it. Logged at ERROR because
-        abandoning footage is a real loss, not routine cleanup — the file is
-        named so it can be recovered by hand if it still matters.
+        So the camera is asked. Only when it answers a listing for the file's
+        time window and the file is not in it is the loss confirmed; then it
+        is marked ``abandoned`` and logged at ERROR, named so it can be
+        chased by hand. Anything else — camera unreachable, listing failed or
+        came back empty (both backends return ``[]`` on error, so empty is
+        ambiguous), or the file is still listed — leaves it ``download_failed``.
+        The StateAuditor re-queues that on its next pass, so it keeps being
+        retried at the audit interval, holding the watermark meanwhile. When
+        in doubt, keep footage.
         """
         file_path = getattr(item, "file_path", None)
         if not file_path:
             return
+        name = os.path.basename(file_path)
+
+        if not await self._camera_confirms_file_gone(item):
+            logger.error(
+                "DOWNLOAD: %s failed %d attempts, but the camera has not "
+                "confirmed it is gone; leaving it retryable (download_failed). "
+                "It holds the camera watermark until it downloads or the "
+                "camera stops listing it.",
+                name,
+                self._max_retries,
+            )
+            return
+
         logger.error(
-            "DOWNLOAD: Abandoning %s after %d failed attempts — marking it "
-            "terminal so it stops blocking the camera watermark. If this "
-            "recording matters, fetch it from the camera by hand.",
-            os.path.basename(file_path),
+            "DOWNLOAD: Abandoning %s after %d failed attempts — the camera no "
+            "longer lists it, so it can never be fetched. Marked terminal so "
+            "it stops blocking the camera watermark.",
+            name,
             self._max_retries,
         )
         group_dir = os.path.dirname(file_path)
         dir_state = DirectoryState(group_dir)
         await dir_state.update_file_state(file_path, status="abandoned")
+
+    async def _camera_confirms_file_gone(self, item: RecordingFile) -> bool:
+        """True only if the camera positively answers that it no longer has
+        *item*. Every uncertain outcome is False."""
+        metadata = getattr(item, "metadata", None) or {}
+        remote_path = metadata.get("path") if isinstance(metadata, dict) else None
+        start = getattr(item, "start_time", None)
+        end = getattr(item, "end_time", None)
+        if not remote_path or not isinstance(start, datetime):
+            return False
+        if not isinstance(end, datetime) or end < start:
+            end = start
+
+        if not await _check_camera(self.camera):
+            return False
+
+        try:
+            # The file's own window first. Cameras return recordings that
+            # overlap the window, so if it is still there it is listed.
+            listing = await self.camera.get_file_list(start_time=start, end_time=end)
+            if not listing:
+                # Empty is ambiguous: both backends swallow errors as []. Ask
+                # again up to now — a card that overwrote this file still
+                # lists the newer recordings that replaced it.
+                listing = await self.camera.get_file_list(
+                    start_time=start, end_time=datetime.now()
+                )
+        except Exception as e:  # noqa: BLE001 — uncertainty means keep it
+            logger.warning(
+                "DOWNLOAD: could not list the camera to confirm %s is gone: %s",
+                os.path.basename(item.file_path),
+                e,
+            )
+            return False
+
+        if not isinstance(listing, list) or not listing:
+            return False
+        return not any(
+            isinstance(entry, dict) and entry.get("path") == remote_path
+            for entry in listing
+        )
 
     def get_item_key(self, item: RecordingFile) -> str:
         return f"recording:{item.file_path}"
