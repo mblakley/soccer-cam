@@ -22,8 +22,11 @@
   `enable=0`. Still at 192.168.86.22.
 - **Next:** (1) teach `S37_RoiQp` and `roi.conf` several windows, far band on the lowest index;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
-  window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps. Still
-  waiting on Mark's yes: the TTT hand-off's `sc_probe` account test.
+  window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps.
+- **TTT hand-off done (Mark's go-ahead):** the camera checklist ran; results are in PR #163
+  (`CAMERA_CHECKLIST.md`). A `guest` account can list and download recordings; the throwaway
+  `sc_probe` account is deleted. Found: `ReolinkCamera.get_device_info()` returns no MAC on this
+  camera (`GetLocalLink` has it), so device-link registration sends none. Not fixed.
 
 
 ## 2026-11-27 — FAR-FIELD BITS: a third of the stream is keyframes; ROI pak staged; NOTHING run on camera yet
