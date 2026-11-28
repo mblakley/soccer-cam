@@ -4,6 +4,76 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-09: build 4923 on the camera — ten windows work, lower index wins an overlap (2026-11-28)
+
+**Hypothesis:** the `ROIQP_MULTIWIN` handler patch behaves on the real kernel as it does under
+qemu: windows on different indexes are held independently, and a bad index harms nothing. Open
+question the harness could not answer: what the codec does where two windows overlap.
+
+**Setup:** build 4923 flashed (pre-flight `test_setroi_patch.sh … multiwin` 20/20; 47 s upload,
+back in 88 s). Camera at home filming the generated far-ball clip (EXP-ENC-08 b) fullscreen on the
+4K TV, so the TV picture spans camera x 1470–6020 and the balls are ~9 px. Starvation as before
+(`setevbr … ByteRate=150000 FrameRate=20000`, 1.2–1.3 Mbps). Detail = mean |Laplacian|.
+
+**Result 1 — index handling.** `setroi` on indexes 0, 3 and 9 each echo their own QP and
+rectangle. Indexes 10, 999999999 and −1, and path 7, print the echo and then nothing happens:
+same PIDs for `device`/`router`/`recorder`, clean `dmesg`. The refusal is silent by design.
+
+**Result 2 — two windows are independent** (A = index 0, B = index 3, disjoint rectangles in the
+TV picture, QP −8, exposure Auto, 20 s scored per capture; change against no-window at 1.20 Mbps):
+
+| windows set | detail in A | detail in B |
+|---|---|---|
+| A only | +5.6 % | −5.5 % |
+| A and B | +2.3 % / +3.1 % (repeat) | +4.7 % / +6.6 % |
+| B only (A disabled, B untouched) | −1.3 % | +8.1 % |
+
+A keeps its gain when B is added and B keeps its gain when A alone is disabled. On 4922 the second
+write would have replaced the first. (A second no-window capture taken before the starvation had
+settled, at 2.4 Mbps, read −0.3 % / +0.1 %.)
+
+**Result 3 — overlap: the lower index wins.** "Pitch" = the whole TV picture (56 % of the frame),
+"far" = rows 128–831 of it. Exposure locked. Slice QP is the P-frame mean from the bitstream.
+
+| windows | slice QP | detail, far band |
+|---|---|---|
+| none (two captures) | 35.8 / 35.8 | 3.30 / 3.38 |
+| pitch −6 on index 0 | 39.3 | 3.32 |
+| far −12 on index 0 | 40.2 | 3.71 |
+| far −12 on index 9 | 39.9 | 3.62 |
+| index 0 = pitch −6, index 1 = far −12 (three captures) | 39.9 / 39.8 / 39.2 | 3.39 / 3.36 / 3.31 |
+| index 0 = far −12, index 1 = pitch −6 (three captures) | 43.6 / 41.4 / 41.3 | 3.68 / 3.57 / 3.47 |
+
+With the broad window on the lower index the far band behaves exactly like pitch −6 alone, in
+both the QP and the detail; swapped, it behaves like far −12. The ranges do not overlap. So a
+nested or staircase layout must put the most specific window on the lowest index.
+
+**Result 4 — a window over nearly everything that moves buys almost nothing.** Pitch −8 raised
+the frame QP from 35.8 to 42.8, so the pitch itself went from ~35.8 to ~34.8. Far −12 put the far
+band at ~28 (the unstarved reference is 28) and the rest of the pitch at ~40. In this scene the
+room is static, so the pitch already has nearly all the bits; on a real game the field has ~36 %
+(EXP-ENC-02), so a field window has more to take there. The far-band window is the result that
+transfers.
+
+**The ball count did not work at this size and is not reported.** With ~9 px balls the no-window
+captures scored *above* the unstarved reference (2.5 and 3.5 on-track sightings per frame against
+2.2), and the two disagreed with each other (off-track blobs 13.0 and 4.6 per frame). Two causes
+found: the reference's own "tracks" include blobs that repeat at fixed spots (three spots account
+for 100 of ~190 repeats), and counting blobs on a track cannot tell a moving ball from a stale copy
+of one. The second applies to EXP-ENC-08's count too: its direction is backed by the contrast and
+artefact numbers there, but the "59 % of reference" figure should not be leaned on. What did
+separate cleanly here is false bright blobs off the tracks: 13.0 / 4.6 per frame with no window,
+5.7 with pitch −8, 0.9 with far −12 (reference 0.0).
+
+**Also learned:** `SetEnc` with unchanged values does not re-apply rate control, and an
+unsupported bitrate (16384) is rejected with code 1 — so the "restore" after a `setevbr` must be a
+real change through an allowed value (3072…10240, 20480) and back, checked in `/proc/vencrc/info`
+(`bitrate(gop)` 41943040). A restore that did neither left the main stream at 1.2 Mbps for a few
+minutes mid-session (not recording). The 4922 daemon-logging defect is fixed in 4923.
+
+**Limits:** one scene, re-photographed off a TV; one capture per single-window setting; detail is
+a proxy, not a detector; emulated starvation at 1.3 Mbps.
+
 ## EXP-ENC-08: the ROI window on the camera — it moves bits, and far balls survive (2026-11-27)
 
 **Hypothesis:** with the stream held at a fixed bitrate, a window with a negative QP delta takes
@@ -61,6 +131,8 @@ cast) and was bypassed for the end-to-end run, so it is still untested on a real
 version of the ball score matched frames by a timing marker that turned out unreadable in the
 camera's view; those numbers were wrong and are not reported. `/proc/hdal/venc/info` never lists
 the window. With the default disabled config `S37_RoiQp` in 4922 logs nothing (fixed in source).
+**Added 2026-11-28:** the on-track count cannot tell a moving ball from a stale copy of one
+(EXP-ENC-09), so treat the percentages in table (b) as direction, not size.
 
 ## EXP-ENC-07: first session on the camera — baseline, no-flash levers, detector on the camera (2026-11-27)
 

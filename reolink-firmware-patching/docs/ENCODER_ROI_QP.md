@@ -36,7 +36,9 @@ short version, with the numbers in `training/docs/EXPERIMENTS.md` EXP-ENC-07/08:
 | Is the delta applied before the rate controller | Yes, and the controller compensates: with the stream held at a fixed bitrate, a -12 window raised the frame QP from 34.5 to 39.7, i.e. about 28 inside and 40 outside |
 | Does `/proc/hdal/venc/info` list the window | **No.** Its ROI table stays empty for windows set through the debug command, so it is no readback at all. The kernel's echo and the picture are |
 | `S37_RoiQp` end to end | Works: a `roi.conf` dropped on the card is applied within 30 s and logged with the kernel's echo |
-| Still open | What `qp_mode` 0 and 2 mean; whether a window survives an encode-path rebuild; overlapping windows (needs 4923) |
+| Do ten windows work on the real kernel (4923, flashed 2026-11-28) | Yes: indexes 0, 3 and 9 echo their own values; two disjoint windows hold their gains independently in the picture; indexes 10, 999999999, -1 and path 7 are refused silently and the camera keeps running (EXP-ENC-09) |
+| Overlapping windows | **The lower index wins.** Index 0 = whole pitch -6 with index 1 = far band -12 behaves like pitch -6 alone; swapped, the far band gets -12. Put the most specific window on the lowest index |
+| Still open | What `qp_mode` 0 and 2 mean; whether a window survives an encode-path rebuild |
 
 **Update 2026-11-27.** Still nothing run on the camera, but two things changed.
 The builder now layers on the current build (`4921`) and bakes a *disabled*
@@ -527,7 +529,8 @@ encoder. Three things stand between that and the camera:
 
 What the harness cannot show is anything past `NMR_VdoEnc_SetROI`: how the codec
 treats two enabled windows that overlap, or their priority order. That needs
-the camera.
+the camera. **Answered 2026-11-28 on build 4923: the lower index wins**
+(EXP-ENC-09, three alternating captures per order, ranges do not overlap).
 
 `S37_RoiQp` still drives window 0 only. Its disable now clears all ten, which is
 right on either module. Fitting several windows to the field polygon is the

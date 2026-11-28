@@ -127,8 +127,8 @@ drops to a third of its present cost:
 
 | mechanism | shape | field's share of bits | status |
 |---|---|---|---|
-| one ROI window on the field's rows | rectangle | ~36 % → ~60 %, about ×1.7 | build 4922 staged; unproven on hardware |
-| ten ROI windows | staircase around the polygon | → ~80 %, about ×2.2 | handler patched (`ROIQP_MULTIWIN=1`, build 4923, `ENCODER_ROI_QP.md` section 4b); executed under qemu, never on hardware. The daemon still drives one window |
+| one ROI window on the field's rows | rectangle | ~36 % → ~60 %, about ×1.7 | proven on hardware (builds 4922 and 4923, EXP-ENC-08/09): the window moves bits |
+| ten ROI windows | staircase around the polygon | → ~80 %, about ×2.2 | handler patched (`ROIQP_MULTIWIN=1`, build 4923, `ENCODER_ROI_QP.md` section 4b); **flashed 2026-11-28 and working**: windows are independent, a bad index is refused, and where two overlap the lower index wins (EXP-ENC-09). The daemon still drives one window |
 | per-block QP map | the polygon itself | slightly better than ten windows | only reachable from inside `device` |
 | privacy masks (`SetMask`) | black rectangles | masked area costs almost nothing | no flash; the camera reports the `mask` ability. Count and timing unverified. **The masked picture is gone, not degraded** |
 

@@ -1,6 +1,30 @@
 # Current Status
 
-*Last updated: 2026-11-27 — far-field bits: baseline measured on game footage, camera test staged*
+*Last updated: 2026-11-28 — far-field bits: build 4923 (ten ROI windows) flashed and working*
+
+## 2026-11-28 — FAR-FIELD BITS: build 4923 is on the camera; ten windows work; lower index wins an overlap
+
+- **Build 4923 flashed (Mark's go-ahead) and is what the camera runs.** Pre-flight 20/20, `build.txt`
+  names it, all processes up, clean `dmesg`, the 4922 daemon-logging defect is gone. Record:
+  `reolink-firmware-patching/builds/BUILD_LOG.md`, EXP-ENC-09.
+- **On the real kernel:** windows on separate indexes hold independently (shown in the picture);
+  out-of-range indexes are refused and nothing crashes; **where two windows overlap the lower index
+  wins**, so a staircase must put the most specific window on the lowest index.
+- **A far-band window is the lever that transfers.** Far band -12 took the far band from QP ~36 to
+  ~28 (the unstarved level) at the same bitrate; a window over the whole pitch gained ~1 QP because
+  in the TV scene the pitch already had nearly all the bits.
+- **The far-ball count was rerun with the clip fullscreen and did not give a usable number** (the
+  count cannot tell a moving ball from a stale copy; details and the caveat it puts on EXP-ENC-08's
+  percentages are in EXP-ENC-09).
+- **Camera left:** build 4923, not recording (`GetRecV20 enable=0`, no override flag, newest file
+  2026-08-22), image settings identical to the saved start state, encoder 20480 kbps / `gop=2` with
+  the kernel's rate control confirmed back at 20.97 Mbps, all ROI windows cleared, `roi.conf`
+  `enable=0`. Still at 192.168.86.22.
+- **Next:** (1) teach `S37_RoiQp` and `roi.conf` several windows, far band on the lowest index;
+  (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
+  window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps. Still
+  waiting on Mark's yes: the TTT hand-off's `sc_probe` account test.
+
 
 ## 2026-11-27 — FAR-FIELD BITS: a third of the stream is keyframes; ROI pak staged; NOTHING run on camera yet
 
