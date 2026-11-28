@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Game Window Labeler</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
+  header { padding: 10px 14px; background: #1b1b1b; border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 5; }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  select, input, button { font-size: 15px; padding: 7px 9px; background: #222; color: #eee; border: 1px solid #444; border-radius: 6px; }
+  button { cursor: pointer; }
+  button.primary { background: #2563eb; border-color: #2563eb; font-weight: 600; }
+  button.mark { background: #15803d; border-color: #15803d; min-width: 110px; }
+  button.small { padding: 4px 8px; font-size: 13px; min-width: auto; }
+  #wrap { max-width: 920px; margin: 0 auto; padding: 12px 14px 60px; }
+  #player { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; }
+  .marks { margin-top: 14px; }
+  .mk { display: grid; grid-template-columns: 150px 90px 1fr; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid #262626; }
+  .mk .lbl { font-weight: 600; }
+  .mk .val { font-variant-numeric: tabular-nums; font-size: 18px; color: #8ee; }
+  .mk .val.unset { color: #666; }
+  .muted { color: #999; font-size: 13px; }
+  .ok { color: #4ade80; } .warn { color: #fbbf24; } .err { color: #f87171; }
+  #status { margin-top: 12px; min-height: 22px; font-size: 14px; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:12px; background:#333; }
+  a { color: #7ab8ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Game Window Labeler <span class="pill" id="counter">…</span></h1>
+  <div class="row">
+    <select id="gameSel" style="min-width:340px"></select>
+    <button class="small" id="prevBtn">‹ prev</button>
+    <button class="small" id="nextBtn">next ›</button>
+    <span class="muted" id="archTag"></span>
+  </div>
+</header>
+<div id="wrap">
+  <div class="row" style="margin-bottom:8px">
+    <select id="vidSel" style="min-width:420px"></select>
+    <button class="small" id="loadVidBtn">load</button>
+  </div>
+  <div class="row" style="margin-bottom:8px">
+    <input id="urlBox" placeholder="…or paste a YouTube URL / ID" style="flex:1; min-width:240px" />
+    <button class="small" id="urlBtn">use URL</button>
+    <a id="ytLink" href="#" target="_blank" rel="noopener">open on YouTube ↗</a>
+  </div>
+  <div id="player"></div>
+
+  <div class="marks" id="marks"></div>
+
+  <div class="row" style="margin-top:14px">
+    <button class="primary" id="saveBtn">Save windows</button>
+    <span class="muted">Scrub the player, pause on the moment, then click its “Mark”. fps=20.</span>
+  </div>
+  <div id="status"></div>
+</div>
+
+<script>
+const MARKS = [
+  ["start",      "① Kickoff (1st half)"],
+  ["half_start", "② Halftime start"],
+  ["half_end",   "③ 2nd half kickoff"],
+  ["end",        "④ Final whistle"],
+];
+let games = [], cur = null, player = null, ytReady = false, pendingVid = null;
+const marks = { start:null, half_start:null, half_end:null, end:null };
+
+function fmt(s){ if(s==null) return "—"; s=Math.max(0,s); const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=(s%60); return (h?h+":"+String(m).padStart(2,"0"):m)+":"+x.toFixed(1).padStart(4,"0"); }
+function parseVid(u){ if(!u) return null; u=u.trim(); let m=u.match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{6,})/); return m?m[1]:(/^[A-Za-z0-9_-]{6,}$/.test(u)?u:null); }
+function setStatus(html){ document.getElementById("status").innerHTML = html; }
+
+function onYouTubeIframeAPIReady(){ ytReady = true; if(pendingVid){ loadVideo(pendingVid); pendingVid=null; } }
+function loadVideo(vid){
+  if(!vid){ return; }
+  document.getElementById("ytLink").href = "https://youtu.be/"+vid;
+  if(!ytReady){ pendingVid = vid; return; }
+  if(player && player.loadVideoById){ player.loadVideoById(vid); }
+  else { player = new YT.Player("player", { videoId: vid, playerVars:{ rel:0, modestbranding:1, playsinline:1 } }); }
+}
+function curTime(){ return (player && player.getCurrentTime) ? player.getCurrentTime() : 0; }
+function seek(t){ if(player && player.seekTo){ player.seekTo(Math.max(0,t), true); } }
+
+function renderMarks(){
+  const c = document.getElementById("marks"); c.innerHTML = "";
+  for(const [k,label] of MARKS){
+    const v = marks[k];
+    const row = document.createElement("div"); row.className = "mk";
+    row.innerHTML = `<div class="lbl">${label}</div>
+      <div class="val ${v==null?'unset':''}" id="val_${k}">${fmt(v)}</div>
+      <div class="row">
+        <button class="mark" data-mark="${k}">Mark</button>
+        <button class="small" data-seek="${k}">seek</button>
+        <button class="small" data-nudge="${k}" data-d="-2">−2s</button>
+        <button class="small" data-nudge="${k}" data-d="-0.5">−.5</button>
+        <button class="small" data-nudge="${k}" data-d="0.5">+.5</button>
+        <button class="small" data-nudge="${k}" data-d="2">+2s</button>
+      </div>`;
+    c.appendChild(row);
+  }
+}
+document.getElementById("marks").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  if(b.dataset.mark){ marks[b.dataset.mark] = curTime(); renderMarks(); }
+  else if(b.dataset.seek){ const v=marks[b.dataset.seek]; if(v!=null) seek(v); }
+  else if(b.dataset.nudge){ const k=b.dataset.nudge; if(marks[k]!=null){ marks[k]=Math.max(0,marks[k]+parseFloat(b.dataset.d)); seek(marks[k]); renderMarks(); } }
+});
+
+async function loadGames(){
+  const r = await fetch("/api/game-windows"); const j = await r.json();
+  games = j.games;
+  document.getElementById("counter").textContent = j.needs_windows + " need windows";
+  const sel = document.getElementById("gameSel"); sel.innerHTML = "";
+  for(const g of games){
+    const o = document.createElement("option"); o.value = g.game_id;
+    o.textContent = (g.has_windows?"✓ ":"○ ") + g.game_id + (g.archived?"":" (detecting…)");
+    sel.appendChild(o);
+  }
+  if(games.length) selectGame(games[0].game_id);
+}
+async function selectGame(gid){
+  document.getElementById("gameSel").value = gid;
+  const r = await fetch("/api/game-windows/"+encodeURIComponent(gid)); cur = await r.json();
+  marks.start=marks.half_start=marks.half_end=marks.end=null;
+  renderMarks();
+  document.getElementById("archTag").textContent = cur.archived ? "archived ✓ (alignment will be checked)" : "not archived yet";
+  // candidate dropdown
+  const vs = document.getElementById("vidSel"); vs.innerHTML = "";
+  (cur.candidates||[]).forEach(c=>{
+    const o=document.createElement("option"); o.value=c.video_id;
+    o.textContent = `${c.title||c.video_id}  [${c.date||""}]`;
+    vs.appendChild(o);
+  });
+  const v = cur.suggested_video_id || (cur.candidates[0]&&cur.candidates[0].video_id);
+  if(v){ vs.value=v; loadVideo(v); }
+  let note = cur.confirmed_video_id ? '<span class="ok">video remembered from last time</span>'
+           : (cur.candidates.length>1 ? '<span class="warn">'+cur.candidates.length+' candidate videos — confirm the right game (teams) before marking</span>'
+                                       : (cur.candidates.length? 'suggested 1 candidate':'<span class="err">no candidate video — paste the URL</span>'));
+  setStatus(note + (cur.existing && cur.existing.start ? ` · existing: ${cur.existing.start}/${cur.existing.half_start}/${cur.existing.half_end}/${cur.existing.end}` : ""));
+}
+
+document.getElementById("gameSel").onchange = e => selectGame(e.target.value);
+function step(d){ const i=games.findIndex(g=>g.game_id===cur.game_id); const n=games[(i+d+games.length)%games.length]; if(n) selectGame(n.game_id); }
+document.getElementById("prevBtn").onclick = ()=>step(-1);
+document.getElementById("nextBtn").onclick = ()=>step(1);
+document.getElementById("loadVidBtn").onclick = ()=>{ const v=document.getElementById("vidSel").value; if(v) loadVideo(v); };
+document.getElementById("urlBtn").onclick = ()=>{ const v=parseVid(document.getElementById("urlBox").value); if(v){ loadVideo(v); } else setStatus('<span class="err">could not parse a video id from that</span>'); };
+
+document.getElementById("saveBtn").onclick = async ()=>{
+  for(const [k] of MARKS){ if(marks[k]==null){ setStatus('<span class="err">set all four marks first</span>'); return; } }
+  if(!(marks.start<marks.half_start && marks.half_start<=marks.half_end && marks.half_end<marks.end)){
+    setStatus('<span class="err">need kickoff &lt; halftime-start ≤ 2nd-kickoff &lt; final-whistle</span>'); return;
+  }
+  const vid = (player&&player.getVideoData)? player.getVideoData().video_id : (document.getElementById("vidSel").value||null);
+  const body = { start:marks.start, half_start:marks.half_start, half_end:marks.half_end, end:marks.end, video_id:vid };
+  const r = await fetch("/api/game-windows/"+encodeURIComponent(cur.game_id), {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  if(!r.ok){ setStatus('<span class="err">save failed: '+(await r.text())+'</span>'); return; }
+  const j = await r.json();
+  let v = j.verify || {};
+  let vtxt = !v.archived ? '<span class="muted">(not archived yet — alignment check pending)</span>'
+           : v.aligned ? '<span class="ok">✓ ball activity starts at your kickoff — looks aligned</span>'
+           : '<span class="warn">⚠ no activity jump at kickoff — video may be trimmed; double-check before moving on</span>';
+  setStatus(`saved <b>${j.game_id}</b> · windows ${JSON.stringify(j.windows)} · ${vtxt}`);
+  await loadGames();  // refresh ✓ marks
+  document.getElementById("gameSel").value = cur.game_id;
+};
+
+loadGames();
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
