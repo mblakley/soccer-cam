@@ -26,13 +26,16 @@
   is a build gate. Against 4923 only the daemon and the manifest differ. On the camera a three-band
   `roi.conf` was applied with matching kernel echoes, a bad config reverted everything, and
   `enable=0` cleared all ten (BUILD_LOG). Left with `enable=0`.
-- **In progress, interrupted (the laptop ran out of memory and both runs were stopped):**
-  `fieldroi --bands F,M,N` is written (three full-width windows, far band on window 0) with new
-  checks in `verify/test_fieldroi.sh`, but **neither has been compiled or run yet**. The grading
-  comparison on game footage got through three of six layouts (EXP-ENC-10): one rectangle at −6
-  gives about +1.7 to +2.0 dB across the field; two bands −10/−4 give +4.7 dB in the far band.
-- **Next:** (1) run `verify/test_fieldroi.sh` and finish EXP-ENC-10 (the three-band layouts), then
-  pick the default grading and put the new `fieldroi` on the card — no flash needed;
+- **`fieldroi --bands F,M,N` is done and on the camera's SD card.** It writes three full-width
+  windows, far band on window 0. `verify/test_fieldroi.sh` passes with new checks (bands tile the
+  one-window rows; the daemon's own parser accepts them on a ten-window build and refuses them on
+  a one-window build). On the camera it read a real game frame and the daemon applied the three
+  bands (EXP-ENC-10).
+- **Grading chosen on game footage: `--bands -10,-6,-3`** (EXP-ENC-10, x265 proxy at the camera's
+  bitrate): far band +4.7 dB, mid field +2.2 dB, near field unchanged, foreground −2.6 dB. One
+  rectangle at −6 gives +1.7 to +2.0 dB everywhere on the field instead.
+- **Next:** (1) a live game or a real pitch: `fieldroi` on the camera's own snapshot, then the
+  bands' effect in the recording — neither has been measured outdoors;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
   window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps.
 - **TTT hand-off done (Mark's go-ahead):** the camera checklist ran; results are in PR #163

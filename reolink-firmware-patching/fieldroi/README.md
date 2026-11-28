@@ -5,10 +5,19 @@ window (`roi.conf`) that covers the pitch. One C file, no runtime dependencies,
 built static for the camera. Why it exists and how well the model does:
 `docs/FAR_FIELD_BITS.md`, "Finding the field on the camera".
 
-**Status (2026-11-27): proven off the camera only.** It matches the PC model on
-real frames, the aarch64 build under qemu gives the same numbers as the host
-build, and it reads the camera's own snapshot format (baseline JPEG). It has
-never run on the camera, and nothing there fetches a snapshot for it yet.
+**Status (2026-11-28): runs on the camera; not yet used on a live game.** It
+matches the PC model on real frames, the aarch64 build under qemu gives the same
+numbers as the host build, and it reads the camera's own snapshot format
+(baseline JPEG). On the camera it takes about 80 s at `nice 19` and about 23 MB
+(EXP-ENC-07/08), and its output has been applied there by `S37_RoiQp`
+(EXP-ENC-08, EXP-ENC-10). Nothing on the camera runs it automatically yet.
+
+**Use `--bands -10,-6,-3` on the ten-window firmware (build 4923 or later).**
+That writes three full-width windows — far band on window 0, then mid, then
+near — instead of one rectangle. The grading was chosen on game footage at the
+camera's bitrate (EXP-ENC-10): far band +4.7 dB, mid field +2.2 dB, near field
+unchanged, foreground -2.6 dB. Without `--bands` the output is the original one
+rectangle, which every ROI build accepts.
 
 The output is two numbers: the field's top row and bottom row, padded, as a
 full-width rectangle. The field spans nearly the whole width at every ground, so
@@ -36,6 +45,7 @@ bash reolink-firmware-patching/verify/test_fieldroi.sh \
 
 # 3. use: a camera snapshot in, a roi.conf out
 ./fieldroi field_outline_v2.frw snapshot.jpg > roi.conf
+./fieldroi field_outline_v2.frw snapshot.jpg --bands -10,-6,-3 > roi.conf   # ten-window firmware
 ```
 
 It exits non-zero and prints no config when the result does not look like a

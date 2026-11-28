@@ -4,7 +4,7 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
-## EXP-ENC-10: which QP grading for field bands — PARTIAL, three of six layouts (2026-11-28)
+## EXP-ENC-10: which QP grading for field bands — three bands at -10/-6/-3 (2026-11-28)
 
 **Hypothesis:** at the camera's fixed bitrate, bands graded by depth (strong far, weak near) put
 more quality into the far field than one rectangle over the whole field, for the same cost outside.
@@ -15,24 +15,41 @@ as ffmpeg `addroi` rows. For each layout the CRF is searched until the output is
 size for those 2 s (5,242,040 B, 20.97 Mbps) within 1.5 %, so a window cannot add bits. Luma PSNR
 against the source in five full-width bands.
 
-**Result so far** (PSNR-Y change against no window, dB; the run was stopped before the other three
-layouts — 3 bands −10/−6/−3, 3 bands −12/−8/−4, far only −10):
+**Result** (PSNR-Y change against no window, dB):
 
 | layout | CRF shift | above far line 0–127 | far 128–447 | mid 448–895 | near 896–1535 | foreground 1536–2159 |
 |---|---|---|---|---|---|---|
 | none (CRF 30.32) | — | 38.97 | 39.54 | 35.40 | 32.59 | 32.27 |
-| one rectangle −6 over rows 128–1535 | +1.97 | −2.23 | +1.73 | +1.76 | +1.98 | −3.06 |
-| two bands: 128–511 at −10, 512–1535 at −4 | +1.74 | −1.87 | **+4.67** | +0.94 | +0.75 | −2.67 |
+| one rectangle −6 over rows 128–1535 | +1.97 | −2.23 | +1.73 | +1.76 | +1.97 | −3.06 |
+| two bands: 128–511 at −10, 512–1535 at −4 | +1.73 | −1.87 | +4.66 | +0.94 | +0.74 | −2.67 |
+| **three bands −10 / −6 / −3** | +1.67 | −1.85 | **+4.70** | **+2.19** | +0.03 | −2.58 |
+| three bands −12 / −8 / −4 | +2.18 | −2.33 | +5.37 | +2.93 | +0.09 | −3.32 |
+| far band only, −10 | +0.55 | −0.59 | +5.88 | −0.73 | −0.84 | −0.86 |
 
-**Reading, provisional:** on game footage the field window does buy something everywhere on the
-field (about +1.7 to +2.0 dB for −6), unlike the TV scene of EXP-ENC-09, because here the
-foreground and the strip above the far line pay for it. Grading moves the gain to the far band
-(+4.7 dB) at a slightly lower cost outside, and gives up about 1 dB of the gain in the mid and near
-field. No QP default is chosen from this yet: the three-band layouts were not measured.
+**Conclusion:** hypothesis holds. Against the one rectangle, three bands at −10/−6/−3 give the far
+band 3 dB more and the mid field 0.4 dB more, cost the foreground and the strip above the far line
+slightly less, and leave the near field where it was with no window instead of +2 dB. Nothing on
+the field gets worse than stock. On game footage a field window does buy something across the
+field, unlike the TV scene of EXP-ENC-09, because here the foreground pays for it.
+
+**Chosen default: `fieldroi --bands -10,-6,-3`.** Not −12/−8/−4, although it measures higher here:
+the camera's rate control has a QP floor of 25, the stream runs near 34–35 and a field window pushes
+that up about 2, so −10 already puts the far band at about 26. A stronger far delta would run into
+the floor on the camera in a way x265 does not model. Far-only is the cheapest way to +5.9 dB in the
+far band but makes the rest of the field slightly worse, which is not the brief.
+
+**On the camera (build 4924), the same day:** the new `fieldroi` on the SD card read a real game
+frame (a 7680x2160 JPEG of this game), wrote `win0=0,0,7680,464,-10`, `win1=0,464,7680,416,-6`,
+`win2=0,880,7680,752,-3`, and `S37_RoiQp` applied all three with matching kernel echoes within
+30 s, then cleared them when the config was turned off. The far band starts at row 0 there because
+the 200-row far padding reaches the top of the frame; the strip above the far line is about 2.5 %
+of the stream (EXP-ENC-02).
 
 **Limits:** x265 is not the camera's encoder; the source is already the camera's compressed
-output, so PSNR is against that, not the scene; one clip, 2 s; sizes matched to −1.3 % / +0.7 % /
-−0.3 %, worth roughly 0.1 dB.
+output, so PSNR is against that, not the scene; one clip, 2 s; sizes matched within −1.3 % to
++0.7 %, worth roughly 0.1 dB. The band cuts (22 % and 56 % of the field's height) were chosen, not
+searched. Not yet run on a live game: the picture effect of this grading on the camera is
+unmeasured.
 
 ## EXP-ENC-09: build 4923 on the camera — ten windows work, lower index wins an overlap (2026-11-28)
 
