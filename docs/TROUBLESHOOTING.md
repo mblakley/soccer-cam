@@ -24,6 +24,7 @@ The pipeline is designed to handle download failures gracefully:
 - **Check the logs** for messages containing "DOWNLOAD: An error occurred" to understand the specific failure.
 - **WiFi or network drops:** Downloads resume from scratch per-file (partial files are cleaned up automatically). This means a dropped connection wastes the progress on the current file, but does not corrupt anything.
 - **If a file repeatedly fails:** Check the camera's storage for signs of corruption. Try power-cycling the camera and re-running the app. In rare cases, a file on the camera's SD card may be unreadable.
+- **If a file can never be downloaded** (unreadable on the SD card, say): open the dashboard's **Downloads that keep failing** section. It lists every file that has failed its retries, with how many rounds it has failed and the last error. Until a file like that downloads, it holds back its camera's progress marker, so later games are not archived. Click **Skip**, check the details, and **Confirm skip** to give up on it: it is never downloaded, the rest of its game is processed without it, and later games move on. This cannot be undone from the dashboard, so try power-cycling the camera first.
 
 
 ## Disk Full
@@ -99,7 +100,7 @@ The pipeline is designed to recover from unexpected shutdowns automatically:
 
 - **State persistence:** Each video group's processing state is saved to a `state.json` file in its directory. This means the app always knows where it left off.
 - **On restart, the StateAuditor scans all directories** and re-queues any interrupted work:
-  - Downloads in "pending", "downloading", or "download_failed" state are re-queued for download.
+  - Downloads in "pending", "downloading", or "download_failed" state are re-queued for download. Files you skipped from the dashboard are not.
   - Directories where all files have been downloaded but not yet combined are sent to the combine step.
   - Combined videos that are still awaiting match info are re-processed through the remaining steps.
 - **Queue state is persisted to disk** between restarts, including queued items and retry counts. This means the app picks up right where it left off without losing track of retry attempts.

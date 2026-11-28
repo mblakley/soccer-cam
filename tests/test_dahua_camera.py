@@ -662,3 +662,103 @@ def test_is_connected_property():
         storage_path="test_path",
     )
     assert isinstance(camera.is_connected, bool)
+
+
+class TestDahuaDownloadFailureReason:
+    """download_file still returns a bare bool; ``last_download_error`` says
+    why it was False, so the dashboard can show a person the real cause
+    instead of "Download failed for <name>"."""
+
+    @staticmethod
+    def _camera(tmp_path, response=None, stream_error=None):
+        client = MagicMock()
+        if stream_error is not None:
+            client.stream = MagicMock(side_effect=stream_error)
+        else:
+            cm = MagicMock()
+            cm.__aenter__ = AsyncMock(return_value=response)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            client.stream = MagicMock(return_value=cm)
+        camera = DahuaCamera(
+            CameraConfig(
+                name="default",
+                type="dahua",
+                device_ip="192.168.1.100",
+                username="admin",
+                password="admin",
+            ),
+            str(tmp_path),
+            client=client,
+        )
+        camera._log_http_call = AsyncMock()
+        return camera
+
+    @staticmethod
+    def _response(status, body=b""):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.text = "error page"
+
+        async def _aiter_bytes():
+            if body:
+                yield body
+
+        resp.aiter_bytes = _aiter_bytes
+        return resp
+
+    async def _download(self, camera, tmp_path, size):
+        with patch.object(camera, "get_file_size", AsyncMock(return_value=size)):
+            return await camera.download_file("/rec/a.dav", str(tmp_path / "a.dav"))
+
+    @pytest.mark.asyncio
+    async def test_http_error_status(self, tmp_path):
+        camera = self._camera(tmp_path, self._response(500))
+        assert await self._download(camera, tmp_path, 1000) is False
+        assert camera.last_download_error == "HTTP 500 from the camera"
+
+    @pytest.mark.asyncio
+    async def test_short_read(self, tmp_path):
+        camera = self._camera(tmp_path, self._response(200, b"x" * 100))
+        assert await self._download(camera, tmp_path, 1000) is False
+        assert (
+            camera.last_download_error == "transfer stopped short: 100 of 1,000 bytes"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_size_from_camera(self, tmp_path):
+        camera = self._camera(tmp_path, self._response(200))
+        assert await self._download(camera, tmp_path, 0) is False
+        assert "no size" in camera.last_download_error
+
+    @pytest.mark.asyncio
+    async def test_timeout(self, tmp_path):
+        camera = self._camera(
+            tmp_path, stream_error=httpx.ReadTimeout("read operation timed out")
+        )
+        assert await self._download(camera, tmp_path, 1000) is False
+        assert camera.last_download_error == "timed out (read operation timed out)"
+
+    @pytest.mark.asyncio
+    async def test_local_disk_full(self, tmp_path):
+        import errno
+
+        camera = self._camera(tmp_path, self._response(200, b"x" * 1000))
+        with patch(
+            "video_grouper.cameras.dahua.aiofiles.open",
+            side_effect=OSError(errno.ENOSPC, "No space left on device"),
+        ):
+            assert await self._download(camera, tmp_path, 1000) is False
+        assert camera.last_download_error.startswith("local disk full")
+
+    @pytest.mark.asyncio
+    async def test_reason_is_cleared_by_the_next_success(self, tmp_path):
+        camera = self._camera(tmp_path, self._response(500))
+        assert await self._download(camera, tmp_path, 1000) is False
+        assert camera.last_download_error
+
+        # Same camera, next download succeeds.
+        camera._client = self._camera(
+            tmp_path, self._response(200, b"x" * 1000)
+        )._client
+        assert await self._download(camera, tmp_path, 1000) is True
+        assert camera.last_download_error is None

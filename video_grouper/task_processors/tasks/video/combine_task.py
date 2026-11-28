@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from video_grouper.models import DirectoryState
+from video_grouper.models.directory_state import skipped_file_names
 from video_grouper.utils.ffmpeg_utils import (
     combine_videos,
     detect_audio_video_gaps,
@@ -76,11 +77,15 @@ class CombineTask(BaseFfmpegTask):
         """
         video_files = []
         group_dir_abs = resolve_path(self.group_dir, self.storage_path)
+        skipped = skipped_file_names(group_dir_abs, self.storage_path)
         try:
             for filename in sorted(os.listdir(group_dir_abs)):
                 if not filename.lower().endswith(self.VIDEO_EXTENSIONS):
                     continue
                 if filename.lower().startswith(self.EXCLUDE_PREFIXES):
+                    continue
+                if filename.lower() in skipped:
+                    logger.info("COMBINE: leaving out %s -- it was skipped.", filename)
                     continue
                 video_files.append(os.path.join(group_dir_abs, filename))
         except FileNotFoundError:

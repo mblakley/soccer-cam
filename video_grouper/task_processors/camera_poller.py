@@ -10,6 +10,10 @@ from video_grouper.cameras.base import Camera
 from video_grouper.integrations.recordings import IRecordingSink
 from video_grouper.integrations.recordings.sources.null import NullRecordingSink
 from video_grouper.models import DirectoryState, RecordingFile
+from video_grouper.models.directory_state import (
+    SETTLED_FILE_STATUSES,
+    SETTLED_GROUP_STATUSES,
+)
 from video_grouper.task_processors.download_processor import DownloadProcessor
 from video_grouper.utils.config import Config
 from video_grouper.utils.locking import FileLock
@@ -45,57 +49,10 @@ OPEN_CONNECTED_SESSION_HORIZON_HOURS = 12
 # The cost is one Search per *active recording day* found (Reolink walks the
 # status bitmap), not per calendar day, so an empty year is nearly free.
 FIRST_RUN_SCAN_DAYS = 365
-# A recording is settled when we will never need to fetch it from the camera
-# again: either we have the bytes (or something derived from them), or we
-# deliberately gave up on it. The watermark may only advance over settled
-# recordings, which is what makes "at or before the watermark" mean "done"
-# rather than merely "seen".
-#
-# Kept as one name shared with _file_needs_download so the two can't drift:
-# a status that means "done" to one and "needs download" to the other would
-# make the poller re-queue everything behind the watermark.
-SETTLED_FILE_STATUSES = frozenset(
-    {
-        "downloaded",
-        "combined",
-        "trimmed",
-        "ball_tracking_complete",
-        "pipeline_complete",
-        "complete",
-        "skipped",
-        # Uploaded and moved off local disk. The bytes are deliberately gone;
-        # their absence must never be read as "never downloaded".
-        "archived",
-        # Retries exhausted — the camera no longer has it, or it is corrupt.
-        # Settled in the sense that matters here: we are never fetching it, so
-        # it must not hold the watermark (and every later game) hostage.
-        "abandoned",
-    }
-)
-# Group-level statuses that settle every file inside them regardless of the
-# individual file status — the group as a whole is finished with the camera.
-#
-# This is exactly the set of groups the StateAuditor treats as past the
-# download phase (it imports this name), and DownloadProcessor refuses to
-# fetch into them too. The two must agree: a stale non-terminal file entry in
-# a combined group (the camera re-listing an in-progress "_000000_" segment
-# under its final name) is never re-queued and never abandoned, so if the
-# watermark still waited on it, it would wait forever — and hold every later
-# game's archive with it. Nothing is lost by passing it: nothing can download
-# into a group at these statuses anyway.
-SETTLED_GROUP_STATUSES = frozenset(
-    {
-        "combined",
-        "trimmed",
-        "ball_tracking_complete",
-        "pipeline_complete",
-        "complete",
-        "not_a_game",
-        # Uploaded and moved off local disk. Its files are *supposed* to be
-        # missing locally; re-fetching them would undo the archive.
-        "archived",
-    }
-)
+# SETTLED_FILE_STATUSES / SETTLED_GROUP_STATUSES decide what the watermark may
+# pass. They live with the state model (video_grouper/models/directory_state.py)
+# so the download processor and the dashboard can share them without importing
+# the poller.
 
 
 def create_directory(path):

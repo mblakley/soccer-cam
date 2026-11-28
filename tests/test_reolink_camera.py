@@ -706,6 +706,91 @@ class TestReolinkCameraDeviceInfo:
         "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
         new_callable=AsyncMock,
     )
+    async def test_mac_comes_from_local_link_when_dev_info_has_none(self, mock_log):
+        """A Duo 3 PoE's GetDevInfo carries no ``mac`` (read on the camera,
+        2026-11-28); its MAC is in GetLocalLink. Device registration sends the
+        MAC as evidence of possession, so it must not come back empty."""
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response(
+                "GetDevInfo",
+                {"DevInfo": {"serial": "SN12345", "model": "Reolink Duo 3 PoE"}},
+            ),
+            _success_response(
+                "GetLocalLink",
+                {"LocalLink": {"type": "DHCP", "mac": "ec:71:db:00:11:22"}},
+            ),
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        info = await camera.get_device_info()
+        assert info["serial_number"] == "SN12345"
+        assert info["mac_address"] == "ec:71:db:00:11:22"
+        assert "cmd=GetLocalLink&" in str(mock_client.post.call_args_list[2])
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
+    @pytest.mark.parametrize(
+        "local_link",
+        [
+            "error",
+            "timeout",
+            "value_null",
+            "dict_body",
+            "list_of_str",
+            "mac_not_a_string",
+        ],
+    )
+    async def test_an_unreadable_local_link_leaves_the_mac_empty(
+        self, mock_log, local_link
+    ):
+        """The serial still identifies the camera when the MAC can't be read,
+        whatever GetLocalLink does."""
+
+        def body(payload):
+            r = MagicMock()
+            r.status_code = 200
+            r.json.return_value = payload
+            r.text = str(payload)
+            return r
+
+        third = {
+            "error": _error_response("GetLocalLink"),
+            "timeout": httpx.ReadTimeout("slow camera"),
+            "value_null": body([{"cmd": "GetLocalLink", "code": 0, "value": None}]),
+            "dict_body": body({"cmd": "GetLocalLink", "code": 0}),
+            "list_of_str": body(["oops"]),
+            "mac_not_a_string": body(
+                [{"cmd": "GetLocalLink", "code": 0, "value": {"LocalLink": {"mac": 7}}}]
+            ),
+        }[local_link]
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [
+            _login_response(),
+            _success_response("GetDevInfo", {"DevInfo": {"serial": "SN12345"}}),
+            third,
+        ]
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path="test_path", client=mock_client
+        )
+
+        info = await camera.get_device_info()
+        assert info["serial_number"] == "SN12345"
+        assert info["mac_address"] == ""
+
+    @pytest.mark.asyncio
+    @patch(
+        "video_grouper.cameras.reolink.ReolinkCamera._log_http_call",
+        new_callable=AsyncMock,
+    )
     async def test_get_device_info_failure(self, mock_log):
         mock_client = AsyncMock()
         mock_client.post.side_effect = [
@@ -915,3 +1000,57 @@ class TestReolinkCameraDownload:
         call_kwargs = mock_download.call_args[1]
         assert call_kwargs["port"] == 9001
         assert call_kwargs["channel"] == 1
+
+
+class TestReolinkDownloadFailureReason:
+    """ReolinkCamera.download_file reports the collected notes as
+    last_download_error, and clears it on the next success."""
+
+    @pytest.mark.asyncio
+    async def test_reason_set_on_failure_and_cleared_on_success(self, tmp_path):
+        from video_grouper.cameras.reolink_download import _note_failure
+
+        outcomes = [False, True]
+
+        async def fake_download(**kwargs):
+            ok = outcomes.pop(0)
+            if not ok:
+                _note_failure("HTTP 500 from the camera")
+            return ok
+
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        local = str(tmp_path / "video" / "file.mp4")
+        with patch(
+            "video_grouper.cameras.reolink.download_and_mux", side_effect=fake_download
+        ):
+            assert await camera.download_file("Rec/test.mp4", local) is False
+            assert camera.last_download_error == "HTTP 500 from the camera"
+
+            assert await camera.download_file("Rec/test.mp4", local) is True
+            assert camera.last_download_error is None
+
+    @pytest.mark.asyncio
+    async def test_failure_without_a_note_leaves_no_reason(self, tmp_path):
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        with patch(
+            "video_grouper.cameras.reolink.download_and_mux",
+            AsyncMock(return_value=False),
+        ):
+            assert await camera.download_file("Rec/x.mp4", str(tmp_path / "x")) is False
+        assert camera.last_download_error is None
+
+    @pytest.mark.asyncio
+    async def test_exception_is_described(self, tmp_path):
+        camera = ReolinkCamera(
+            config=_make_config(), storage_path=str(tmp_path), client=AsyncMock()
+        )
+        with patch(
+            "video_grouper.cameras.reolink.download_and_mux",
+            AsyncMock(side_effect=ConnectionResetError()),
+        ):
+            assert await camera.download_file("Rec/x.mp4", str(tmp_path / "x")) is False
+        assert camera.last_download_error == "ConnectionResetError"

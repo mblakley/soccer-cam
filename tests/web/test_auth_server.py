@@ -909,3 +909,153 @@ def test_login_from_a_lan_address_explains_instead_of_failing(storage):
         resp = c.get("/login", follow_redirects=False)
     assert resp.status_code == 400
     assert "localhost:8765" in resp.text
+
+
+# Downloads that keep failing: list + Skip
+# ---------------------------------------------------------------------------
+
+
+class TestSkipFailingDownloads:
+    """The dashboard lists downloads that keep failing and lets a person give
+    up on one, in two steps: Skip shows what would be lost, Confirm skip does
+    it (through ``skip_download``, the same function TTT will call)."""
+
+    GAME = "2026.07.01-10.00.00"
+    FILE = "RecM09_20260701_100000_103000.mp4"
+
+    def _write_failing(self, storage, status="download_failed", attempts=5):
+        game_dir = storage / self.GAME
+        game_dir.mkdir(parents=True, exist_ok=True)
+        path = str(game_dir / self.FILE)
+        (game_dir / "state.json").write_text(
+            json.dumps(
+                {
+                    "status": "pending",
+                    "files": {
+                        path: {
+                            "file_path": path,
+                            "start_time": "2026-07-01T10:00:00",
+                            "end_time": "2026-07-01T10:30:00",
+                            "status": status,
+                            "skip": False,
+                            "metadata": {"camera_name": "Field cam"},
+                            "failed_attempts": attempts,
+                            "error_message": "HTTP 500 reading block 4411",
+                            "last_failed_at": "2026-07-02T08:00:00",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _file_state(self, storage):
+        state = json.loads((storage / self.GAME / "state.json").read_text("utf-8"))
+        return next(iter(state["files"].values()))
+
+    def test_dashboard_lists_stuck_downloads_with_a_skip_button(self, storage, client):
+        self._write_failing(storage)
+
+        body = client.get("/").text
+
+        assert "Downloads that keep failing" in body
+        assert self.FILE in body
+        assert self.GAME in body
+        assert "Field cam" in body
+        assert "5 rounds" in body
+        assert "HTTP 500 reading block 4411" in body
+        assert 'action="/downloads/skip"' in body
+
+    def test_dashboard_empty_state_says_nothing_is_stuck(self, client):
+        body = client.get("/").text
+        assert "Nothing is stuck." in body
+        assert 'action="/downloads/skip"' not in body
+
+    def test_skip_without_confirm_asks_and_changes_nothing(self, storage, client):
+        self._write_failing(storage)
+
+        r = client.post(
+            "/downloads/skip",
+            data={"group": self.GAME, "file": self.FILE},
+            headers=_SAME_ORIGIN,
+        )
+
+        assert r.status_code == 200
+        assert "Skip this download?" in r.text
+        assert "Confirm skip" in r.text
+        assert 'name="confirm" value="1"' in r.text
+        assert self._file_state(storage)["status"] == "download_failed"
+
+    def test_confirmed_skip_settles_the_file_and_reports_back(self, storage, client):
+        self._write_failing(storage)
+
+        r = client.post(
+            "/downloads/skip",
+            data={
+                "group": self.GAME,
+                "file": self.FILE,
+                "confirm": "1",
+                "reason": "corrupt on the SD card",
+            },
+            headers=_SAME_ORIGIN,
+            follow_redirects=False,
+        )
+
+        assert r.status_code == 303
+        assert r.headers["location"].startswith("/?flash=")
+        entry = self._file_state(storage)
+        assert entry["status"] == "skipped"
+        assert entry["skip"] is True
+        assert entry["skipped_by"] == "dashboard"
+        assert entry["skip_reason"] == "corrupt on the SD card"
+
+        page = client.get(r.headers["location"]).text
+        assert f"Skipped {self.FILE}" in page
+        assert "Nothing is stuck." in page
+
+    @pytest.mark.parametrize(
+        "headers",
+        [{}, {"origin": "http://evil.example"}],
+        ids=["no-origin", "cross-origin"],
+    )
+    def test_skip_requires_same_origin(self, storage, client, headers):
+        self._write_failing(storage)
+
+        r = client.post(
+            "/downloads/skip",
+            data={"group": self.GAME, "file": self.FILE, "confirm": "1"},
+            headers=headers,
+            follow_redirects=False,
+        )
+
+        assert r.status_code == 403
+        assert self._file_state(storage)["status"] == "download_failed"
+
+    def test_refused_skip_reports_why(self, storage, client):
+        """The core function's refusal reaches the person, and nothing changes."""
+        self._write_failing(storage, status="downloaded", attempts=0)
+
+        r = client.post(
+            "/downloads/skip",
+            data={"group": self.GAME, "file": self.FILE, "confirm": "1"},
+            headers=_SAME_ORIGIN,
+        )
+
+        assert r.status_code == 200
+        assert "Not skipped." in r.text
+        assert "already downloaded" in r.text
+        assert self._file_state(storage)["status"] == "downloaded"
+
+    def test_skip_of_a_file_no_longer_failing_explains_itself(self, storage, client):
+        r = client.post(
+            "/downloads/skip",
+            data={"group": self.GAME, "file": self.FILE},
+            headers=_SAME_ORIGIN,
+        )
+
+        assert r.status_code == 200
+        assert "not a failing download any more" in r.text
+
+    def test_flash_token_cannot_carry_arbitrary_text(self, client):
+        body = client.get("/?flash=Your+camera+is+hacked").text
+        assert "hacked" not in body

@@ -22,13 +22,14 @@ import html
 import json
 import logging
 import re
+import secrets
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -38,6 +39,11 @@ from video_grouper.api_integrations.ttt_api import (
     _decode_jwt_payload,
     resolve_api_base_url,
 )
+from video_grouper.models.directory_state import (
+    SkipDownloadError,
+    list_stuck_downloads,
+    skip_download,
+)
 from video_grouper.utils.config import TTTConfig
 from video_grouper.web import chrome as _chrome
 from video_grouper.web.auth_status import clear_auth_needed, list_auth_needed
@@ -46,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 # Game group directory format from camera_poller.py / DirectoryState.
 _GAME_DIR_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}$")
+
+# How long a dashboard result message (?flash=...) stays readable.
+_FLASH_TTL_S = 120
 
 # Loopback Host values always accepted by the rebinding-defense middleware,
 # regardless of the configured bind. Anything else has to be the explicit bind.
@@ -63,6 +72,7 @@ _DASHBOARD_BODY = """\
     <li><a href="#tray">Tray</a></li>
     <li><a href="#pipeline">Pipeline</a></li>
     <li><a href="#cameras">Cameras</a></li>
+    <li><a href="#downloads">Failing downloads</a></li>
     <li><a href="#games">Games</a></li>
   </ul>
 </aside>
@@ -76,6 +86,7 @@ _DASHBOARD_BODY = """\
 </div>
 
 __AUTH_FLAGS_BANNER__
+__FLASH_BANNER__
 
 <section class="panel" id="auth">
 <h2>Authentication</h2>
@@ -100,6 +111,11 @@ __QUEUES_BLOCK__
 <section class="panel" id="cameras">
 <h2>Cameras</h2>
 __CAMERAS_BLOCK__
+</section>
+
+<section class="panel" id="downloads">
+<h2>Downloads that keep failing</h2>
+__STUCK_BLOCK__
 </section>
 
 <section class="panel" id="games">
@@ -932,6 +948,145 @@ def _render_games_section(games: list[dict]) -> str:
     )
 
 
+def _fmt_recorded(start: str | None, end: str | None) -> str:
+    """``2026-07-01 10:00–10:30`` from two ISO timestamps; ``—`` if unknown."""
+    try:
+        s = datetime.fromisoformat(str(start))
+    except (TypeError, ValueError):
+        return "&mdash;"
+    out = s.strftime("%Y-%m-%d %H:%M")
+    try:
+        e = datetime.fromisoformat(str(end))
+    except (TypeError, ValueError):
+        return out
+    if e.date() == s.date():
+        # Date, then the time range kept on one line, so a narrow column
+        # breaks between them rather than inside either.
+        return (
+            f"{s.strftime('%Y-%m-%d')} "
+            f'<span class="nowrap">{s.strftime("%H:%M")}&ndash;'
+            f"{e.strftime('%H:%M')}</span>"
+        )
+    return f"{out}&ndash;{e.strftime('%Y-%m-%d %H:%M')}"
+
+
+def _fmt_when(iso: str | None) -> str:
+    try:
+        return datetime.fromisoformat(str(iso)).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _stuck_where(item: dict) -> str:
+    """``group · camera`` line under a stuck file's name."""
+    parts = [html.escape(str(item["group"]))]
+    if item.get("camera"):
+        parts.append(html.escape(str(item["camera"])))
+    return " &middot; ".join(parts)
+
+
+def _render_stuck_downloads_section(stuck: list[dict]) -> str:
+    """The files that keep failing to download, each with a Skip button.
+
+    Skip is the first of two steps: it opens a confirmation page (the
+    dashboard reloads every 10s, so a confirm control in this table would be
+    reset under the person's cursor). Nothing changes until they confirm.
+    """
+    if not stuck:
+        return (
+            '<p class="muted">Nothing is stuck. Every download has finished or '
+            "is still being tried.</p>"
+        )
+    rows = []
+    for item in stuck:
+        attempts = int(item.get("failed_attempts") or 0)
+        failed = (
+            [f"Failed {attempts} round{'s' if attempts != 1 else ''}"]
+            if attempts
+            else []
+        )
+        when = _fmt_when(item.get("last_failed_at"))
+        if when:
+            failed.append(f"last {html.escape(when)}")
+        err = item.get("last_error")
+        err_html = (
+            f'<span class="err">{html.escape(str(err))}</span>'
+            if err
+            else '<span class="faint">No error recorded</span>'
+        )
+        # Two data columns: everything about the recording stacks in the
+        # first. A phone has room for little more, and a table wider than
+        # the screen widens the whole page with it.
+        rows.append(
+            "<tr>"
+            f'<td class="wrap-anywhere"><code>{html.escape(str(item["file_name"]))}'
+            f'</code><div class="hint mono">{_stuck_where(item)}</div>'
+            '<div class="hint">'
+            f"{_fmt_recorded(item.get('start_time'), item.get('end_time'))}</div>"
+            + (f'<div class="hint">{", ".join(failed)}</div>' if failed else "")
+            + "</td>"
+            f'<td class="wrap-anywhere">{err_html}</td>'
+            '<td><form method="post" action="/downloads/skip">'
+            f'<input type="hidden" name="group" value="{html.escape(str(item["group"]))}">'
+            f'<input type="hidden" name="file" value="{html.escape(str(item["file_name"]))}">'
+            '<button type="submit" class="btn btn-sm btn-secondary">Skip</button>'
+            "</form></td>"
+            "</tr>"
+        )
+    return (
+        '<p class="hint">These failed every retry and are tried again on each '
+        "audit pass. Until one downloads or you skip it, it holds its "
+        "camera&rsquo;s watermark, so later games are not archived. Skip only "
+        "footage you are prepared to lose.</p>"
+        "<table><tr><th>Recording</th><th>Last error</th><th></th></tr>"
+        + "".join(rows)
+        + "</table>"
+    )
+
+
+def _render_skip_confirm_page(item: dict) -> str:
+    """Step two of Skip: say what is being given up, then ask once more."""
+    group = html.escape(str(item["group"]))
+    file_name = html.escape(str(item["file_name"]))
+    attempts = int(item.get("failed_attempts") or 0)
+    err = item.get("last_error")
+    facts = [
+        f"<dt>Recording</dt><dd><code>{file_name}</code></dd>",
+        f'<dt>Game</dt><dd class="mono">{_stuck_where(item)}</dd>',
+        "<dt>Recorded</dt>"
+        f"<dd>{_fmt_recorded(item.get('start_time'), item.get('end_time'))}</dd>",
+        f"<dt>Failed</dt><dd>{attempts} retry round{'s' if attempts != 1 else ''}</dd>",
+    ]
+    if err:
+        facts.append(f'<dt>Last error</dt><dd class="err">{html.escape(str(err))}</dd>')
+    body = (
+        '<main class="shell shell--narrow">'
+        '<section class="panel panel--warn">'
+        "<h1>Skip this download?</h1>"
+        f'<dl class="facts">{"".join(facts)}</dl>'
+        "<p>Skipping gives up on this recording for good. It will not be "
+        "downloaded, and the rest of its game is processed without it. The "
+        "camera&rsquo;s watermark can then move past it, so later games are "
+        "archived again.</p>"
+        '<form method="post" action="/downloads/skip">'
+        f'<input type="hidden" name="group" value="{group}">'
+        f'<input type="hidden" name="file" value="{file_name}">'
+        '<input type="hidden" name="confirm" value="1">'
+        '<div class="field">'
+        '<label class="form-label" for="skip-reason">Reason (optional)</label>'
+        '<input type="text" id="skip-reason" name="reason" maxlength="200" '
+        'placeholder="e.g. corrupt on the SD card">'
+        "</div>"
+        '<p class="btn-row">'
+        '<button type="submit" class="btn btn-danger">Confirm skip</button>'
+        '<a class="btn btn-secondary" href="/#downloads">Cancel</a>'
+        "</p>"
+        "</form>"
+        "</section></main>"
+    )
+    return _chrome.page("Skip download", body, active="/", crumb="Skip download")
+
+
 def create_app(
     ttt_config: TTTConfig,
     storage_path: str,
@@ -1071,8 +1226,30 @@ def create_app(
 
         return await call_next(request)
 
+    # One-shot result messages for the dashboard, keyed by an unguessable
+    # token in the redirect URL. Carrying the token rather than the text keeps
+    # a crafted link from putting words on this page. Not popped on read: the
+    # dashboard reloads itself every 10s, and the message should survive a
+    # reload or two -- it expires instead.
+    flashes: dict[str, tuple[str, str, float]] = {}
+
+    def _add_flash(tone: str, message: str) -> str:
+        now = time.time()
+        for key in [k for k, v in flashes.items() if now - v[2] > _FLASH_TTL_S]:
+            flashes.pop(key, None)
+        token = secrets.token_urlsafe(12)
+        flashes[token] = (tone, message, now)
+        return token
+
+    def _render_flash(token: str | None) -> str:
+        entry = flashes.get(token or "")
+        if entry is None or time.time() - entry[2] > _FLASH_TTL_S:
+            return ""
+        tone, message, _ = entry
+        return f'<div class="banner banner--{tone}">{html.escape(message)}</div>'
+
     @app.get("/")
-    def dashboard() -> Response:
+    def dashboard(flash: str | None = None) -> Response:
         # Phase 2 done-criterion: when shared_data has no real config yet
         # (or onboarding wasn't finished), bounce the user to the wizard
         # so the headless flow matches the tray's auto-launch behavior.
@@ -1089,6 +1266,11 @@ def create_app(
         body = (
             _DASHBOARD_BODY.replace(
                 "__AUTH_FLAGS_BANNER__", _render_auth_flags_banner(storage)
+            )
+            .replace("__FLASH_BANNER__", _render_flash(flash))
+            .replace(
+                "__STUCK_BLOCK__",
+                _render_stuck_downloads_section(list_stuck_downloads(storage_path)),
             )
             .replace("__AUTH_BLOCK__", _render_auth_section(token_file))
             .replace(
@@ -1446,6 +1628,59 @@ def create_app(
         write_cancel_request(group_dir)
         logger.info("cancel: requested for %s", name)
         return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/downloads/skip")
+    def skip_failing_download(
+        group: str = Form(""),
+        file: str = Form(""),
+        confirm: str = Form(""),
+        reason: str = Form(""),
+    ) -> Response:
+        """Give up on a download that keeps failing, in two steps.
+
+        Without ``confirm`` this only shows what would be given up and asks
+        again -- it changes nothing. With ``confirm=1`` it calls
+        ``skip_download`` (the same function the TTT command uses) and
+        redirects back to the dashboard with the outcome.
+        """
+        if confirm != "1":
+            item = next(
+                (
+                    s
+                    for s in list_stuck_downloads(storage_path)
+                    if s["group"] == group and s["file_name"] == file
+                ),
+                None,
+            )
+            if item is None:
+                token = _add_flash(
+                    "warn",
+                    f"{file or 'That file'} is not a failing download any more "
+                    "-- it may have downloaded or been skipped since the page "
+                    "loaded. Nothing was changed.",
+                )
+                return RedirectResponse(
+                    url=f"/?flash={token}#downloads", status_code=303
+                )
+            return HTMLResponse(_render_skip_confirm_page(item))
+
+        try:
+            result = skip_download(
+                storage_path, group, file, by="dashboard", reason=reason
+            )
+        except SkipDownloadError as exc:
+            token = _add_flash("bad", f"Not skipped. {exc}")
+        else:
+            token = _add_flash(
+                "ok",
+                (
+                    f"Skipped {result.file_name} from {result.group}. It will "
+                    "not be downloaded; the rest of the game carries on without it."
+                )
+                if result.changed
+                else f"{result.file_name} was already skipped. Nothing changed.",
+            )
+        return RedirectResponse(url=f"/?flash={token}#downloads", status_code=303)
 
     @app.post("/logout")
     def logout() -> Response:

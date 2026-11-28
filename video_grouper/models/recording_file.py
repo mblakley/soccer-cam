@@ -56,7 +56,19 @@ class RecordingFile:
         self.skip = skip
         self.group_dir = None
         self.last_updated = datetime.now()
+        # The most recent download error, and when it happened (ISO 8601).
         self.error_message: str | None = None
+        self.last_failed_at: str | None = None
+        # Retry rounds this download has exhausted. The queue retries a few
+        # times in quick succession and then drops the item; each such round
+        # counts once here, so a file the StateAuditor keeps re-queuing shows
+        # how long it has been failing.
+        self.failed_attempts: int = 0
+        # Set only when a person chose to give up on this file (status
+        # "skipped"); see directory_state.skip_download.
+        self.skipped_at: str | None = None
+        self.skipped_by: str | None = None
+        self.skip_reason: str | None = None
 
     def __str__(self) -> str:
         """Return a human-readable string representation."""
@@ -92,6 +104,11 @@ class RecordingFile:
             "group_dir": self.group_dir,
             "last_updated": self.last_updated.isoformat(),
             "error_message": self.error_message,
+            "last_failed_at": self.last_failed_at,
+            "failed_attempts": self.failed_attempts,
+            "skipped_at": self.skipped_at,
+            "skipped_by": self.skipped_by,
+            "skip_reason": self.skip_reason,
         }
 
     @classmethod
@@ -122,6 +139,14 @@ class RecordingFile:
         if "last_updated" in data and data["last_updated"]:
             file.last_updated = datetime.fromisoformat(data["last_updated"])
         file.error_message = data.get("error_message")
+        file.last_failed_at = data.get("last_failed_at")
+        try:
+            file.failed_attempts = int(data.get("failed_attempts") or 0)
+        except (TypeError, ValueError):
+            file.failed_attempts = 0
+        file.skipped_at = data.get("skipped_at")
+        file.skipped_by = data.get("skipped_by")
+        file.skip_reason = data.get("skip_reason")
 
         return file
 
