@@ -1,0 +1,5 @@
+# Baked-in settings for S38_FieldRoi, used when /mnt/sda/soccercam/fieldroi.conf
+# is absent. Off: the hook does nothing and never touches roi.conf.
+auto=0
+settle_secs=60
+bands=-10,-6,-3

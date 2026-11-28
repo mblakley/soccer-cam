@@ -1,0 +1,28 @@
+# Settings for S38_FieldRoi — finding the field automatically when a game starts.
+#
+# Copy to /mnt/sda/soccercam/fieldroi.conf on the camera. It is re-read every
+# 15 s; no reboot. Any malformed line, unknown key or out-of-range value rejects
+# the whole file and the hook stays off (the reason is in fieldroi.log).
+#
+# auto         1 = when recording starts, find the field and install the bands;
+#              turn them off again when recording stops. The hook then OWNS
+#              /mnt/sda/soccercam/roi.conf and replaces one written by hand.
+#              0 = do nothing, never touch roi.conf.
+# settle_secs  how long to wait after recording starts before the first
+#              snapshot (0..3600). The camera records from the moment it has
+#              power, which is before it is up the pole and lined up.
+# bands        QP deltas for the far, mid and near thirds of the field, as
+#              fieldroi --bands takes them. -10,-6,-3 was chosen on game
+#              footage (EXP-ENC-10).
+#
+# Needs on the card: /mnt/sda/soccercam/bin/fieldroi and field_outline_v2.frw.
+# To detect right now, once (after re-aiming the camera, say):
+#     touch /mnt/sda/soccercam/fieldroi.now
+#
+# The bands are installed only when two detections in a row, at least a
+# detector-run apart, put the field's far and near edges within 96 rows of
+# each other. Otherwise the encoder is left at stock.
+
+auto=1
+settle_secs=60
+bands=-10,-6,-3

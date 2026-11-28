@@ -5,6 +5,8 @@
 #
 #   - kflow_videoenc.ko  : 26-byte in-place format-string fix (see below)  [rootfs]
 #   - /etc/init.d/S37_RoiQp                  the daemon that applies the window
+#   - /etc/init.d/S38_FieldRoi               (ROIQP_MULTIWIN=1 only) finds the field when a
+#                                            game starts and writes the bands; auto=0 baked in
 #   - /etc/soccercam_roi.conf.default        baked-in fallback config
 #
 # `app` is NOT touched, so this layers cleanly on top of any existing build:
@@ -78,7 +80,9 @@ case "$(basename "$OUT")" in
      echo "         e.g. IPC_NT15NA416MP.4910_2505072124.Reolink-Duo-3-PoE.16MP.REOLINK_roiqp.pak" >&2 ;;
 esac
 
-for x in "$INIT_SRC" "$CONF_SRC"; do
+HOOK_SRC="$RT/S38_FieldRoi"
+HOOK_CONF_SRC="$RT/fieldroi.conf.default"
+for x in "$INIT_SRC" "$CONF_SRC" "$HOOK_SRC" "$HOOK_CONF_SRC"; do
     [[ -f "$x" ]] || { echo "ERROR: missing $x"; exit 1; }
 done
 
@@ -268,10 +272,25 @@ if ! sh "$HERE/../verify/test_roiqp_daemon.sh" > "$WORK/daemon_test.txt" 2>&1; t
     exit 1
 fi
 echo "   $(tail -1 "$WORK/daemon_test.txt")"
+if ! sh "$HERE/../verify/test_fieldroi_hook.sh" > "$WORK/hook_test.txt" 2>&1; then
+    cat "$WORK/hook_test.txt"
+    echo "ERROR: verify/test_fieldroi_hook.sh failed; not building a pak around this hook"
+    exit 1
+fi
+echo "   $(tail -1 "$WORK/hook_test.txt")"
 
 echo "==> 3) install S37_RoiQp + default config"
 install -m 0755 "$INIT_SRC" rootfs_unpacked/etc/init.d/S37_RoiQp
 install -m 0644 "$CONF_SRC" rootfs_unpacked/etc/soccercam_roi.conf.default
+HOOK_TAG=""
+if [[ "${ROIQP_MULTIWIN:-0}" == "1" ]]; then
+    # The hook writes three bands, which only the ten-window module can hold.
+    grep -q "^auto=0$" "$HOOK_CONF_SRC" || { echo "ERROR: $HOOK_CONF_SRC must ship auto=0"; exit 1; }
+    install -m 0755 "$HOOK_SRC" rootfs_unpacked/etc/init.d/S38_FieldRoi
+    install -m 0644 "$HOOK_CONF_SRC" rootfs_unpacked/etc/soccercam_fieldroi.conf.default
+    HOOK_TAG="S38(auto=0)"
+    echo "   /etc/init.d/S38_FieldRoi + /etc/soccercam_fieldroi.conf.default (auto=0)"
+fi
 echo "   /etc/init.d/S37_RoiQp + /etc/soccercam_roi.conf.default"
 
 echo "==> 3b) record this layer in the build manifest (/etc/soccercam_build)"
@@ -282,13 +301,14 @@ echo "==> 3b) record this layer in the build manifest (/etc/soccercam_build)"
 COMMIT="${SOCCERCAM_COMMIT:-$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 MAN=rootfs_unpacked/etc/soccercam_build
 touch "$MAN"
-grep -vE '^(pak|roiqp|roiqp_default|roiqp_commit)=' "$MAN" > "$MAN.new" || true
+grep -vE '^(pak|roiqp|roiqp_default|roiqp_commit|fieldroi_hook)=' "$MAN" > "$MAN.new" || true
 {
     cat "$MAN.new"
     echo "pak=$(basename "$OUT")"
     echo "roiqp=S37+kflow_videoenc_setroi_fix${MULTIWIN_TAG}"
     echo "roiqp_default=$(grep -E '^enable=' "$CONF_SRC" | head -1 | tr -d '\r')"
     echo "roiqp_commit=$COMMIT"
+    [[ -n "$HOOK_TAG" ]] && echo "fieldroi_hook=$HOOK_TAG"
 } > "$MAN"
 rm -f "$MAN.new"
 chmod 644 "$MAN"
@@ -393,6 +413,7 @@ echo "====================================================================="
 echo " Build complete: $OUT"
 echo "  - kflow_videoenc.ko setroi format string: fixed (26 B, in place)"
 echo "  - /etc/init.d/S37_RoiQp:                  installed"
+echo "  - /etc/init.d/S38_FieldRoi:               ${HOOK_TAG:-not installed (single-window build)}"
 echo "  - /etc/soccercam_roi.conf.default:        $(basename "$CONF_SRC")"
 echo "  - loader/fdt/atf/uboot/kernel/ai/app:     byte-identical to base"
 echo "  - /etc/soccercam_build:                   pak= and roiqp= lines updated"

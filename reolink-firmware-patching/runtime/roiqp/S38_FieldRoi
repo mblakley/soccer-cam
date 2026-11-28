@@ -1,0 +1,301 @@
+#!/bin/sh
+# /etc/init.d/S38_FieldRoi
+# Find the field when a game starts and write the encoder bands for it.
+#
+# S37_RoiQp applies whatever /mnt/sda/soccercam/roi.conf says. This script is
+# what writes that file at an unattended game: when recording starts it takes
+# the camera's own snapshot, runs the field detector on it (fieldroi, on the SD
+# card), and installs the bands the detector prints.
+#
+# It does not trust one look:
+#
+#   1. It waits settle_secs (default 60) after recording starts before the
+#      first snapshot. The camera starts recording the moment it has power, and
+#      at that moment it may still be on the ground, half way up the pole, or
+#      being lined up.
+#   2. It needs TWO DETECTIONS IN A ROW THAT AGREE: the far and near edges of
+#      the field within AGREE_ROWS of each other, from snapshots taken at least
+#      a detector-run (about 80 s) apart. A camera that is still being moved
+#      gives two different answers; so does a detector that guessed. Either
+#      way it looks again, up to MAX_TRIES snapshots.
+#   3. If no two in a row agree, or the detector refuses every frame, it leaves
+#      the encoder at stock. No bands is always the safe answer: a band in the
+#      wrong place takes bits AWAY from the pitch.
+#
+# AGREE_ROWS is measured, not guessed: on 18 frames from two games with the
+# camera fixed, the detector's edges moved by at most 37 rows between looks a
+# few seconds to a few minutes apart, and 81 rows across a whole game
+# (EXP-ENC-12). Re-aiming the camera moves them by hundreds.
+#
+# OFF BY DEFAULT. Settings (writable SD card, re-read every pass):
+#   /mnt/sda/soccercam/fieldroi.conf    auto=1 turns this on; see the .example
+#   /etc/soccercam_fieldroi.conf.default  used when that file is absent (auto=0)
+#   /mnt/sda/soccercam/fieldroi.now     create it to detect right now, once,
+#                                       whatever the recording state (it is
+#                                       deleted when picked up)
+#   /mnt/sda/soccercam/fieldroi.log     every decision, with the reason
+#
+# With auto=1 this script OWNS roi.conf: it rewrites it at the start of every
+# recording and turns the bands off again when recording stops, so the bands
+# from one ground are never applied at the next. A roi.conf written by hand is
+# replaced. With auto=0 it never touches roi.conf.
+#
+# The snapshot needs a login. The credentials are read at run time from
+# /etc/init.d/S99_NetState, which the base build already carries; nothing is
+# baked into this script.
+
+# The FIELDROI_* overrides exist for verify/test_fieldroi_hook.sh; nothing on
+# the camera sets them.
+DIR=${FIELDROI_DIR:-/mnt/sda/soccercam}
+DEFAULT=${FIELDROI_DEFAULT:-/etc/soccercam_fieldroi.conf.default}
+NETSTATE_LOG=${FIELDROI_NETSTATE_LOG:-/mnt/sda/netstate/log}
+NETSTATE_INIT=${FIELDROI_NETSTATE_INIT:-/etc/init.d/S99_NetState}
+BIN=$DIR/bin/fieldroi
+WEIGHTS=$DIR/bin/field_outline_v2.frw
+CONF=$DIR/fieldroi.conf
+ROI_CONF=$DIR/roi.conf
+TRIGGER=$DIR/fieldroi.now
+LOG=$DIR/fieldroi.log
+LOG_MAX_BYTES=262144
+MARK="# written by S38_FieldRoi"
+
+POLL_INTERVAL=15
+SD_WAIT=180
+MAX_TRIES=5
+AGREE_ROWS=96
+
+log() {
+    MSG="[$(date '+%F %T')] $*"
+    echo "$MSG"
+    mkdir -p "$DIR" 2>/dev/null || return 0
+    if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null)" -gt $LOG_MAX_BYTES ]; then
+        mv "$LOG" "$LOG.old" 2>/dev/null
+    fi
+    echo "$MSG" >>"$LOG" 2>/dev/null
+}
+
+# All waiting goes through here so the test can make it instant.
+pause() { sleep "$1"; }
+
+# --- settings ---------------------------------------------------------------
+# Any malformed line, unknown key or out-of-range value rejects the whole file
+# and the hook stays off. REASON says which.
+
+REASON=""
+load_conf() {
+    H_AUTO=0; H_SETTLE=60; H_BANDS="-10,-6,-3"
+    REASON=""
+    F="$CONF"
+    [ -f "$F" ] || F="$DEFAULT"
+    [ -f "$F" ] || { REASON="no settings file"; return 1; }
+    if [ "$(wc -c <"$F" 2>/dev/null)" -gt 4096 ]; then
+        REASON="settings larger than 4096 bytes"
+        return 1
+    fi
+    while IFS= read -r RAW; do
+        LINE=$(echo "$RAW" | tr -d '\r' | sed 's/^[ \t]*//; s/[ \t]*$//')
+        [ -z "$LINE" ] && continue
+        case "$LINE" in \#*) continue ;; esac
+        K=${LINE%%=*}
+        V=${LINE#*=}
+        case "$K" in
+            auto)
+                case "$V" in 0|1) H_AUTO=$V ;; *) REASON="auto must be 0 or 1: $V"; return 1 ;; esac ;;
+            settle_secs)
+                if echo "$V" | grep -qE '^[0-9]+$' && [ "$V" -le 3600 ]; then H_SETTLE=$V
+                else REASON="settle_secs must be 0..3600: $V"; return 1; fi ;;
+            bands)
+                if echo "$V" | grep -qE '^-?[0-9]+,-?[0-9]+,-?[0-9]+$'; then H_BANDS=$V
+                else REASON="bands wants three QP deltas, far,mid,near: $V"; return 1; fi ;;
+            *)  REASON="unknown or malformed line: $LINE"; return 1 ;;
+        esac
+    done <"$F"
+    return 0
+}
+
+# --- what the camera is doing ---------------------------------------------
+# S99_NetState decides whether the camera records and logs every change. Its
+# last "state ->" line is the answer. Prints on, off, or unknown (no such line
+# yet, e.g. just after its log rotated); the caller keeps what it knew.
+recording_now() {
+    LAST=$(grep 'state -> ' "$NETSTATE_LOG" 2>/dev/null | tail -1)
+    case "$LAST" in
+        *"state -> away: recording ENABLED"*) echo on ;;
+        *"state -> "*) echo off ;;
+        *) echo unknown ;;
+    esac
+}
+
+# --- the two touch points with the camera (the test stands in for both) ----
+
+# snapshot <file>  -- the camera's own JPEG of the main stream
+snapshot() {
+    U=$(sed -n 's/^USER="\(.*\)"$/\1/p' "$NETSTATE_INIT" 2>/dev/null | head -1)
+    P=$(sed -n 's/^PASS="\(.*\)"$/\1/p' "$NETSTATE_INIT" 2>/dev/null | head -1)
+    [ -n "$U" ] && [ -n "$P" ] || { SNAP_WHY="no credentials in $NETSTATE_INIT"; return 1; }
+    BODY="[{\"cmd\":\"Login\",\"action\":0,\"param\":{\"User\":{\"userName\":\"$U\",\"password\":\"$P\"}}}]"
+    TOK=$(wget -q -O- --header='Content-Type: application/json' --post-data="$BODY" \
+            "http://127.0.0.1/api.cgi?cmd=Login&token=null" 2>/dev/null \
+          | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$TOK" ] || { SNAP_WHY="login failed"; return 1; }
+    wget -q -O "$1" "http://127.0.0.1/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=x&token=$TOK" 2>/dev/null
+    RC=$?
+    # The camera allows five sessions; one that is not returned is lost for an hour.
+    wget -q -O /dev/null --header='Content-Type: application/json' \
+        --post-data='[{"cmd":"Logout","action":0,"param":{}}]' \
+        "http://127.0.0.1/api.cgi?cmd=Logout&token=$TOK" 2>/dev/null
+    if [ $RC -ne 0 ] || [ "$(wc -c <"$1" 2>/dev/null || echo 0)" -lt 100000 ]; then
+        SNAP_WHY="snapshot failed or is under 100 KB"
+        return 1
+    fi
+    return 0
+}
+
+# run_detector <jpeg> <config out> <messages out>
+run_detector() {
+    nice -n 19 "$BIN" "$WEIGHTS" "$1" --bands "$H_BANDS" >"$2" 2>"$3"
+}
+
+# --- roi.conf ----------------------------------------------------------------
+
+bands_off() {
+    {
+        echo "$MARK $(date '+%F %T'): off ($1)"
+        printf 'enable=0\npath=0\nx=0\ny=0\nw=7680\nh=2160\nqp=0\nmode=1\n'
+    } >"$ROI_CONF.new" && mv "$ROI_CONF.new" "$ROI_CONF"
+}
+
+abs_diff() { if [ "$1" -ge "$2" ]; then echo $(($1 - $2)); else echo $(($2 - $1)); fi; }
+
+# session <settle seconds> <why>
+# Returns 0 with the bands installed, 1 with the bands off.
+session() {
+    log "detection starting ($2); bands off until two looks agree"
+    bands_off "detection in progress"
+    WAITED=0
+    while [ $WAITED -lt "$1" ]; do
+        pause 5
+        WAITED=$((WAITED + 5))
+        if [ "$3" = "watch" ] && [ "$(recording_now)" = "off" ]; then
+            log "recording stopped during the settle wait; nothing detected"
+            return 1
+        fi
+    done
+    [ "$1" -gt 0 ] && log "waited ${1}s for the camera to be put in place"
+
+    PREV_FAR=""; PREV_NEAR=""
+    N=1
+    while [ $N -le $MAX_TRIES ]; do
+        if ! snapshot "$DIR/hook_snap.jpg"; then
+            log "look $N: no snapshot ($SNAP_WHY)"
+            PREV_FAR=""
+            pause 20
+            N=$((N + 1))
+            continue
+        fi
+        if run_detector "$DIR/hook_snap.jpg" "$DIR/hook_roi.new" "$DIR/hook_fieldroi.err"; then
+            ROWS=$(sed -n 's/^field rows \([0-9]*\)\.\.\([0-9]*\) .*/\1 \2/p' "$DIR/hook_fieldroi.err" | head -1)
+            FAR=${ROWS% *}; NEAR=${ROWS#* }
+            if [ -z "$ROWS" ] || ! grep -q '^win0=' "$DIR/hook_roi.new"; then
+                log "look $N: the detector exited 0 without rows or bands; ignored"
+                PREV_FAR=""
+            elif [ -n "$PREV_FAR" ] && [ "$(abs_diff "$FAR" "$PREV_FAR")" -le $AGREE_ROWS ] \
+                    && [ "$(abs_diff "$NEAR" "$PREV_NEAR")" -le $AGREE_ROWS ]; then
+                log "look $N: field rows $FAR..$NEAR, agrees with the look before ($PREV_FAR..$PREV_NEAR)"
+                {
+                    echo "$MARK $(date '+%F %T'): looks $((N - 1)) and $N agreed"
+                    cat "$DIR/hook_roi.new"
+                } >"$ROI_CONF.new" && mv "$ROI_CONF.new" "$ROI_CONF"
+                log "bands installed: $(grep '^win' "$ROI_CONF" | tr '\n' ' ')"
+                return 0
+            else
+                if [ -n "$PREV_FAR" ]; then
+                    log "look $N: field rows $FAR..$NEAR, differs from the look before ($PREV_FAR..$PREV_NEAR); looking again"
+                else
+                    log "look $N: field rows $FAR..$NEAR; needs a second look that agrees"
+                fi
+                PREV_FAR=$FAR; PREV_NEAR=$NEAR
+            fi
+        else
+            log "look $N: refused ($(tail -1 "$DIR/hook_fieldroi.err" 2>/dev/null | cut -c1-120))"
+            PREV_FAR=""
+            pause 20
+        fi
+        N=$((N + 1))
+    done
+    log "no two looks in a row agreed after $MAX_TRIES; encoder left at stock"
+    bands_off "no agreement"
+    return 1
+}
+
+# One pass of the daemon.
+STATE=off
+WARNED=""
+tick() {
+    if ! load_conf; then
+        [ "$WARNED" = "conf:$REASON" ] || log "settings REJECTED ($REASON); the hook is off"
+        WARNED="conf:$REASON"
+        return
+    fi
+    NOW=$(recording_now)
+    if [ "$H_AUTO" -ne 1 ]; then
+        [ "$WARNED" = "off" ] || log "auto=0: the hook is off and roi.conf is not touched"
+        WARNED="off"
+        # Forget the recording state, so that switching auto on in the middle
+        # of a game starts a detection instead of waiting for the next one.
+        STATE=off
+        return
+    fi
+    if [ ! -x "$BIN" ] || [ ! -f "$WEIGHTS" ]; then
+        [ "$WARNED" = "nobin" ] || log "auto=1 but $BIN or its weights are missing; nothing to run"
+        WARNED="nobin"
+        return
+    fi
+    if [ "$WARNED" != "on" ]; then
+        log "auto=1 (settle ${H_SETTLE}s, bands $H_BANDS, agree within $AGREE_ROWS rows, up to $MAX_TRIES looks)"
+        WARNED="on"
+    fi
+    if [ -f "$TRIGGER" ]; then
+        rm -f "$TRIGGER"
+        session 0 "fieldroi.now" once
+        [ "$NOW" = unknown ] || STATE=$NOW
+        return
+    fi
+    if [ "$NOW" = on ] && [ "$STATE" != on ]; then
+        STATE=on
+        session "$H_SETTLE" "recording started" watch
+    elif [ "$NOW" = off ] && [ "$STATE" = on ]; then
+        STATE=off
+        log "recording stopped; bands off"
+        bands_off "recording stopped"
+    fi
+}
+
+run() {
+    I=0
+    while ! grep -q ' /mnt/sda ' /proc/mounts 2>/dev/null && [ $I -lt $SD_WAIT ]; do
+        sleep 1
+        I=$((I + 1))
+    done
+    log "===== field detection hook start (waited ${I}s for the SD card) ====="
+    # A power cut is how most games end, so "recording stopped" never came.
+    # Whatever this script installed last time belongs to another ground.
+    if load_conf && [ "$H_AUTO" -eq 1 ] && grep -q "^$MARK" "$ROI_CONF" 2>/dev/null \
+            && grep -q '^enable=1' "$ROI_CONF" 2>/dev/null; then
+        log "boot: clearing the bands this script installed last time"
+        bands_off "boot"
+    fi
+    while :; do
+        tick
+        pause $POLL_INTERVAL
+    done
+}
+
+# verify/test_fieldroi_hook.sh sources this file for its functions.
+if [ -n "${FIELDROI_SOURCE_ONLY:-}" ]; then
+    return 0
+fi
+
+( run ) &
+disown 2>/dev/null
+exit 0
