@@ -27,13 +27,13 @@ retry_delay = 60
 #   ntfy - always ask via an NTFY "did the game start?" notification walk.
 # game_start_method = phase_detection
 
-# Per-row stitch correction (dual-lens panoramic cameras only). The profile
-# is per-camera and lives at seam_realign_profile_path (written by the local
-# stitch calibration, or pulled hourly from TTT's calibration tool when signed
-# in -- the newer calibration wins). Downstream readers (ball detection,
-# tracking, broadcast-perspective render) apply the per-row dx shift to the
-# right half on decode. No recording is ever re-encoded — combine/trim stay
-# stream-copy, and the profile is read fresh each time frames are consumed.
+# Per-row stitch correction (dual-lens panoramic cameras only). The install's
+# profile lands at <storage>/stitch_profile.json: the local stitch calibration
+# page writes it, and when signed in to TTT a profile saved in TTT's
+# calibration tool is pulled there hourly (the newer calibration wins). That
+# file does not take effect on renders by itself: set
+# [PIPELINE.stitch] stitch_profile_path (below) to it. No recording is ever
+# re-encoded — combine/trim stay stream-copy.
 # seam_realign_enabled = false
 # seam_realign_profile_path = ./shared_data/stitch_profile.json
 
@@ -142,6 +142,7 @@ ram_heavy_concurrency = 1
 [PIPELINE.stitch]
 type = stitch_correct
 # Optional per-camera stitch calibration profile; passes through unchanged when unset.
+# Point it at <storage>/stitch_profile.json to use the calibration page's / TTT's profile.
 # stitch_profile_path =
 
 [PIPELINE.field_detect]

@@ -8,13 +8,16 @@ the duplicate without needing to stitch from raw lens streams.
 
 This module is consumed by in-house downstream code (ball detection, tracking,
 broadcast-perspective render). It is deliberately NOT called during combine or
-trim — both remain stream-copy. The profile is stored **per-camera** at
-`config.processing.seam_realign_profile_path` (default
-``<storage>/stitch_profile.json``), written by the local calibration page or
-pulled hourly from a web calibration tool by the device link
-(:func:`install_pulled_profile`: the newer calibration wins; a local one is
-never deleted).
-Readers call `load_profile` on that path — there is no per-recording sidecar.
+trim — both remain stream-copy. The install's profile file is
+``<storage>/stitch_profile.json`` (:func:`local_profile_path`): the local
+calibration page writes it, and the device link installs a profile pulled from
+a web calibration tool there hourly (:func:`install_pulled_profile`: the newer
+calibration wins; a local one is never deleted).
+
+Neither takes effect on renders by itself: the pipeline's ``stitch_correct``
+step reads only its own ``stitch_profile_path`` setting, which must point at
+that file. Readers call `load_profile` on that path — there is no
+per-recording sidecar.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -444,13 +448,41 @@ def apply_shift_to_frame_rgb(
     return out
 
 
+PROFILE_FILENAME = "stitch_profile.json"
+
+
+def local_profile_path(storage_path: str | Path) -> Path:
+    """The install's stitch profile file: written by the local calibration
+    page, and where a pulled profile is installed (one file, so newer-wins
+    compares like with like)."""
+    return Path(storage_path) / PROFILE_FILENAME
+
+
+def _created_utc(profile: dict | None) -> datetime | None:
+    """``metadata.created_utc`` as an aware datetime (a trailing ``Z`` is
+    accepted, a naive time is taken as UTC); None when absent or unparseable."""
+    meta = (profile or {}).get("metadata") or {}
+    stamp = meta.get("created_utc") if isinstance(meta, dict) else None
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    text = stamp.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def install_pulled_profile(path: str | Path, profile: dict) -> str:
     """Install a stitch profile pulled from elsewhere (TTT's calibration tool)
     at ``path`` without clobbering a newer local calibration.
 
     Returns ``"written"``, ``"unchanged"``, ``"kept_local"`` (the file on disk
-    is newer, or the pulled one carries no ``metadata.created_utc`` to compare)
-    or ``"invalid"``. Never deletes a local profile.
+    is as new or newer, or the pulled one carries no parseable
+    ``metadata.created_utc`` to compare) or ``"invalid"``. Times are compared
+    as datetimes, not strings. Never deletes a local profile.
     """
     try:
         StitchProfile.from_dict(profile)
@@ -467,12 +499,10 @@ def install_pulled_profile(path: str | Path, profile: dict) -> str:
     if existing == profile:
         return "unchanged"
 
-    def _stamp(d: dict | None) -> str | None:
-        meta = (d or {}).get("metadata") or {}
-        return meta.get("created_utc") if isinstance(meta, dict) else None
-
-    incoming, local = _stamp(profile), _stamp(existing)
-    if existing is not None and (incoming is None or (local and local >= incoming)):
+    incoming, local = _created_utc(profile), _created_utc(existing)
+    if existing is not None and (
+        incoming is None or (local is not None and local >= incoming)
+    ):
         return "kept_local"
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
