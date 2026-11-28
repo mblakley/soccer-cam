@@ -34,7 +34,6 @@ This document explains how to set up YouTube API credentials for automatic video
    - Developer contact information: Your email address
    - Add the following scopes:
      - `https://www.googleapis.com/auth/youtube.upload`
-     - `https://www.googleapis.com/auth/youtube.readonly`
      - `https://www.googleapis.com/auth/youtube` (required for playlist operations)
    - Add your email as a test user
 4. Create the OAuth client ID:
@@ -122,7 +121,6 @@ You can customize the playlist naming format in the configuration UI under Setti
 
 - **Error: "insufficientPermissions"**: Make sure you've added all required scopes to your OAuth consent screen:
   - `https://www.googleapis.com/auth/youtube.upload`
-  - `https://www.googleapis.com/auth/youtube.readonly`
   - `https://www.googleapis.com/auth/youtube`
   
   You may need to delete your existing `token.json` file and re-authenticate if you've updated the scopes.

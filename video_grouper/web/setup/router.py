@@ -541,7 +541,6 @@ def _render_youtube_body(
         "scopes:"
         '<pre style="margin:0.4rem 0;font-size:11px;">'
         "https://www.googleapis.com/auth/youtube.upload\n"
-        "https://www.googleapis.com/auth/youtube.readonly\n"
         "https://www.googleapis.com/auth/youtube"
         "</pre>"
         "Add your own Google account as a Test user.</li>"
