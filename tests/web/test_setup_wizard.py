@@ -149,6 +149,7 @@ class _State:
     camera_ip = "192.168.86.24"
     camera_username = "admin"
     camera_password = "pw"
+    camera_skipped = False
     is_complete = True
 
 
@@ -278,6 +279,7 @@ def test_finishing_the_wizard_on_a_configured_install_merges_the_file(
         camera_ip = "192.168.1.10"
         camera_username = "admin"
         camera_password = "pw"
+        camera_skipped = False
         is_complete = True
 
     existing = _build_config(_S())
@@ -313,3 +315,112 @@ def test_finishing_the_wizard_on_a_configured_install_merges_the_file(
     assert after.ntfy.server_url == "https://ntfy.example.invalid"
     assert after.ttt.enabled is True
     assert after.storage.min_free_gb == 42.0
+
+
+# ── The camera step can be skipped (Mark, 2026-11-28) ──────────────────
+#
+# Connecting the camera is part of normal onboarding, but a person may not
+# have it to hand. Skipping writes no camera; one is added later from the
+# dashboard's "Add a camera" link, which re-enters the wizard at its camera
+# step.
+
+
+def _walk_to_camera(client, storage_path: str) -> None:
+    client.get("/setup/welcome")
+    client.post("/setup/storage", data={"storage_path": storage_path})
+
+
+def test_the_camera_step_offers_a_skip(client):
+    _walk_to_camera(client, "/data/games")
+    resp = client.get("/setup/camera")
+    assert resp.status_code == 200
+    assert 'action="/setup/camera/skip"' in resp.text
+
+
+def test_skipping_the_camera_finishes_with_no_camera(client, config_path):
+    _walk_to_camera(client, "/data/games")
+
+    resp = client.post("/setup/camera/skip", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/setup/ttt"
+
+    client.post("/setup/youtube/skip")
+    resp = client.get("/setup/summary", follow_redirects=False)
+    assert resp.status_code == 200, "a skipped camera still completes the wizard"
+    assert "Skipped" in resp.text
+
+    resp = client.post("/setup/finish", follow_redirects=False)
+    assert resp.status_code == 303
+    cfg = load_config(config_path)
+    assert cfg.cameras == []
+    assert cfg.setup.onboarding_completed is True
+    assert cfg.storage.path == "/data/games"
+
+
+def test_entering_a_camera_after_skipping_it_saves_the_camera(client, config_path):
+    _walk_to_camera(client, "/data/games")
+    client.post("/setup/camera/skip")
+    # Back to the camera step, and this time fill it in.
+    client.post(
+        "/setup/camera",
+        data={
+            "camera_type": "reolink",
+            "camera_name": "field",
+            "camera_ip": "192.168.86.24",
+            "camera_username": "admin",
+            "camera_password": "pw",
+        },
+    )
+    client.post("/setup/youtube/skip")
+    summary = client.get("/setup/summary").text
+    assert "192.168.86.24" in summary
+    client.post("/setup/finish")
+    assert [c.device_ip for c in load_config(config_path).cameras] == ["192.168.86.24"]
+
+
+def test_skipping_on_a_rerun_keeps_the_configured_camera():
+    """Skip means 'no change to cameras', not 'remove them'."""
+    from video_grouper.web.setup.router import _build_config
+
+    class Skipped(_State):
+        camera_skipped = True
+        camera_ip = ""
+
+    merged = _build_config(Skipped(), _configured())
+    assert [(c.name, c.device_ip) for c in merged.cameras] == [
+        ("field", "192.168.86.24")
+    ]
+
+
+def test_adding_a_camera_later_keeps_the_configured_storage(
+    client, config_path, tmp_path
+):
+    """The dashboard's 'Add a camera' link enters the wizard at /setup/camera
+    with a fresh wizard state. Finishing must not replace the configured
+    storage path with the storage step's default, nor bounce the person back
+    to the start."""
+    _walk_to_camera(client, str(tmp_path / "videos"))
+    client.post("/setup/camera/skip")
+    client.post("/setup/youtube/skip")
+    client.post("/setup/finish")
+    assert load_config(config_path).cameras == []
+
+    client.cookies.clear()  # a later visit, from the dashboard
+    client.get("/setup/camera")
+    client.post(
+        "/setup/camera",
+        data={
+            "camera_type": "dahua",
+            "camera_name": "default",
+            "camera_ip": "192.168.1.50",
+            "camera_username": "admin",
+            "camera_password": "pw",
+        },
+    )
+    client.post("/setup/youtube/skip")
+    resp = client.post("/setup/finish", follow_redirects=False)
+    assert resp.status_code == 303, resp.text
+
+    after = load_config(config_path)
+    assert after.storage.path == str(tmp_path / "videos")
+    assert [c.device_ip for c in after.cameras] == ["192.168.1.50"]

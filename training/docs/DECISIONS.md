@@ -2466,3 +2466,26 @@ linked; they can upload for their teams; other teams' recordings stay private to
 Possession evidence: soccer-cam reports each camera's serial **and MAC address read from the camera
 over the network**; once TTT has a MAC for a serial, a join must match it (a printed serial alone is
 not enough). soccer-cam sends `mac_address` and logs any camera TTT refuses.
+
+## Decision: connecting the camera is part of onboarding, and its step can be skipped (2026-11-28)
+
+**Mark (2026-11-28):** "having the camera connected to the network and available should be part of
+the normal onboarding process. It should be possible to skip the camera setup step."
+
+- The setup wizard's camera step (`/setup/camera`) stays the normal path: scan the network, confirm
+  the make with the camera's credentials, save. Before this, Next and Save both required an address,
+  so a person without the camera to hand could not finish setup at all.
+- **Skip — add a camera later** (`POST /setup/camera/skip`) finishes setup with no camera. On a
+  re-run it leaves the configured cameras exactly as they are: skip means "no change", never
+  "remove".
+- A camera is added later from the dashboard's existing **Add a camera** link, which re-enters the
+  wizard at the camera step. A fresh wizard state on a finished install now starts from the
+  configured storage path. Before this, that link's flow bounced the person back to the start at
+  Summary and could have written the storage step's default over the real path.
+- An install with no camera starts cleanly. `job_capabilities` read `config.camera` (the first
+  camera) and raised `IndexError` at startup when TTT job polling was on; it now announces no camera.
+  Verified by starting the real app with zero cameras and TTT jobs on: no errors.
+- A configured camera is expected to be reachable between games, which is why onboarding connects
+  it. It is unreachable while it is out at a game. During those hours the camera poller logs
+  "unable to connect" at INFO, not as an error, and the device link backs off after a failed probe
+  (5 min, doubling to 1 h; #160).

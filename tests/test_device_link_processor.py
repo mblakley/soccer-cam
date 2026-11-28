@@ -84,6 +84,18 @@ def test_job_capabilities_come_from_local_config():
     }
 
 
+def test_job_capabilities_without_a_camera_omit_the_camera():
+    """Setup's camera step can be skipped; an install with no camera still
+    starts and announces what it can do."""
+    from video_grouper.utils.config import Config, StorageConfig
+
+    config = Config(storage=StorageConfig(path="/data"))
+    assert config.cameras == []
+    caps = job_capabilities(config)
+    assert caps["ffmpeg"] is True
+    assert "camera_type" not in caps and "camera_ip" not in caps
+
+
 # ---------------------------------------------------------------------------
 # Camera enabled state
 # ---------------------------------------------------------------------------
