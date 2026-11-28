@@ -4,6 +4,37 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-12: how steady is the detector on a fixed camera — within 37 rows look to look (2026-11-28)
+
+**Why:** the game-start hook (`S38_FieldRoi`) accepts a field only when two detections in a row
+agree. "Agree" needs a number: wide enough for the detector's own jitter, far narrower than a
+camera being moved.
+
+**Method:** nine frames from each of two games with the camera fixed (Lakefront outdoors, the blue
+dome), taken 5 s, 8 s and 150 s into three segments spread across the game. `fieldroi` on each;
+its "field rows far..near" compared.
+
+**Result:**
+
+| game | far edge, all nine | near edge, all nine | largest change between looks 3 s to 2.5 min apart |
+|---|---|---|---|
+| Lakefront | 178–199 (21 rows) | 1400–1417 (17) | 16 far, 17 near |
+| blue dome | 288–320 (32) | 1610–1691 (81) | 16 far, 37 near |
+
+All 18 frames were accepted (dome colour share 0.72–0.75).
+
+**Conclusion:** `AGREE_ROWS=96`: above everything measured, including the 81-row drift of the
+dome's near edge across a whole game, and a fraction of what re-aiming the camera does (the field
+moves by hundreds of rows). Two games, one camera position each; no data from a camera actually
+being raised or turned.
+
+**The hook, as built:** off by default (`auto=0`). With `auto=1`, when recording starts it turns
+the bands off, waits `settle_secs` (60; Mark: the camera may not be fully extended or lined up
+yet), then looks up to five times and installs the bands only when two looks in a row agree;
+otherwise the encoder stays at stock. Bands go off again when recording stops, and at boot if the
+last session left them on. `verify/test_fieldroi_hook.sh`: 26 checks, eight deliberate breakages
+each caught, also run under the camera's busybox `ash`. Not run on the camera yet (build 4925).
+
 ## EXP-ENC-11: the field-colour check reads the colour from the field — blue turf accepted (2026-11-28)
 
 **Why:** `fieldroi` refused any frame whose claimed field rows were not mostly green. The indoor

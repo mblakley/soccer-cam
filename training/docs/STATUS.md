@@ -42,7 +42,13 @@
   pitch; a multi-snapshot agreement check would, and is not built.
 - **Indoor option for a winter test:** the dome game ran at 12.5 Mbps and QP 31–33, under the cap
   (outdoor games: at the cap, QP 34–35), on a full-size pitch with the same framing.
-- **Next:** (1) a live game or a real pitch: `fieldroi` on the camera's own snapshot, then the
+- **Build 4925 staged, not flashed (needs Mark's yes): the game-start hook.** `S38_FieldRoi`, off by
+  default. With `auto=1` it waits 60 s after recording starts (Mark: the camera may not be fully
+  extended or lined up), then installs the bands only when two detections in a row agree within 96
+  rows (measured jitter on a fixed camera: 37 rows look to look, EXP-ENC-12); otherwise stock.
+  26-check test, a build gate. Against 4924 only the hook, its default config and the manifest differ.
+- **Next:** (0) flash 4925 and run the hook at home with `fieldroi.now` (the TV showing a pitch);
+  (1) a live game or a real pitch: `fieldroi` on the camera's own snapshot, then the
   bands' effect in the recording — neither has been measured outdoors;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
   window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps.
