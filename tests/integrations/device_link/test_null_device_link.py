@@ -33,3 +33,11 @@ def test_default_heartbeat_cadence():
 def test_does_not_register_cameras():
     # The processor then never asks the cameras to describe themselves.
     assert NullDeviceLink().registers_cameras is False
+
+
+@pytest.mark.asyncio
+async def test_stuck_downloads_go_nowhere():
+    from video_grouper.integrations.device_link import StuckDownload
+
+    stuck = StuckDownload(camera="front", group="2026.07.01-10.00.00", file_name="a")
+    assert await NullDeviceLink().report_stuck_downloads([stuck]) is False

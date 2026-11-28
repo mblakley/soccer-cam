@@ -11,6 +11,7 @@ from .base import (
     DeviceHealth,
     HeartbeatReply,
     IDeviceLink,
+    StuckDownload,
 )
 
 
@@ -41,6 +42,10 @@ class FakeDeviceLink(IDeviceLink):
         self.heartbeats = 0
         # ("ack", id) / ("complete", id, result), in call order
         self.command_calls: list[tuple[Any, ...]] = []
+        # Every stuck-download list it was given; False: refuse them (as a
+        # link that could not deliver them would).
+        self.stuck_reports: list[list[StuckDownload]] = []
+        self.accepts_stuck_reports = True
 
     @classmethod
     def from_context(cls, context) -> None:
@@ -95,3 +100,8 @@ class FakeDeviceLink(IDeviceLink):
     async def complete_command(self, command_id: str, result: dict[str, Any]) -> None:
         self.command_calls.append(("complete", command_id, result))
         self._maybe_raise("complete_command")
+
+    async def report_stuck_downloads(self, downloads: list[StuckDownload]) -> bool:
+        self.stuck_reports.append(list(downloads))
+        self._maybe_raise("report_stuck_downloads")
+        return self.accepts_stuck_reports

@@ -16,7 +16,15 @@ heartbeat(health)      enhanced_heartbeat(service_id, health) if registered
                                                               if camera_id
 acknowledge_command    acknowledge_command(command_id)
 complete_command       complete_command(command_id, result)
+report_stuck_downloads report_stuck_downloads(machine_id, rows)
+                                                  if machine_id + signed in
 =====================  ===================================================
+
+A command whose ``parameters`` carry a ``machine_id`` is addressed to one
+install: several installs can share a TTT camera, so one addressed to another
+machine is left pending for it (neither returned nor acknowledged here).
+Stuck downloads are sent under each camera's TTT id; one whose camera has no
+id here is left out.
 
 "Signed in" is ``ensure_signed_in`` (an expired access token is refreshed
 first), checked once per heartbeat; signed out, a heartbeat sends nothing and
@@ -34,6 +42,7 @@ import asyncio
 import logging
 import platform
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from video_grouper.integrations.registry import provides
@@ -44,11 +53,31 @@ from ..base import (
     DeviceHealth,
     HeartbeatReply,
     IDeviceLink,
+    StuckDownload,
 )
 
 logger = logging.getLogger(__name__)
 
 _UNSET = object()
+
+# What PUT /device-link/stuck-downloads accepts; a longer error is cut, an
+# entry with a longer name would fail the whole list and is left out.
+_MAX_STUCK_DOWNLOADS = 500
+_MAX_GROUP_DIR = 128
+_MAX_FILE_NAME = 255
+_MAX_ERROR = 500
+
+
+def _iso_or_none(value: str | None) -> str | None:
+    """``value`` as it is when it parses as an ISO time, else None. state.json
+    holds naive local times; no time zone is invented for them."""
+    if not value:
+        return None
+    try:
+        datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return str(value)
 
 
 @provides(IDeviceLink)
@@ -77,6 +106,8 @@ class TTTDeviceLink(IDeviceLink):
         self._cameras = camera_ids
         self._machine_id = machine_id
         self._service_id: str | None = None
+        # The last stuck-downloads report failed (logged once until it works).
+        self._stuck_report_failing = False
         self.heartbeat_interval = int(getattr(ttt_config, "heartbeat_interval", 30))
 
     @classmethod
@@ -263,6 +294,17 @@ class TTTDeviceLink(IDeviceLink):
                 state[camera_name] = any(bool(m.get("enabled")) for m in mine)
         return state
 
+    def _for_this_install(self, cmd: dict[str, Any]) -> bool:
+        """False for a command addressed to another install (its parameters
+        name another ``machine_id``); one naming no machine is for any."""
+        params = cmd.get("parameters")
+        if not isinstance(params, dict) or "machine_id" not in params:
+            return True
+        mine = self._machine()
+        return mine is not None and (
+            str(params["machine_id"]).strip().lower() == str(mine).strip().lower()
+        )
+
     async def _pending_commands(self) -> list[DeviceCommand]:
         commands: list[DeviceCommand] = []
         for name, camera_id in self._cameras.all_ids().items():
@@ -273,8 +315,16 @@ class TTTDeviceLink(IDeviceLink):
             except Exception as e:
                 logger.warning("TTT: Failed to poll commands: %s", e)
                 continue
-            if result:
-                logger.info("TTT: Found %d pending command(s)", len(result))
+            # Another install's command stays pending for it: not acknowledged
+            # (or even logged at INFO, since it is seen every beat until then).
+            ours = [cmd for cmd in result or [] if self._for_this_install(cmd)]
+            if len(ours) < len(result or []):
+                logger.debug(
+                    "TTT: %d pending command(s) for another machine",
+                    len(result or []) - len(ours),
+                )
+            if ours:
+                logger.info("TTT: Found %d pending command(s)", len(ours))
             commands.extend(
                 DeviceCommand(
                     id=str(cmd["id"]),
@@ -282,7 +332,7 @@ class TTTDeviceLink(IDeviceLink):
                     parameters=cmd.get("parameters") or {},
                     camera=name or None,
                 )
-                for cmd in result or []
+                for cmd in ours
                 if cmd.get("id")
             )
         return commands
@@ -323,3 +373,52 @@ class TTTDeviceLink(IDeviceLink):
             logger.debug("TTT: Completed command %s", command_id)
         except Exception as e:
             logger.warning("TTT: Failed to complete command: %s", e)
+
+    # ------------------------------------------------------------------
+    # stuck downloads
+    # ------------------------------------------------------------------
+
+    def _stuck_rows(self, downloads: list[StuckDownload]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for d in downloads:
+            camera_id = self._cameras.id_for(d.camera) if d.camera else None
+            if not camera_id:
+                continue  # TTT knows no camera to list it under
+            if not (0 < len(d.group) <= _MAX_GROUP_DIR) or not (
+                0 < len(d.file_name) <= _MAX_FILE_NAME
+            ):
+                continue
+            rows.append(
+                {
+                    "camera_id": camera_id,
+                    "group_dir": d.group,
+                    "file_name": d.file_name,
+                    "recorded_at": _iso_or_none(d.recorded_at),
+                    "failed_attempts": max(0, int(d.failed_attempts or 0)),
+                    "error_message": str(d.error)[:_MAX_ERROR] if d.error else None,
+                    "last_failed_at": _iso_or_none(d.last_failed_at),
+                }
+            )
+        return rows[:_MAX_STUCK_DOWNLOADS]  # oldest first: the most overdue
+
+    async def report_stuck_downloads(self, downloads: list[StuckDownload]) -> bool:
+        """PUT /device-link/stuck-downloads: replaces this machine's list."""
+        machine_id = self._machine()
+        if not machine_id or not await self._signed_in():
+            return False
+        rows = self._stuck_rows(downloads)
+        try:
+            await asyncio.to_thread(
+                self._client.report_stuck_downloads, machine_id, rows
+            )
+        except Exception as e:
+            # Tried again every beat until it works: say so once, not each time.
+            log = logger.debug if self._stuck_report_failing else logger.warning
+            log("TTT: reporting stuck downloads failed: %s", e)
+            self._stuck_report_failing = True
+            return False
+        if self._stuck_report_failing:
+            logger.info("TTT: reporting stuck downloads works again")
+        self._stuck_report_failing = False
+        logger.debug("TTT: reported %d stuck download(s)", len(rows))
+        return True
