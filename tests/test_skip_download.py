@@ -18,6 +18,8 @@ import pytest
 from video_grouper.models import DirectoryState, RecordingFile
 from video_grouper.models.directory_state import (
     SETTLED_FILE_STATUSES,
+    SETTLED_GROUP_STATUSES,
+    SKIPPED_GROUP_STATUS,
     SkipDownloadError,
     list_stuck_downloads,
     skip_download,
@@ -341,6 +343,64 @@ class TestSkippedFilesStayOutOfTheGame:
         assert os.path.basename(first.file_path) == "f1.dav"
 
 
+class TestEveryFileSkippedSettlesTheGroup:
+    """A group whose every file was skipped has nothing to combine. It must
+    settle (``skipped``) rather than sit in the download phase forever."""
+
+    @pytest.mark.asyncio
+    async def test_skipping_the_last_remaining_file_settles_the_group(
+        self, temp_storage
+    ):
+        group_dir = await _group(
+            temp_storage,
+            [("a.dav", "download_failed", None), ("b.dav", "download_failed", None)],
+        )
+
+        skip_download(temp_storage, GROUP, "a.dav", by="dashboard")
+        assert DirectoryState(group_dir).status not in SETTLED_GROUP_STATUSES
+
+        skip_download(temp_storage, GROUP, "b.dav", by="dashboard")
+
+        state = DirectoryState(group_dir)
+        assert state.status == SKIPPED_GROUP_STATUS
+        assert SKIPPED_GROUP_STATUS in SETTLED_GROUP_STATUSES
+        assert state.is_ready_for_combining() is False
+        # Nothing is deleted: both entries are still recorded, as skipped.
+        assert {f.status for f in state.files.values()} == {"skipped"}
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_group_is_no_longer_listed_as_stuck(self, temp_storage):
+        await _group(temp_storage, [("a.dav", "download_failed", None)])
+        skip_download(temp_storage, GROUP, "a.dav", by="dashboard")
+        assert list_stuck_downloads(temp_storage) == []
+
+    @pytest.mark.asyncio
+    async def test_a_stale_in_memory_state_cannot_unsettle_it(self, temp_storage):
+        """A DirectoryState loaded before the last skip saves its own (stale)
+        group status with the file map; the settled status must survive."""
+        group_dir = await _group(temp_storage, [("a.dav", "download_failed", None)])
+        stale = DirectoryState(group_dir)
+
+        skip_download(temp_storage, GROUP, "a.dav", by="dashboard")
+        await stale.save_state()
+
+        assert DirectoryState(group_dir).status == SKIPPED_GROUP_STATUS
+
+    @pytest.mark.asyncio
+    async def test_one_skipped_one_downloaded_still_combines(self, temp_storage):
+        group_dir = await _group(
+            temp_storage,
+            [("a.dav", "download_failed", None), ("b.dav", "downloaded", None)],
+        )
+        Path(group_dir, "b.dav").write_bytes(b"x")
+
+        skip_download(temp_storage, GROUP, "a.dav", by="dashboard")
+
+        state = DirectoryState(group_dir)
+        assert state.status != SKIPPED_GROUP_STATUS
+        assert state.is_ready_for_combining() is True
+
+
 @pytest.mark.asyncio
 async def test_a_reason_over_200_characters_is_refused(temp_storage):
     """The form caps it; the TTT command and a hand-made POST must not get
@@ -349,3 +409,30 @@ async def test_a_reason_over_200_characters_is_refused(temp_storage):
     with pytest.raises(SkipDownloadError):
         skip_download(temp_storage, GROUP, "a.dav", by="dashboard", reason="x" * 201)
     skip_download(temp_storage, GROUP, "a.dav", by="dashboard", reason="x" * 200)
+
+
+@pytest.mark.asyncio
+async def test_a_new_file_reopens_a_skipped_group_at_once(temp_storage):
+    """The poller adds a file to an all-skipped group and, in the same poll,
+    advances the watermark. If the group still read ``skipped`` (a settled
+    status) the watermark would pass the new file before it downloads."""
+    from video_grouper.models.directory_state import SKIPPED_GROUP_STATUS
+
+    group_dir = await _group(temp_storage, [("a.dav", "download_failed", None)])
+    skip_download(temp_storage, GROUP, "a.dav", by="dashboard")
+    assert DirectoryState(group_dir).status == SKIPPED_GROUP_STATUS
+
+    state = DirectoryState(group_dir)
+    path = os.path.join(group_dir, "b.dav")
+    start = datetime(2026, 7, 1, 11, 0, 0)
+    await state.add_file(
+        path,
+        RecordingFile(
+            start_time=start,
+            end_time=start + timedelta(minutes=30),
+            file_path=path,
+            status="pending",
+            metadata={"path": "/mnt/sd/b.dav", "camera_name": "Field cam"},
+        ),
+    )
+    assert DirectoryState(group_dir).status == "pending"

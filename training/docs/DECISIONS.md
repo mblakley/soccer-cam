@@ -2592,3 +2592,37 @@ camera manager away from the install could not.
   nothing on another. So a command whose `parameters` carry a `machine_id` that isn't this install's
   is neither acknowledged nor run here: it stays pending for its install. Commands without a
   `machine_id` behave as before.
+
+## Decision: a group whose every file was skipped settles as `skipped` (2026-11-28)
+
+**Context.** The 2026-11-27 skip decision lets a person give up on a download that keeps failing.
+The rest of the group combines without that file. But when every file in a group was skipped,
+`is_ready_for_combining()` is False (nothing to combine), so the group never left the download
+phase. It no longer held the camera watermark, since skipped files are settled. Nothing settled
+the group itself, though: the StateAuditor looked at it on every pass, `list_stuck_downloads` kept
+reading it, and the dashboard showed it as `pending` indefinitely.
+
+**Decided.**
+- **New settled group status `skipped`** (`SKIPPED_GROUP_STATUS`), added to
+  `SETTLED_GROUP_STATUSES`. It means exactly "this group has files and a person skipped every one
+  of them": nothing to combine, trim, upload or archive.
+- **Not `not_a_game`.** That status records a person's or the duration check's verdict that the
+  recording was no match. An all-skipped group may well have been a real game whose footage was
+  lost. Reusing `not_a_game` would misreport that on the dashboard and in any later sync.
+- **Set in both places a group can end up all-skipped.** `skip_download` sets it in the same
+  locked write as the last skip. The StateAuditor sets it for a group already in that state on
+  disk (skipped before this change). `DirectoryState` saves keep an on-disk `skipped` group over a
+  stale in-memory download-phase status, the same rule as a skipped file entry.
+- **Derived, so reversible by data, not by a person.** If a file that is not skipped joins the
+  group later (the poller appending a segment within the 5 s gap), the auditor puts the group
+  back to `pending` and the normal download/combine flow resumes. No files are skipped or
+  un-skipped by this, and nothing is deleted. A skipped group stays on local disk, because the
+  archive step only takes `complete` groups.
+- **Where it is honoured:** the auditor stops queuing downloads (settled set) and never queues a
+  combine (`is_ready_for_combining` is False). The watermark already passed its files. The
+  dashboard's game list shows the raw status, `skipped`, next to the file count, like
+  `not_a_game` and `archived`. The stuck-downloads list leaves settled groups out. Reprocess does
+  not roll `skipped` back, because it is not one of its terminal statuses.
+
+**Files:** `video_grouper/models/directory_state.py`, `video_grouper/task_processors/state_auditor.py`,
+`tests/test_skip_download.py`, `tests/test_state_auditor_enhanced.py`.

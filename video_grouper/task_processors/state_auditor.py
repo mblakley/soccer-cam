@@ -4,6 +4,7 @@ import os
 from video_grouper.schedule import build_schedule_sources
 
 from ..models import DirectoryState, RecordingFile
+from ..models.directory_state import SKIPPED_GROUP_STATUS
 from ..models.match_info import MatchInfo
 from ..task_processors.tasks.video import CombineTask, TrimTask
 from ..utils.config import Config
@@ -209,6 +210,35 @@ class StateAuditor(PollingProcessor):
                     group_dir,
                 )
                 await dir_state.update_group_status("pipeline_complete")
+
+            # A group whose every file a person skipped has nothing left to
+            # combine, so is_ready_for_combining never fires and it would sit
+            # in the download phase forever. skip_download settles it when the
+            # last file goes; this catches groups already like that on disk
+            # (and any a stale save reopened). ``skipped`` means "every file
+            # is skipped", so a file that is not skipped joining the group
+            # later (the poller appending a segment) reopens it.
+            if dir_state.status not in _DOWNLOAD_DONE_STATUSES:
+                if dir_state.all_files_skipped():
+                    logger.warning(
+                        "STATE_AUDITOR: every file in %s was skipped; settling the "
+                        "group as %r (nothing to combine or upload)",
+                        group_dir,
+                        SKIPPED_GROUP_STATUS,
+                    )
+                    await dir_state.update_group_status(SKIPPED_GROUP_STATUS)
+            elif (
+                dir_state.status == SKIPPED_GROUP_STATUS
+                and dir_state.files
+                and not dir_state.all_files_skipped()
+            ):
+                logger.info(
+                    "STATE_AUDITOR: %s is %r but has a file that is not skipped; "
+                    "reopening it for download",
+                    group_dir,
+                    SKIPPED_GROUP_STATUS,
+                )
+                await dir_state.update_group_status("pending")
 
             # Audit individual files. Only (re-)queue downloads while the group
             # is still in the download phase; a group past download
