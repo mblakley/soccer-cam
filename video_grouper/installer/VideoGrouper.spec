@@ -173,11 +173,23 @@ else:
         "Run `git lfs pull` before building a release."
     )
 
+# The web UI's shared stylesheet. chrome.py reads it from beside the package
+# (``video_grouper/web/static``), and the FastAPI app mounts the directory at
+# startup: without it the dashboard, wizard and sign-in server refuse to start
+# ("Directory ... web/static does not exist"). Every build from the shared
+# stylesheet's introduction (7fb26c6) until this line shipped without it.
+WEB_STATIC_DATAS = [
+    (
+        os.path.join(PROJECT_ROOT, "video_grouper", "web", "static"),
+        os.path.join("video_grouper", "web", "static"),
+    )
+]
+
 a_service = Analysis(
     [SERVICE_MAIN],
     pathex=[],
     binaries=[],
-    datas=PHASE_MODEL_DATAS,
+    datas=PHASE_MODEL_DATAS + WEB_STATIC_DATAS,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

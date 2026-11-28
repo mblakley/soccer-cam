@@ -607,3 +607,19 @@ def test_a_silent_uninstall_shows_no_window(tmp_path, flags):
 
 if sys.platform != "win32":  # pragma: no cover - the installer is Windows-only
     pytestmark = pytest.mark.skip(reason="NSIS installer is Windows-only")
+
+
+def test_service_bundle_ships_web_static_dir():
+    """The service serves the web UI, which mounts ``video_grouper/web/static``.
+
+    PyInstaller only bundles Python modules unless told otherwise, so a build
+    without this ``datas`` entry installs a service whose dashboard never
+    starts. That shipped unnoticed in every build after the shared stylesheet
+    landed; unit tests run from source, where the directory always exists.
+    """
+    from video_grouper.web import chrome
+
+    spec = (NSI.parent / "VideoGrouper.spec").read_text(encoding="utf-8")
+    assert chrome.STATIC_DIR.is_dir() and any(chrome.STATIC_DIR.iterdir())
+    assert '"video_grouper", "web", "static"' in spec
+    assert "datas=PHASE_MODEL_DATAS + WEB_STATIC_DATAS" in spec
