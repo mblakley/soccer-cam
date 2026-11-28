@@ -463,8 +463,10 @@ class TTTApiClient:
 
         GET {api_base_url}/api/highlights/{reel_id}/game-clips
 
-        Response items include ``recording_group_dir`` + ``camera_id`` so this
-        install can resolve the source ``combined.mp4`` locally.
+        Response items include ``recording_group_dir`` + ``camera_id`` (and the
+        clip's ``video_type``) so this install can resolve the source locally:
+        the trimmed ``<slug>-raw.mp4`` for full-field clips, else the finished
+        broadcast ``<slug>.mp4`` (see ``highlight_reel_processor.reel_source_for``).
         """
         url = f"{self.api_base_url}/api/highlights/{reel_id}/game-clips"
         logger.debug("Fetching game clips for highlight reel %s", reel_id)
@@ -476,8 +478,9 @@ class TTTApiClient:
         GET {api_base_url}/api/highlights/{reel_id}/moment-clips
 
         Used when the polled reel has ``source='moment_tagger'``. Each item
-        carries ``clip_start_offset`` / ``clip_end_offset`` (absolute offsets
-        into the source ``combined.mp4``) plus ``recording_group_dir`` so this
+        carries ``clip_start_offset`` / ``clip_end_offset`` (offsets on the
+        trimmed, game-clock timeline, i.e. into ``<slug>.mp4`` /
+        ``<slug>-raw.mp4``, not ``combined.mp4``) plus ``recording_group_dir`` so this
         install can locate the source file. Ordered by the junction
         ``sequence_order``.
         """

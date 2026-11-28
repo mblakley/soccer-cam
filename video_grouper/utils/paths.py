@@ -111,7 +111,9 @@ def get_match_info_path(group_dir: str, storage_path: str) -> str:
     return str(resolve_path(os.path.join(group_dir, "match_info.ini"), storage_path))
 
 
-def get_trimmed_video_path(group_dir: str, match_info, storage_path: str) -> str:
+def get_trimmed_video_path(
+    group_dir: str, match_info, storage_path: str, create_dir: bool = True
+) -> str:
     """
     Create the subdirectory structure and return the path for the trimmed file.
 
@@ -141,8 +143,10 @@ def get_trimmed_video_path(group_dir: str, match_info, storage_path: str) -> str
     subdir_path = os.path.join(group_dir, subdir_name)
     abs_subdir_path = resolve_path(subdir_path, storage_path)
 
-    # Create the subdirectory if it doesn't exist
-    os.makedirs(abs_subdir_path, exist_ok=True)
+    # Create the subdirectory if it doesn't exist (callers that only look the
+    # file up pass create_dir=False).
+    if create_dir:
+        os.makedirs(abs_subdir_path, exist_ok=True)
 
     # Create filename: "myteam-opponent-location-MM-DD-YYYY-raw.mp4"
     # Convert team names to lowercase and replace spaces with hyphens

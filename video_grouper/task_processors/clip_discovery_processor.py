@@ -9,6 +9,7 @@ from datetime import datetime
 
 from video_grouper.api_integrations.moment_api_client import MomentApiClient
 from video_grouper.models import DirectoryState, MatchInfo
+from video_grouper.task_processors.recording_locator import ready_broadcast_for
 from video_grouper.utils.config import Config
 from video_grouper.utils.paths import get_trimmed_video_path
 
@@ -107,6 +108,12 @@ class ClipDiscoveryProcessor(PollingProcessor):
                 )
                 continue
 
+            # Clips come from the broadcast (ball-following) view once it has
+            # finished rendering from this trim (decided 2026-11-26,
+            # training/docs/DECISIONS.md), else from the trimmed full-field
+            # video. Same timeline either way.
+            clip_source = ready_broadcast_for(trimmed_path, group_dir)
+
             for tag in pending_tags:
                 await self._process_tag(
                     tag,
@@ -115,7 +122,7 @@ class ClipDiscoveryProcessor(PollingProcessor):
                     recording_files,
                     camera_tz,
                     start_time_offset,
-                    trimmed_path,
+                    clip_source,
                 )
 
     async def _process_tag(

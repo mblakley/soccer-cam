@@ -109,6 +109,17 @@ nowhere).
 - Matching TTT-side decisions (guardian access, Moment Tagger, onboarding, public share links) are
   recorded in team-tech-tools `.claude/plans/business-roadmap/ROADMAP.md`, "Decided 2026-11-26".
 
+**Implemented 2026-11-27 (clips + reels from the broadcast view).** Reels are cut by
+`highlight_reel_processor.reel_source_for`: the broadcast `<slug>.mp4`, falling back to the
+trimmed full-field `<slug>-raw.mp4`; game clips a coach cut from the full-field upload
+(`video_type="full"`) come from `<slug>-raw.mp4`. Moment clips come from the broadcast once it has
+rendered (`recording_locator.broadcast_for_raw`). Finding: reels were cut from `combined.mp4`,
+which is **untrimmed**, while every clip offset is on the trimmed timeline (moment clips are
+placed from each tag's trimmed offset in `ClipDiscoveryProcessor`; game clips are cut on the
+uploaded game video), so reel clips landed early by the length of the trimmed-off pre-game
+footage. `combined.mp4` is no longer a reel source; a reel whose recording has no trimmed video
+yet reports a blocker and waits instead.
+
 ---
 
 ## 2026-08-17: Non-uniform camera warp DECLINED for image quality; the mesh READ is adopted as a calibration input
