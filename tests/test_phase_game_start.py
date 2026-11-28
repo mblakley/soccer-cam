@@ -475,6 +475,8 @@ def _gated_detector(release: asyncio.Event, result=None):
 def fresh_flight_state(monkeypatch):
     monkeypatch.setattr(pgs, "_INFLIGHT", {})
     monkeypatch.setattr(pgs, "_ORPHANED", set())
+    monkeypatch.setattr(pgs, "_DECODING", set())
+    monkeypatch.setattr(pgs, "_GAVE_UP", set())
 
 
 @pytest.mark.asyncio
@@ -528,11 +530,14 @@ async def test_cancelled_duplicate_does_not_cancel_shared_run(
     release.set()
 
     assert await first is True
-    assert calls["n"] == 1
+    with pytest.raises(asyncio.CancelledError):
+        await dup  # the duplicate really was cancelled...
+    assert calls["n"] == 1  # ...without cancelling the shared run
+    assert pgs._INFLIGHT == {}  # and the in-flight entry is cleared
 
 
 @pytest.mark.asyncio
-async def test_timeout_falls_back_and_blocks_a_second_decode_until_the_first_ends(
+async def test_timeout_falls_back_and_never_restarts_that_games_detection(
     tmp_path, monkeypatch, fresh_flight_state
 ):
     group, combined = _make_group(tmp_path)
@@ -556,7 +561,9 @@ async def test_timeout_falls_back_and_blocks_a_second_decode_until_the_first_end
     )
     assert calls["n"] == 1
 
-    # Once the abandoned decode finishes, the group can be detected again.
+    # Even after the abandoned decode finishes, detection is not restarted
+    # for this game: the NTFY walk owns its game start now (a rerun would take
+    # as long again and could race the answer).
     release.set()
 
     async def _orphan_cleared():
@@ -564,10 +571,63 @@ async def test_timeout_falls_back_and_blocks_a_second_decode_until_the_first_end
             await asyncio.sleep(0.01)
 
     await asyncio.wait_for(_orphan_cleared(), timeout=5)
-    assert pgs._ORPHANED == set()
     monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0)  # 0 = no ceiling
     assert (
         await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
-        is True
+        is False
     )
-    assert calls["n"] == 2
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_rerun_never_runs_beside_an_abandoned_decode(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+    monkeypatch.setattr(pgs, "PHASE_DETECT_TIMEOUT_SECONDS", 0.05)
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    # The user answers "already started" while the abandoned decode still runs:
+    # the offset is written, but no second decode starts.
+    assert await pgs.resolve_truncated_start(group, combined, _cfg(), str(tmp_path))
+    assert await pgs.resolve_truncated_end(group, combined, _cfg(), str(tmp_path))
+    assert calls["n"] == 1
+    assert MatchInfo.get_or_create(group, str(tmp_path))[0].start_time_offset
+    release.set()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_run_leaves_its_decode_marked(
+    tmp_path, monkeypatch, fresh_flight_state
+):
+    group, combined = _make_group(tmp_path)
+    release = asyncio.Event()
+    fake, calls = _gated_detector(release, _OK_RESULT)
+    monkeypatch.setattr(pgs, "_run_detector", fake)
+    run = asyncio.create_task(
+        pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+    )
+    await asyncio.wait_for(calls["entered"].wait(), timeout=5)
+    pgs._INFLIGHT[pgs._inflight_key(group)].cancel()  # e.g. a shutdown
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    # The decode thread is still going: no second decode may start.
+    assert (
+        await pgs.maybe_resolve_phase_game_start(group, combined, _cfg(), str(tmp_path))
+        is False
+    )
+    assert calls["n"] == 1
+    release.set()
+
+
+@pytest.mark.parametrize(
+    "raw, expected", [("120", 120.0), ("1.5", 1.5), ("-1", 0.0), ("soon", 3600)]
+)
+def test_timeout_setting_is_parsed_safely(monkeypatch, raw, expected):
+    monkeypatch.setenv("PHASE_DETECT_TIMEOUT_SECONDS", raw)
+    assert pgs._env_seconds("PHASE_DETECT_TIMEOUT_SECONDS", 3600) == expected
