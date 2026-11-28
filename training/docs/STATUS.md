@@ -45,7 +45,7 @@
 - **Build 4925 staged, not flashed (needs Mark's yes): the game-start hook.** `S38_FieldRoi`, off by
   default. With `auto=1` it waits 60 s after recording starts (Mark: the camera may not be fully
   extended or lined up), then installs the bands only when two detections in a row agree within 96
-  rows (measured jitter on a fixed camera: 37 rows look to look, EXP-ENC-12); otherwise stock.
+  rows (measured jitter on a fixed camera: 30 rows look to look, EXP-ENC-12); otherwise stock.
   26-check test, a build gate. Against 4924 only the hook, its default config and the manifest differ.
 - **Next:** (0) flash 4925 and run the hook at home with `fieldroi.now` (the TV showing a pitch);
   (1) a live game or a real pitch: `fieldroi` on the camera's own snapshot, then the

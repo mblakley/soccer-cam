@@ -4,7 +4,7 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
-## EXP-ENC-12: how steady is the detector on a fixed camera — within 37 rows look to look (2026-11-28)
+## EXP-ENC-12: how steady is the detector on a fixed camera — within 30 rows look to look (2026-11-28)
 
 **Why:** the game-start hook (`S38_FieldRoi`) accepts a field only when two detections in a row
 agree. "Agree" needs a number: wide enough for the detector's own jitter, far narrower than a
@@ -19,7 +19,7 @@ its "field rows far..near" compared.
 | game | far edge, all nine | near edge, all nine | largest change between looks 3 s to 2.5 min apart |
 |---|---|---|---|
 | Lakefront | 178–199 (21 rows) | 1400–1417 (17) | 16 far, 17 near |
-| blue dome | 288–320 (32) | 1610–1691 (81) | 16 far, 37 near |
+| blue dome | 288–320 (32) | 1610–1691 (81) | 20 far, 30 near |
 
 All 18 frames were accepted (dome colour share 0.72–0.75).
 

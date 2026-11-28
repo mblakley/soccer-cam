@@ -23,7 +23,7 @@
 #      wrong place takes bits AWAY from the pitch.
 #
 # AGREE_ROWS is measured, not guessed: on 18 frames from two games with the
-# camera fixed, the detector's edges moved by at most 37 rows between looks a
+# camera fixed, the detector's edges moved by at most 30 rows between looks a
 # few seconds to a few minutes apart, and 81 rows across a whole game
 # (EXP-ENC-12). Re-aiming the camera moves them by hundreds.
 #
