@@ -532,8 +532,11 @@ treats two enabled windows that overlap, or their priority order. That needs
 the camera. **Answered 2026-11-28 on build 4923: the lower index wins**
 (EXP-ENC-09, three alternating captures per order, ranges do not overlap).
 
-`S37_RoiQp` still drives window 0 only. Its disable now clears all ten, which is
-right on either module. Fitting several windows to the field polygon is the
+`S37_RoiQp` drove window 0 only through build 4923. From build 4924 (staged
+2026-11-28) it drives up to ten from `winN=` lines in `roi.conf`, refuses more
+than window 0 on a build whose manifest does not say `multiwin`, and treats a
+kernel echo that does not match what it sent as a failure. Its disable clears
+all ten, which is right on either module. Fitting several windows to the field polygon is the
 next step, after one window is proven.
 
 ### Why this route and not the others

@@ -20,7 +20,12 @@
   2026-08-22), image settings identical to the saved start state, encoder 20480 kbps / `gop=2` with
   the kernel's rate control confirmed back at 20.97 Mbps, all ROI windows cleared, `roi.conf`
   `enable=0`. Still at 192.168.86.22.
-- **Next:** (1) teach `S37_RoiQp` and `roi.conf` several windows, far band on the lowest index;
+- **Build 4924 staged, not flashed (needs Mark's yes):** 4923 plus a daemon that takes
+  `winN=x,y,w,h,qp` lines for up to ten windows, refuses them on a single-window build, and
+  reverts to stock when the kernel's echo does not match. `verify/test_roiqp_daemon.sh`, 27 checks,
+  is a build gate. Against 4923 only the daemon and the manifest differ.
+- **Next:** (1) flash 4924 and run a three-band config on it; then make `fieldroi` write bands
+  (far band on the lowest index) instead of one rectangle — that needs no flash;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
   window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps.
 - **TTT hand-off done (Mark's go-ahead):** the camera checklist ran; results are in PR #163
