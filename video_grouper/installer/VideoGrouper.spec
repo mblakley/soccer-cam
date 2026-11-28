@@ -173,12 +173,33 @@ else:
         "Run `git lfs pull` before building a release."
     )
 
+# The web UI's shared stylesheet. chrome.py reads it from beside the package
+# (``video_grouper/web/static``), and the FastAPI app mounts the directory at
+# startup: without it the dashboard, wizard and sign-in server refuse to start
+# ("Directory ... web/static does not exist"). Every build from the shared
+# stylesheet's introduction (7fb26c6) until this line shipped without it.
+WEB_STATIC_DATAS = [
+    (
+        os.path.join(PROJECT_ROOT, "video_grouper", "web", "static"),
+        os.path.join("video_grouper", "web", "static"),
+    )
+]
+
+# Integration ports pick their implementation by scanning each port's
+# ``sources`` package at runtime (integrations/registry.py, pkgutil). Nothing
+# imports those modules statically, so PyInstaller's import graph never sees
+# them and the frozen service died at startup with "no implementation of
+# IEntitlements accepted this install". Collect them explicitly.
+from PyInstaller.utils.hooks import collect_submodules  # noqa: E402
+
+INTEGRATION_SOURCES = collect_submodules("video_grouper.integrations")
+
 a_service = Analysis(
     [SERVICE_MAIN],
     pathex=[],
     binaries=[],
-    datas=PHASE_MODEL_DATAS,
-    hiddenimports=[],
+    datas=PHASE_MODEL_DATAS + WEB_STATIC_DATAS,
+    hiddenimports=INTEGRATION_SOURCES,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
