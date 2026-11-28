@@ -190,3 +190,63 @@ async def test_skip_download_with_a_blank_parameter_fails(tmp_path):
     _storage_with(tmp_path)
     result = await _executor_for(tmp_path).execute(_skip(file_name="  "))
     assert result["success"] is False
+
+
+# The TTT command may only skip what this install listed as stuck, on the camera
+# it was sent for (TTT's generic command route could otherwise send any file).
+
+
+@pytest.mark.asyncio
+async def test_a_file_that_never_failed_is_not_skipped_from_ttt(tmp_path):
+    import json
+
+    state_file = _storage_with(tmp_path, status="pending")
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    next(iter(data["files"].values()))["failed_attempts"] = 0
+    state_file.write_text(json.dumps(data), encoding="utf-8")
+
+    result = await _executor_for(tmp_path).execute(_skip())
+    assert result["success"] is False
+    assert "has not failed" in result["message"]
+    assert _entry(state_file)["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_a_file_from_another_camera_is_not_skipped(tmp_path):
+    import json
+
+    state_file = _storage_with(tmp_path)
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    next(iter(data["files"].values()))["metadata"] = {"camera_name": "private"}
+    state_file.write_text(json.dumps(data), encoding="utf-8")
+
+    command = _skip()
+    command = type(command)(
+        id=command.id, type=command.type, parameters=command.parameters, camera="shared"
+    )
+    result = await _executor_for(tmp_path).execute(command)
+    assert result["success"] is False
+    assert "private" in result["message"]
+    assert _entry(state_file)["status"] == "download_failed"
+
+
+@pytest.mark.asyncio
+async def test_a_skip_not_addressed_to_an_install_is_refused(tmp_path):
+    state_file = _storage_with(tmp_path)
+    result = await _executor_for(tmp_path).execute(_skip(machine_id=...))
+    assert result["success"] is False
+    assert "machine_id" in result["message"]
+    assert _entry(state_file)["status"] == "download_failed"
+
+
+@pytest.mark.asyncio
+async def test_requested_by_cannot_forge_log_lines(tmp_path):
+    state_file = _storage_with(tmp_path)
+    result = await _executor_for(tmp_path).execute(
+        _skip(requested_by="Pat\nERROR forged line " + "x" * 300)
+    )
+    assert result["success"] is True
+    by = _entry(state_file)["skipped_by"]
+    assert "\n" not in by
+    assert by.startswith("TTT: Pat ERROR forged line")
+    assert len(by) <= len("TTT: ") + 100

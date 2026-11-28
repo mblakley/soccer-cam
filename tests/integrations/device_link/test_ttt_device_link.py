@@ -655,3 +655,12 @@ async def test_without_a_machine_id_addressed_commands_are_not_ours():
     ]
     link, _ = _link(client, machine_id=None)
     assert [c.id for c in (await link.heartbeat()).commands] == ["plain"]
+
+
+@pytest.mark.asyncio
+async def test_an_unnamed_stuck_download_goes_under_the_only_camera():
+    """Old state.json entries carry no camera name; with one camera it can only be that one."""
+    link, client = _stuck_link(ids={"front": "c-1"})
+    await link.report_stuck_downloads([_stuck(None)])
+    (_, rows), _ = client.report_stuck_downloads.call_args
+    assert [r["camera_id"] for r in rows] == ["c-1"]

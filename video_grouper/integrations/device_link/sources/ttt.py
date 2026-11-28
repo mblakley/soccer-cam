@@ -381,7 +381,9 @@ class TTTDeviceLink(IDeviceLink):
     def _stuck_rows(self, downloads: list[StuckDownload]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for d in downloads:
-            camera_id = self._cameras.id_for(d.camera) if d.camera else None
+            # No camera name (an old entry): the install's only camera, if it
+            # has just one (id_for(None) decides).
+            camera_id = self._cameras.id_for(d.camera)
             if not camera_id:
                 continue  # TTT knows no camera to list it under
             if not (0 < len(d.group) <= _MAX_GROUP_DIR) or not (
@@ -412,7 +414,7 @@ class TTTDeviceLink(IDeviceLink):
                 self._client.report_stuck_downloads, machine_id, rows
             )
         except Exception as e:
-            # Tried again every beat until it works: say so once, not each time.
+            # The processor tries again later until it works: say so once.
             log = logger.debug if self._stuck_report_failing else logger.warning
             log("TTT: reporting stuck downloads failed: %s", e)
             self._stuck_report_failing = True
