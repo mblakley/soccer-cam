@@ -89,9 +89,8 @@ class StateAuditor(PollingProcessor):
             self._download_processors = {}
         self.video_processor = video_processor
         self.ntfy_processor = ntfy_processor
-        # Attribute-injected by VideoGrouperApp after construction, mirroring
-        # how ttt_reporter is wired onto the pollers. None in the tray and in
-        # tests, where nothing archives.
+        # Attribute-injected by VideoGrouperApp after construction. None in
+        # the tray and in tests, where nothing archives.
         self.archive_processor = None
 
         # Initialize API services using mock service factory functions
