@@ -26,8 +26,13 @@
   is a build gate. Against 4923 only the daemon and the manifest differ. On the camera a three-band
   `roi.conf` was applied with matching kernel echoes, a bad config reverted everything, and
   `enable=0` cleared all ten (BUILD_LOG). Left with `enable=0`.
-- **Next:** (1) make `fieldroi` write bands (far band on the lowest index) instead of one
-  rectangle — that needs no flash — and choose the QP grading on archived game footage;
+- **In progress, interrupted (the laptop ran out of memory and both runs were stopped):**
+  `fieldroi --bands F,M,N` is written (three full-width windows, far band on window 0) with new
+  checks in `verify/test_fieldroi.sh`, but **neither has been compiled or run yet**. The grading
+  comparison on game footage got through three of six layouts (EXP-ENC-10): one rectangle at −6
+  gives about +1.7 to +2.0 dB across the field; two bands −10/−4 give +4.7 dB in the far band.
+- **Next:** (1) run `verify/test_fieldroi.sh` and finish EXP-ENC-10 (the three-band layouts), then
+  pick the default grading and put the new `fieldroi` on the card — no flash needed;
   (2) fix `apply_optimal_settings` (`gop=40` is rejected whole; send 2); (3) `fieldroi` and the
   window on a real pitch; (4) the auto-run hook; (5) a controlled run above 20.97 Mbps.
 - **TTT hand-off done (Mark's go-ahead):** the camera checklist ran; results are in PR #163

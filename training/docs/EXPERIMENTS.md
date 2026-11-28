@@ -4,6 +4,36 @@ Each experiment has: hypothesis, method, result, conclusion. Failures are as val
 
 ---
 
+## EXP-ENC-10: which QP grading for field bands — PARTIAL, three of six layouts (2026-11-28)
+
+**Hypothesis:** at the camera's fixed bitrate, bands graded by depth (strong far, weak near) put
+more quality into the far field than one rectangle over the whole field, for the same cost outside.
+
+**Method:** the first 2 s of the EXP-ENC-02 clip (Lakefront, segment 19:21; field rows 161–1473 by
+its confirmed polygon). x265 `-preset fast`, CRF, keyint 40, no B-frames, cutree off, AQ on, windows
+as ffmpeg `addroi` rows. For each layout the CRF is searched until the output is the camera's own
+size for those 2 s (5,242,040 B, 20.97 Mbps) within 1.5 %, so a window cannot add bits. Luma PSNR
+against the source in five full-width bands.
+
+**Result so far** (PSNR-Y change against no window, dB; the run was stopped before the other three
+layouts — 3 bands −10/−6/−3, 3 bands −12/−8/−4, far only −10):
+
+| layout | CRF shift | above far line 0–127 | far 128–447 | mid 448–895 | near 896–1535 | foreground 1536–2159 |
+|---|---|---|---|---|---|---|
+| none (CRF 30.32) | — | 38.97 | 39.54 | 35.40 | 32.59 | 32.27 |
+| one rectangle −6 over rows 128–1535 | +1.97 | −2.23 | +1.73 | +1.76 | +1.98 | −3.06 |
+| two bands: 128–511 at −10, 512–1535 at −4 | +1.74 | −1.87 | **+4.67** | +0.94 | +0.75 | −2.67 |
+
+**Reading, provisional:** on game footage the field window does buy something everywhere on the
+field (about +1.7 to +2.0 dB for −6), unlike the TV scene of EXP-ENC-09, because here the
+foreground and the strip above the far line pay for it. Grading moves the gain to the far band
+(+4.7 dB) at a slightly lower cost outside, and gives up about 1 dB of the gain in the mid and near
+field. No QP default is chosen from this yet: the three-band layouts were not measured.
+
+**Limits:** x265 is not the camera's encoder; the source is already the camera's compressed
+output, so PSNR is against that, not the scene; one clip, 2 s; sizes matched to −1.3 % / +0.7 % /
+−0.3 %, worth roughly 0.1 dB.
+
 ## EXP-ENC-09: build 4923 on the camera — ten windows work, lower index wins an overlap (2026-11-28)
 
 **Hypothesis:** the `ROIQP_MULTIWIN` handler patch behaves on the real kernel as it does under

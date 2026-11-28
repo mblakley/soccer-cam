@@ -37,6 +37,13 @@
  *   --pad-far N      rows added above the far line      (default 200)
  *   --pad-near N     rows added below the near line     (default 200)
  *   --qp N           QP delta for the window            (default -6)
+ *   --bands F,M,N    write three full-width windows instead of one: the far
+ *                    22 % of the field's rows (plus the far padding), the
+ *                    middle 34 %, and the near 44 % (plus the near padding),
+ *                    with QP deltas F, M and N. The far band goes on window 0
+ *                    because the encoder gives an overlap to the lower index.
+ *                    Needs the ten-window firmware (build 4923 or later);
+ *                    S37_RoiQp refuses the file on anything else.
  *   --min-score F    keypoints below this are ignored   (default 0.15)
  *   --min-green F    share of the claimed field rows that must be grass-
  *                    coloured, or the result is refused (default 0.6)
@@ -651,10 +658,11 @@ int main(int argc, char **argv)
     if (argc < 3) {
         fprintf(stderr, "usage: fieldroi <weights.bin> <frame.ppm> [--frame WxH] [--pad-far N]\n"
                         "                [--pad-near N] [--qp N] [--min-score F] [--min-green F]\n"
-                        "                [--keypoints]\n");
+                        "                [--bands F,M,N] [--keypoints]\n");
         return 2;
     }
     int fw = 7680, fh = 2160, pad_far = 200, pad_near = 200, qp = -6, only_kpts = 0;
+    int bands = 0, band_qp[3] = {0, 0, 0};
     double min_score = 0.15, min_green = 0.6;
     const char *dump_input = NULL;
     for (int i = 3; i < argc; i++) {
@@ -671,7 +679,12 @@ int main(int argc, char **argv)
             pad_near = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--qp"))
             qp = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--min-score"))
+        else if (!strcmp(argv[i], "--bands")) {
+            char tail;
+            if (sscanf(argv[++i], "%d,%d,%d%c", &band_qp[0], &band_qp[1], &band_qp[2], &tail) != 3)
+                die("--bands wants three QP deltas: F,M,N");
+            bands = 1;
+        } else if (!strcmp(argv[i], "--min-score"))
             min_score = atof(argv[++i]);
         else if (!strcmp(argv[i], "--min-green"))
             min_green = atof(argv[++i]);
@@ -682,6 +695,9 @@ int main(int argc, char **argv)
     }
     if (fw < 16 || fh < 16 || fw > 65535 || fh > 65535 || pad_far < 0 || pad_near < 0 || qp < -32 || qp > 31)
         die("option out of range");
+    for (int b = 0; b < 3; b++)
+        if (band_qp[b] < -32 || band_qp[b] > 31)
+            die("--bands: a QP delta is outside -32..31");
 
     int fd = open(argv[1], O_RDONLY);
     struct stat st;
@@ -783,6 +799,26 @@ int main(int argc, char **argv)
     fprintf(stderr, "field rows %.0f..%.0f  ->  window rows %d..%d (%d far, %d near keypoints)\n", far_y, near_y, top,
             bot, n_far, n_near);
 
+    if (bands) {
+        /* Three bands that tile [top, bot) exactly. The cuts sit at 22 % and
+         * 56 % of the field's own height (not the padded window's), on the
+         * 16-pixel grid: on the frame the far third of a pitch is only about a
+         * fifth of its rows, and that is where a ball is smallest. */
+        double depth = near_y - far_y;
+        int cut1 = (int)(far_y + 0.22 * depth) / 16 * 16, cut2 = (int)(far_y + 0.56 * depth) / 16 * 16;
+        if (cut1 - top < 16 || cut2 - cut1 < 16 || bot - cut2 < 16) {
+            fprintf(stderr, "fieldroi: REFUSED: bands %d..%d..%d..%d leave one under 16 rows\n", top, cut1, cut2, bot);
+            return 3;
+        }
+        fprintf(stderr, "bands: far %d..%d (%d), mid %d..%d (%d), near %d..%d (%d)\n", top, cut1, band_qp[0], cut1, cut2,
+                band_qp[1], cut2, bot, band_qp[2]);
+        printf("# written by fieldroi: field rows %.0f..%.0f, padded %d above / %d below, three bands\n", far_y, near_y,
+               pad_far, pad_near);
+        printf("enable=1\npath=0\nmode=1\nframe_w=%d\nframe_h=%d\n", fw, fh);
+        printf("win0=0,%d,%d,%d,%d\nwin1=0,%d,%d,%d,%d\nwin2=0,%d,%d,%d,%d\n", top, fw, cut1 - top, band_qp[0], cut1, fw,
+               cut2 - cut1, band_qp[1], cut2, fw, bot - cut2, band_qp[2]);
+        return 0;
+    }
     printf("# written by fieldroi: field rows %.0f..%.0f, padded %d above / %d below\n", far_y, near_y, pad_far,
            pad_near);
     printf("enable=1\npath=0\nx=0\ny=%d\nw=%d\nh=%d\nqp=%d\nmode=1\nframe_w=%d\nframe_h=%d\n", top, fw, bot - top, qp,
