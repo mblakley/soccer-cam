@@ -146,3 +146,55 @@ async def test_heartbeat_loop_pings_master_during_long_task(storage):
     assert before_hb is None
     assert after_hb is not None
     assert after_hb > 0
+
+
+# ---------------------------------------------------------------------------
+# The worker's own clients carry the master's origin
+# ---------------------------------------------------------------------------
+#
+# The master refuses a state-changing request without a same-origin Origin
+# (or Referer) header: scheme, host and port must match the request's Host.
+# The tests above add the header themselves, so they never exercised the
+# clients the worker actually builds. These use the worker's own client
+# factory, adding nothing.
+
+
+def _worker_client(storage_path, token=None) -> httpx.AsyncClient:
+    from video_grouper.worker.__main__ import _master_client as worker_client
+
+    app = create_app(TTTConfig(), str(storage_path), node_role="master")
+    return worker_client(MASTER_URL, token, transport=httpx.ASGITransport(app=app))
+
+
+@pytest.mark.asyncio
+async def test_the_workers_own_client_registers_polls_and_completes(storage):
+    async with _worker_client(storage) as client:
+        token = await _register(client, MASTER_URL, "worker-7", ["combine"])
+    assert token
+
+    task_id = enqueue_task(storage, "combine", {"group_dir": "g"})
+    async with _worker_client(storage, token) as client:
+        assert await _poll_once(client, MASTER_URL, heartbeat_interval=999)
+
+    registry = json.loads((storage / "workers" / "registry.json").read_text())
+    assert registry["tasks"][task_id]["status"] == "complete"
+
+
+@pytest.mark.parametrize(
+    ("master_url", "origin"),
+    [
+        ("http://localhost:8765", "http://localhost:8765"),
+        ("http://master.local:9000/", "http://master.local:9000"),
+        ("https://master.example.ts.net", "https://master.example.ts.net"),
+        ("http://192.168.86.10:8765/sub/path", "http://192.168.86.10:8765"),
+    ],
+)
+def test_the_origin_is_the_master_urls_scheme_host_and_port(master_url, origin):
+    from video_grouper.worker.__main__ import _master_client as worker_client
+
+    client = worker_client(master_url, "tok")
+    try:
+        assert client.headers["origin"] == origin
+        assert client.headers["authorization"] == "Bearer tok"
+    finally:
+        asyncio.run(client.aclose())
